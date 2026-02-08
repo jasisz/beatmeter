@@ -45,6 +45,8 @@ class AnalysisResponse(BaseModel):
     tempo_curve: list[TempoCurvePointResponse] = []
     sections: list[SectionResponse] = []
     duration: float = 0.0
+    converged: bool = False
+    source_type: str = "recorded"  # "recorded" or "live"
 
 
 # WebSocket message types
@@ -59,6 +61,7 @@ class WarmupProgressMessage(BaseModel):
     type: str = "warmup_progress"
     seconds: float
     total: float
+    onset_count: int = 0
 
 
 class AnalysisMessage(BaseModel):

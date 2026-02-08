@@ -105,16 +105,77 @@ export function renderBpmDisplay(container, tempo) {
 }
 
 /**
- * Render meter info with a friendly description.
+ * Build visual grouping boxes for odd meters.
+ * E.g. for 7/8 with grouping "2+2+3": [..] [..] [...]
  */
-export function renderMeterInfo(container, hypothesis) {
-  const sig = `${hypothesis.numerator}/${hypothesis.denominator}`;
-  const desc = meterDesc(sig);
+function buildGroupingVisualHtml(grouping) {
+  if (!grouping) return '';
+  const groups = grouping.split('+').map(Number);
+  if (groups.some(isNaN) || groups.length < 2) return '';
+
+  const boxes = groups.map(n => {
+    const dots = Array(n).fill('<span class="grouping-dot"></span>').join('');
+    return `<span class="grouping-box">${dots}</span>`;
+  });
+  return `<div class="grouping-visual">${boxes.join('')}</div>`;
+}
+
+/**
+ * Render meter info with a friendly description.
+ * Options:
+ *   - allHypotheses: full list for "could also be" logic
+ *   - isLive: true when in live/tapped mode (enables 2/4->4/4 smart display)
+ */
+export function renderMeterInfo(container, hypothesis, options = {}) {
+  const { allHypotheses = [], isLive = false } = options;
   const conf = Math.round(hypothesis.confidence * 100);
 
-  const confText = t('meter.confidence');
-  const confStr = typeof confText === 'function' ? confText(conf) : `${conf}%`;
+  // Low confidence fallback: show fallback message instead of result
+  if (conf < 40) {
+    const fallbackText = t('live.low_confidence_fallback');
+    container.innerHTML = `
+      <div class="meter-info">
+        <div class="meter-description" style="font-size:1rem;padding:12px 0;">${fallbackText}</div>
+        <div class="confidence-badge not-sure">${t('confidence.not_sure')}</div>
+        <div class="bpm-confidence" style="font-size:0.78rem;color:var(--text-muted);">${conf}%</div>
+      </div>
+    `;
+    return;
+  }
 
+  let displayNum = hypothesis.numerator;
+  let displayDen = hypothesis.denominator;
+  let sig = `${displayNum}/${displayDen}`;
+  let extraNote = '';
+
+  // Smart 2/4 -> 4/4 presentation for live mode
+  if (isLive && hypothesis.numerator === 2 && hypothesis.denominator === 4) {
+    // Check if 4/4 is a close second hypothesis
+    const fourFour = allHypotheses.find(h => h.numerator === 4 && h.denominator === 4);
+    const confGap = fourFour ? (hypothesis.confidence - fourFour.confidence) * 100 : 100;
+    if (confGap < 20) {
+      displayNum = 4;
+      sig = '4/4';
+      const couldAlsoFn = t('live.could_also_be');
+      const couldAlsoStr = typeof couldAlsoFn === 'function' ? couldAlsoFn('2/4') : 'or possibly 2/4';
+      extraNote = `<div class="meter-also-note">${couldAlsoStr}</div>`;
+    }
+  }
+
+  const desc = meterDesc(sig);
+
+  // Confidence as word badge
+  let confKey, confClass;
+  if (conf > 80) { confKey = 'confidence.confident'; confClass = 'confident'; }
+  else if (conf > 60) { confKey = 'confidence.likely'; confClass = 'likely'; }
+  else if (conf > 40) { confKey = 'confidence.uncertain'; confClass = 'uncertain'; }
+  else { confKey = 'confidence.not_sure'; confClass = 'not-sure'; }
+  const confWord = t(confKey);
+
+  const confPctText = t('meter.confidence');
+  const confPctStr = typeof confPctText === 'function' ? confPctText(conf) : `${conf}%`;
+
+  // Grouping text
   let groupingHtml = '';
   if (hypothesis.grouping) {
     const gText = t('meter.grouping');
@@ -122,12 +183,48 @@ export function renderMeterInfo(container, hypothesis) {
     groupingHtml = `<div class="meter-grouping">${gStr}</div>`;
   }
 
+  // Visual grouping boxes for odd meters
+  const groupingVisualHtml = buildGroupingVisualHtml(hypothesis.grouping);
+
+  // "Could also be" for medium confidence (60-79%) when not already showing 2/4->4/4 note
+  let alsoHtml = extraNote;
+  if (!alsoHtml && conf >= 60 && conf <= 79 && allHypotheses.length >= 2) {
+    const second = allHypotheses[1];
+    const secondConf = Math.round(second.confidence * 100);
+    if (conf - secondConf <= 15) {
+      const secondSig = `${second.numerator}/${second.denominator}`;
+      const couldAlsoFn = t('live.could_also_be');
+      const couldAlsoText = typeof couldAlsoFn === 'function' ? couldAlsoFn(secondSig) : `could also be ${secondSig}`;
+      alsoHtml = `<div class="meter-also-note">${couldAlsoText}</div>`;
+    }
+  }
+
+  // For uncertain (40-59%), show top 2 side by side
+  let sideBySideHtml = '';
+  if (conf >= 40 && conf <= 59 && allHypotheses.length >= 2) {
+    const second = allHypotheses[1];
+    const secondSig = `${second.numerator}/${second.denominator}`;
+    const secondConf = Math.round(second.confidence * 100);
+    const secondDesc = meterDesc(secondSig);
+    sideBySideHtml = `
+      <div class="meter-alt-hypothesis">
+        <span class="meter-alt-sig">${secondSig}</span>
+        <span class="meter-alt-desc">${secondDesc}</span>
+        <span class="meter-alt-conf">${secondConf}%</span>
+      </div>
+    `;
+  }
+
   container.innerHTML = `
     <div class="meter-info">
       <div class="meter-signature">${sig}</div>
       <div class="meter-description">${desc}</div>
       ${groupingHtml}
-      <div class="bpm-confidence">${confStr}</div>
+      ${groupingVisualHtml}
+      ${alsoHtml}
+      ${sideBySideHtml}
+      <div class="confidence-badge ${confClass}">${confWord}</div>
+      <div class="bpm-confidence" style="font-size:0.78rem;color:var(--text-muted);">${confPctStr}</div>
     </div>
   `;
 }
@@ -379,7 +476,10 @@ export function renderResults(result, containers, audioFile) {
   }
 
   if (meterContainer && result.meter_hypotheses && result.meter_hypotheses.length > 0) {
-    renderMeterInfo(meterContainer, result.meter_hypotheses[0]);
+    renderMeterInfo(meterContainer, result.meter_hypotheses[0], {
+      allHypotheses: result.meter_hypotheses,
+      isLive: result.source_type === 'live',
+    });
   }
 
   if (disambiguationContainer && result.meter_hypotheses) {

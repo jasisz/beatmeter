@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     stream_buffer_seconds: float = 60.0
     warmup_seconds: float = 8.0
     reanalysis_interval: float = 2.0
+    warmup_reanalysis_interval: float = 0.5
     sliding_window_seconds: float = 30.0
     chunk_duration_ms: int = 100  # ms per WebSocket chunk
 

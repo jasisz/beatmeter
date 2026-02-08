@@ -56,8 +56,8 @@ const translations = {
     en: 'Waveform & Beats',
   },
   'heading.meter_hypotheses': {
-    pl: 'Hipotezy metrum',
-    en: 'Meter Hypotheses',
+    pl: 'Wykryte metrum',
+    en: 'Detected Meter',
   },
   'heading.beat_grid': {
     pl: 'Siatka beatow',
@@ -86,6 +86,12 @@ const translations = {
     en: (s, total) => `Warming up... ${s}s / ${total}s`,
   },
   'live.ready': { pl: 'Analiza gotowa', en: 'Analysis ready' },
+  'live.onset_count': {
+    pl: (n) => `Wykryto ${n} uderzen...`,
+    en: (n) => `Detected ${n} onsets...`,
+  },
+  'live.converged': { pl: 'Stabilne', en: 'Stable' },
+  'live.analyzing': { pl: 'Analizuje...', en: 'Analyzing...' },
   'live.error_mic': {
     pl: 'Nie mozna uzyskac dostepu do mikrofonu. Zezwol na dostep i sprobuj ponownie.',
     en: 'Could not access microphone. Please allow mic access and try again.',
@@ -107,7 +113,7 @@ const translations = {
   'met.start': { pl: 'Start', en: 'Start' },
   'met.stop': { pl: 'Stop', en: 'Stop' },
   'met.tap': { pl: 'Tap Tempo', en: 'Tap Tempo' },
-  'met.apply': { pl: 'Uzyj wykrytego', en: 'Apply Detected' },
+  'met.apply': { pl: 'Zagraj to metrum', en: 'Play This Meter' },
 
   // ===== BPM display =====
   'bpm.confidence': {
@@ -125,6 +131,45 @@ const translations = {
   'chart.confidence_label': {
     pl: (pct) => `${pct}% pewnosci`,
     en: (pct) => `${pct}% confidence`,
+  },
+
+  // Confidence word badges
+  'confidence.confident': { pl: 'Pewne', en: 'Confident' },
+  'confidence.likely': { pl: 'Prawdopodobne', en: 'Likely' },
+  'confidence.uncertain': { pl: 'Niepewne', en: 'Uncertain' },
+  'confidence.not_sure': { pl: 'Nie jestem pewien', en: 'Not sure' },
+
+  // "Hear It" button
+  'live.hear_it': { pl: 'Posluchaj', en: 'Hear It' },
+
+  // Minimum input guard
+  'live.keep_tapping': {
+    pl: 'Stukaj dalej! Potrzebuje jeszcze kilku taktow...',
+    en: 'Keep tapping! I need a few more bars...',
+  },
+
+  // No onsets detected
+  'live.no_onsets': {
+    pl: 'Nie slysze zadnych uderzen. Upewnij sie, ze mikrofon dziala i stukaj mocniej.',
+    en: "I don't hear any taps yet. Make sure your mic is working and tap firmly.",
+  },
+
+  // Low confidence fallback (<40%)
+  'live.low_confidence_fallback': {
+    pl: 'Jeszcze nie jestem pewien. Sprobuj stukac dluzej z wyrazniejszym akcentem na raz.',
+    en: "I'm not sure yet. Try tapping a bit longer with clearer accents on beat 1.",
+  },
+
+  // "Could also be" for medium confidence
+  'live.could_also_be': {
+    pl: (sig) => `moze tez byc ${sig}`,
+    en: (sig) => `could also be ${sig}`,
+  },
+
+  // Warmup groove label
+  'live.getting_groove': {
+    pl: 'Lapie rytm...',
+    en: 'Getting your groove...',
   },
 
   // ===== Tempo categories =====
@@ -149,21 +194,21 @@ const translations = {
     en: 'Tempo is very free-flowing - typical of rubato, improvisation, or freestyle.',
   },
 
-  // ===== Meter descriptions =====
-  'meter.2/4': { pl: 'Marsz, polka', en: 'March, polka' },
-  'meter.3/4': { pl: 'Walc (np. Blue Danube, Walc Chopina)', en: 'Waltz (e.g. Blue Danube, Chopin Waltz)' },
-  'meter.3/8': { pl: 'Szybki walc, gigue', en: 'Fast waltz, gigue' },
-  'meter.4/4': { pl: 'Standardowy rock/pop (np. Billie Jean, Hey Jude)', en: 'Standard rock/pop (e.g. Billie Jean, Hey Jude)' },
-  'meter.5/4': { pl: 'Take Five (Dave Brubeck) - grupowanie 3+2 lub 2+3', en: 'Take Five (Dave Brubeck) - grouping 3+2 or 2+3' },
-  'meter.5/8': { pl: 'Mission Impossible - grupowanie 3+2 lub 2+3', en: 'Mission Impossible - grouping 3+2 or 2+3' },
-  'meter.6/4': { pl: 'Wolne 6 (rzadkie)', en: 'Slow 6 (rare)' },
-  'meter.6/8': { pl: 'Tarantella, Nothing Else Matters - dwie grupy po 3', en: 'Tarantella, Nothing Else Matters - two groups of 3' },
-  'meter.7/4': { pl: 'Money (Pink Floyd)', en: 'Money (Pink Floyd)' },
-  'meter.7/8': { pl: 'Money (Pink Floyd) - grupowanie 2+2+3 lub 3+2+2', en: 'Money (Pink Floyd) - grouping 2+2+3 or 3+2+2' },
-  'meter.9/8': { pl: 'Blue Rondo a la Turk (Dave Brubeck) - 2+2+2+3', en: 'Blue Rondo a la Turk (Dave Brubeck) - 2+2+2+3' },
-  'meter.10/8': { pl: 'Rzadkie - np. niektore utwory Tool', en: 'Rare - e.g. some Tool songs' },
-  'meter.11/8': { pl: 'Rzadkie - np. I Hang on to a Dream (The Nice)', en: 'Rare - e.g. I Hang on to a Dream (The Nice)' },
-  'meter.12/8': { pl: 'Blues shuffle, Everybody Wants To Rule The World - cztery grupy po 3', en: 'Blues shuffle, Everybody Wants To Rule The World - four groups of 3' },
+  // ===== Meter descriptions (lead with structure, examples secondary) =====
+  'meter.2/4': { pl: 'Dwa uderzenia na takt \u2014 jak marsz', en: 'Two beats per bar \u2014 like a march' },
+  'meter.3/4': { pl: 'Trzy uderzenia na takt \u2014 walc (np. Blue Danube)', en: 'Three beats per bar \u2014 waltz feel (e.g. Blue Danube)' },
+  'meter.3/8': { pl: 'Trzy szybkie uderzenia na takt \u2014 gigue', en: 'Three fast beats per bar \u2014 gigue' },
+  'meter.4/4': { pl: 'Cztery uderzenia na takt \u2014 najpopularniejsze metrum', en: 'Four beats per bar \u2014 the most common meter' },
+  'meter.5/4': { pl: 'Piec uderzen na takt \u2014 grupowanie 3+2 lub 2+3 (np. Take Five)', en: 'Five beats per bar \u2014 grouped 3+2 or 2+3 (e.g. Take Five)' },
+  'meter.5/8': { pl: 'Piec szybkich uderzen na takt \u2014 grupowanie 3+2 lub 2+3', en: 'Five fast beats per bar \u2014 grouped 3+2 or 2+3' },
+  'meter.6/4': { pl: 'Szesc uderzen na takt \u2014 wolne, w dwoch grupach po 3', en: 'Six beats per bar \u2014 slow, in two groups of three' },
+  'meter.6/8': { pl: 'Szesc uderzen na takt w dwoch grupach po trzy \u2014 kolyszacy feel (np. Nothing Else Matters)', en: 'Six beats per bar in two groups of three \u2014 a swaying feel (e.g. Nothing Else Matters)' },
+  'meter.7/4': { pl: 'Siedem uderzen na takt \u2014 asymetryczne metrum (np. Money, Pink Floyd)', en: 'Seven beats per bar \u2014 asymmetric meter (e.g. Money by Pink Floyd)' },
+  'meter.7/8': { pl: 'Siedem szybkich uderzen na takt \u2014 czesto 2+2+3 (np. Money, Pink Floyd)', en: 'Seven fast beats per bar \u2014 often grouped 2+2+3 (e.g. Money by Pink Floyd)' },
+  'meter.9/8': { pl: 'Dziewiec uderzen na takt \u2014 czesto 2+2+2+3 (np. Blue Rondo a la Turk)', en: 'Nine beats per bar \u2014 often 2+2+2+3 (e.g. Blue Rondo a la Turk)' },
+  'meter.10/8': { pl: 'Dziesiec uderzen na takt \u2014 rzadkie, asymetryczne metrum', en: 'Ten beats per bar \u2014 rare, asymmetric meter' },
+  'meter.11/8': { pl: 'Jedenascie uderzen na takt \u2014 rzadkie, asymetryczne metrum', en: 'Eleven beats per bar \u2014 rare, asymmetric meter' },
+  'meter.12/8': { pl: 'Dwanascie uderzen na takt w czterech grupach po 3 \u2014 blues shuffle', en: 'Twelve beats per bar in four groups of three \u2014 blues shuffle' },
 
   // ===== Disambiguation hints =====
   'hint.6_8_vs_3_4': {

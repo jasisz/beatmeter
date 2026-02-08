@@ -366,6 +366,128 @@ header p {
   margin-top: 2px;
 }
 
+/* Confidence word badges */
+.confidence-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 8px;
+  letter-spacing: 0.03em;
+}
+
+.confidence-badge.confident {
+  background: var(--success-dim);
+  color: var(--success);
+  border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.confidence-badge.likely {
+  background: var(--warning-dim);
+  color: var(--warning);
+  border: 1px solid rgba(241, 196, 15, 0.3);
+}
+
+.confidence-badge.uncertain {
+  background: rgba(243, 156, 18, 0.12);
+  color: #e67e22;
+  border: 1px solid rgba(230, 126, 34, 0.3);
+}
+
+.confidence-badge.not-sure {
+  background: rgba(233, 69, 96, 0.12);
+  color: var(--accent-hover);
+  border: 1px solid rgba(233, 69, 96, 0.3);
+}
+
+/* ========== Guard Message (keep tapping / no onsets) ========== */
+.guard-message {
+  display: none;
+  background: var(--info-dim);
+  border: 1px solid rgba(52, 152, 219, 0.3);
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  text-align: center;
+  animation: slideUp 0.3s ease;
+}
+
+.guard-message.visible {
+  display: block;
+}
+
+/* ========== Visual Grouping Boxes (odd meters) ========== */
+.grouping-visual {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.grouping-box {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  background: rgba(15, 52, 96, 0.4);
+}
+
+.grouping-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.8;
+}
+
+.grouping-box:first-child .grouping-dot:first-child {
+  opacity: 1;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+/* ========== "Could also be" note ========== */
+.meter-also-note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin-top: 4px;
+}
+
+/* ========== Alternative hypothesis (side-by-side for uncertain) ========== */
+.meter-alt-hypothesis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(15, 52, 96, 0.25);
+}
+
+.meter-alt-sig {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.meter-alt-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.meter-alt-conf {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 /* ========== Disambiguation Hint ========== */
 .disambiguation-hint {
   display: none;
@@ -581,6 +703,33 @@ header p {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+
+/* ========== Convergence Badge ========== */
+.convergence-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 12px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.convergence-badge.converged {
+  background: #2ecc71;
+  color: #fff;
+}
+
+.convergence-badge.analyzing {
+  background: #f39c12;
+  color: #fff;
+  animation: pulse-badge 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 /* ========== Metronome ========== */

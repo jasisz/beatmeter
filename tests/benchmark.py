@@ -102,6 +102,30 @@ def _save_cache(tracker_name: str, audio_hash: str, beats, suffix: str = ""):
     path.write_text(json.dumps(_beats_to_json(beats)))
 
 
+def _save_bar_tracking_cache(audio_hash: str, beat_times_hash: str, scores: dict):
+    """Save bar tracking scores to cache."""
+    if not _cache_enabled:
+        return
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path("bar_tracking", audio_hash, suffix=f"_{beat_times_hash}")
+    path.write_text(json.dumps({str(k): v for k, v in scores.items()}))
+
+
+def _load_bar_tracking_cache(audio_hash: str, beat_times_hash: str) -> dict | None:
+    """Load cached bar tracking scores if available."""
+    if not _cache_enabled:
+        return None
+    path = _cache_path("bar_tracking", audio_hash, suffix=f"_{beat_times_hash}")
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        # Convert string keys back to tuple keys
+        return {eval(k): v for k, v in data.items()}
+    except (json.JSONDecodeError, SyntaxError):
+        return None
+
+
 def install_cache_wrappers():
     """Monkey-patch beat tracking functions with caching wrappers."""
     import beatmeter.analysis.beat_tracking as bt
@@ -110,6 +134,7 @@ def install_cache_wrappers():
     _orig_beatnet = bt.track_beats_beatnet
     _orig_madmom = bt.track_beats_madmom
     _orig_librosa = bt.track_beats_librosa
+    _orig_beat_this = bt.track_beats_beat_this
 
     @wraps(_orig_beatnet)
     def cached_beatnet(audio, sr=22050):
@@ -141,13 +166,42 @@ def install_cache_wrappers():
         _save_cache("librosa", h, result)
         return result
 
+    @wraps(_orig_beat_this)
+    def cached_beat_this(audio, sr=22050):
+        h = _audio_hash(audio)
+        cached = _load_cached("beat_this", h)
+        if cached is not None:
+            return cached
+        result = _orig_beat_this(audio, sr)
+        _save_cache("beat_this", h, result)
+        return result
+
     # Patch both the module and the engine's imports
     bt.track_beats_beatnet = cached_beatnet
     bt.track_beats_madmom = cached_madmom
     bt.track_beats_librosa = cached_librosa
+    bt.track_beats_beat_this = cached_beat_this
     eng.track_beats_beatnet = cached_beatnet
     eng.track_beats_madmom = cached_madmom
     eng.track_beats_librosa = cached_librosa
+    eng.track_beats_beat_this = cached_beat_this
+
+    # Cache bar tracking (Signal 7) results
+    import beatmeter.analysis.meter as meter_mod
+    _orig_bar_tracking = meter_mod.signal_bar_tracking
+
+    @wraps(_orig_bar_tracking)
+    def cached_bar_tracking(audio, sr, beat_times_array, meters_to_test=None):
+        h = _audio_hash(audio)
+        bt_hash = hashlib.sha256(beat_times_array.tobytes()).hexdigest()[:12]
+        cached = _load_bar_tracking_cache(h, bt_hash)
+        if cached is not None:
+            return cached
+        result = _orig_bar_tracking(audio, sr, beat_times_array, meters_to_test)
+        _save_bar_tracking_cache(h, bt_hash, result)
+        return result
+
+    meter_mod.signal_bar_tracking = cached_bar_tracking
 
 # ---------------------------------------------------------------------------
 # Data model
