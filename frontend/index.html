@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Beatmeter</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://unpkg.com/wavesurfer.js@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <header>
+      <div class="header-row">
+        <h1><span class="accent">Beat</span>meter</h1>
+        <div id="lang-switcher" class="lang-switcher">
+          <button class="lang-btn" data-lang="pl">PL</button>
+          <button class="lang-btn" data-lang="en">EN</button>
+        </div>
+      </div>
+      <p data-i18n="header.subtitle">Wykryj tempo, metrum i wzorce rytmiczne w swojej muzyce</p>
+    </header>
+
+    <!-- ===== Tabs ===== -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-upload" data-i18n="tab.upload">Upload</button>
+      <button class="tab-btn" data-tab="tab-live" data-i18n="tab.live">Live</button>
+      <button class="tab-btn" data-tab="tab-metronome" data-i18n="tab.metronome">Metronom</button>
+    </div>
+
+    <!-- ===== Upload Tab ===== -->
+    <div id="tab-upload" class="tab-panel active">
+
+      <div class="card">
+        <div id="drop-zone" class="drop-zone">
+          <span class="icon">&#127925;</span>
+          <p data-i18n="upload.dropzone">Upusc plik audio tutaj lub kliknij, zeby wybrac</p>
+          <span class="hint" data-i18n="upload.hint">MP3, WAV, FLAC, OGG &mdash; do 50 MB</span>
+          <input type="file" id="file-input" accept="audio/*" />
+        </div>
+      </div>
+
+      <div id="upload-error" class="error-msg"></div>
+
+      <div id="upload-loading" class="loading-overlay">
+        <div class="spinner"></div>
+        <p id="upload-loading-text" data-i18n="upload.analyzing">Analizuje rytm...</p>
+        <div class="loading-steps">
+          <div class="step" data-step="1" data-i18n="upload.step1">Wykrywanie uderzen</div>
+          <div class="step" data-step="2" data-i18n="upload.step2">Sledzenie beatow</div>
+          <div class="step" data-step="3" data-i18n="upload.step3">Estymacja tempa</div>
+          <div class="step" data-step="4" data-i18n="upload.step4">Analiza metrum</div>
+        </div>
+      </div>
+
+      <div id="upload-results" class="results-area">
+        <div class="results-grid">
+          <div class="card" id="upload-bpm"></div>
+          <div class="card" id="upload-meter"></div>
+        </div>
+
+        <!-- Disambiguation hint -->
+        <div id="upload-disambiguation" class="disambiguation-hint"></div>
+
+        <!-- User override -->
+        <div class="card user-override-card">
+          <div class="override-row">
+            <span class="override-label" data-i18n="upload.override_label">Wiesz lepiej? Ustaw metrum recznie:</span>
+            <select id="upload-meter-override" class="override-select">
+              <option value="" data-i18n="upload.override_auto">-- automatyczne --</option>
+              <option value="2/4">2/4</option>
+              <option value="3/4">3/4</option>
+              <option value="4/4">4/4</option>
+              <option value="5/4">5/4</option>
+              <option value="5/8">5/8</option>
+              <option value="6/8">6/8</option>
+              <option value="7/8">7/8</option>
+              <option value="9/8">9/8</option>
+              <option value="11/8">11/8</option>
+              <option value="12/8">12/8</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 data-i18n="heading.waveform">Przebieg audio i beaty</h3>
+          <div id="upload-waveform" class="waveform-container"></div>
+        </div>
+
+        <div class="card">
+          <h3 data-i18n="heading.meter_hypotheses">Hipotezy metrum</h3>
+          <div class="chart-container" style="height:200px;">
+            <canvas id="upload-meter-chart"></canvas>
+          </div>
+        </div>
+
+        <div class="results-grid">
+          <div class="card">
+            <h3 data-i18n="heading.beat_grid">Siatka beatow</h3>
+            <div class="beat-grid-wrapper">
+              <canvas id="upload-beat-grid" class="beat-grid-canvas"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <h3 data-i18n="heading.tempo_curve">Tempo w czasie</h3>
+            <div class="chart-container" style="height:200px;">
+              <canvas id="upload-tempo-curve"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sections timeline -->
+        <div class="card" id="upload-sections-card">
+          <h3 data-i18n="heading.sections">Sekcje utworu</h3>
+          <div id="upload-sections-timeline" class="sections-timeline"></div>
+          <div id="upload-sections-detail" class="sections-detail"></div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ===== Live Tab ===== -->
+    <div id="tab-live" class="tab-panel">
+
+      <div class="card">
+        <h2 data-i18n="live.title">Analiza na zywo</h2>
+        <p style="color:var(--text-secondary);margin-bottom:16px;" data-i18n="live.description">
+          Uzyj mikrofonu, zeby analizowac rytm w czasie rzeczywistym.
+          Stukaj w stol, klaskaj lub graj na instrumencie.
+        </p>
+
+        <div class="live-controls">
+          <button id="live-start" class="btn btn-primary" data-i18n="live.start">Zacznij sluchac</button>
+          <button id="live-stop" class="btn btn-secondary" data-i18n="live.stop">Stop</button>
+          <span id="recording-indicator" class="recording-indicator"></span>
+        </div>
+
+        <div id="live-warmup-bar" class="warmup-bar">
+          <div id="live-warmup-fill" class="fill"></div>
+        </div>
+        <div id="live-warmup-text" class="warmup-text"></div>
+
+        <div id="live-onsets" style="margin-top:12px;min-height:20px;line-height:0;"></div>
+      </div>
+
+      <div id="live-error" class="error-msg"></div>
+
+      <div id="live-results" class="results-area">
+        <div class="results-grid">
+          <div class="card" id="live-bpm"></div>
+          <div class="card" id="live-meter"></div>
+        </div>
+
+        <!-- Disambiguation hint -->
+        <div id="live-disambiguation" class="disambiguation-hint"></div>
+
+        <div class="card">
+          <h3 data-i18n="heading.meter_hypotheses">Hipotezy metrum</h3>
+          <div class="chart-container" style="height:200px;">
+            <canvas id="live-meter-chart"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 data-i18n="heading.beat_grid">Siatka beatow</h3>
+          <div class="beat-grid-wrapper">
+            <canvas id="live-beat-grid" class="beat-grid-canvas"></canvas>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== Metronome Tab ===== -->
+    <div id="tab-metronome" class="tab-panel">
+
+      <div class="card">
+        <h2 data-i18n="met.title">Metronom</h2>
+
+        <div id="met-beats" class="beat-indicators"></div>
+
+        <div class="metronome-controls">
+          <div class="control-group" style="grid-column:1/-1;">
+            <label data-i18n="met.tempo">Tempo (BPM)</label>
+            <div class="bpm-slider-row">
+              <input type="range" id="met-bpm-slider" min="40" max="300" value="120" />
+              <input type="number" id="met-bpm-input" min="40" max="300" value="120" />
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label data-i18n="met.meter">Metrum</label>
+            <select id="met-meter">
+              <option value="2/4">2/4</option>
+              <option value="3/4">3/4</option>
+              <option value="4/4" selected>4/4</option>
+              <option value="5/4">5/4</option>
+              <option value="5/8">5/8</option>
+              <option value="6/8">6/8</option>
+              <option value="7/8">7/8</option>
+              <option value="9/8">9/8</option>
+              <option value="11/8">11/8</option>
+              <option value="12/8">12/8</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label data-i18n="met.volume">Glosnosc</label>
+            <input type="range" id="met-volume" min="0" max="1" step="0.05" value="0.7" />
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;">
+          <button id="met-start" class="btn btn-success" data-i18n="met.start">Start</button>
+          <button id="met-stop" class="btn btn-secondary" data-i18n="met.stop">Stop</button>
+          <button id="met-tap" class="btn btn-primary tap-tempo-btn" data-i18n="met.tap">Tap Tempo</button>
+          <button id="met-apply" class="btn btn-secondary" disabled data-i18n="met.apply">Uzyj wykrytego</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2456 @@
+[
+  {
+    "timestamp": "2026-02-08T16:43:10.136452+00:00",
+    "total": 72,
+    "meter_pass": 50,
+    "tempo_pass": 66,
+    "results": [
+      {
+        "name": "Synth: 4/4 @ 120",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 119.3,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          108.0,
+          132.0
+        ],
+        "elapsed_seconds": 4.31
+      },
+      {
+        "name": "Synth: 4/4 @ 90",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 89.2,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          81.0,
+          99.00000000000001
+        ],
+        "elapsed_seconds": 0.99
+      },
+      {
+        "name": "Synth: 4/4 @ 160",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 161.5,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          144.0,
+          176.0
+        ],
+        "elapsed_seconds": 1.2
+      },
+      {
+        "name": "Synth: 3/4 @ 100",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          90.0,
+          110.00000000000001
+        ],
+        "elapsed_seconds": 1.54
+      },
+      {
+        "name": "Synth: 3/4 @ 140 (fast waltz)",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 141.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          126.0,
+          154.0
+        ],
+        "elapsed_seconds": 1.21
+      },
+      {
+        "name": "Synth: 2/4 @ 120 (march)",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 119.3,
+        "expected_meters": [
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108.0,
+          132.0
+        ],
+        "elapsed_seconds": 1.18
+      },
+      {
+        "name": "Synth: 6/4 @ 80",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "6/4",
+        "detected_bpm": 80.5,
+        "expected_meters": [
+          "6/4"
+        ],
+        "expected_bpm_range": [
+          72.0,
+          88.0
+        ],
+        "elapsed_seconds": 0.91
+      },
+      {
+        "name": "Synth: 5/4 @ 110",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 111.1,
+        "expected_meters": [
+          "5/4"
+        ],
+        "expected_bpm_range": [
+          55.0,
+          121.00000000000001
+        ],
+        "elapsed_seconds": 1.06
+      },
+      {
+        "name": "Synth: 7/4 @ 100",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "7/4"
+        ],
+        "expected_bpm_range": [
+          50.0,
+          110.00000000000001
+        ],
+        "elapsed_seconds": 1.25
+      },
+      {
+        "name": "Synth: 7/8 (2+2+3) @ 200",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 199.2,
+        "expected_meters": [
+          "7/8",
+          "7/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          220
+        ],
+        "elapsed_seconds": 1.57
+      },
+      {
+        "name": "Synth: 5/8 (3+2) @ 220",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 219.7,
+        "expected_meters": [
+          "5/8",
+          "5/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          240
+        ],
+        "elapsed_seconds": 1.17
+      },
+      {
+        "name": "Edge: 4/4 short clip (4s)",
+        "category": "edge_case",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 119.0,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 0.59
+      },
+      {
+        "name": "Edge: 3/4 short clip (5s)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          110
+        ],
+        "elapsed_seconds": 0.65
+      },
+      {
+        "name": "Edge: quiet 4/4 (amp=0.05)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 119.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 2.46
+      },
+      {
+        "name": "Edge: accel 100->140 BPM (4/4)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 128.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          150
+        ],
+        "elapsed_seconds": 1.34
+      },
+      {
+        "name": "Edge: decel 140->90 BPM (3/4)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 125.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          150
+        ],
+        "elapsed_seconds": 1.41
+      },
+      {
+        "name": "Edge: 4/4 with silence gaps",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 118.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 1.16
+      },
+      {
+        "name": "Audio: 19_16_drum_beat.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 143.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 1.62
+      },
+      {
+        "name": "Audio: ayub.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 173.5,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 1.86
+      },
+      {
+        "name": "Audio: bach_minuet.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 112.8,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 5.65
+      },
+      {
+        "name": "Audio: bach_siciliana.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 112.0,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          30,
+          100
+        ],
+        "elapsed_seconds": 5.76
+      },
+      {
+        "name": "Audio: baladi.ogg",
+        "category": "middle_eastern",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 97.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 0.82
+      },
+      {
+        "name": "Audio: barcarolle_chopin.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 160.4,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          120
+        ],
+        "elapsed_seconds": 5.47
+      },
+      {
+        "name": "Audio: barcarolle_offenbach.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 56.2,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          120
+        ],
+        "elapsed_seconds": 5.7
+      },
+      {
+        "name": "Audio: blast_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "2/4",
+        "detected_bpm": 80.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          150,
+          300
+        ],
+        "elapsed_seconds": 5.07
+      },
+      {
+        "name": "Audio: blowing_bubbles_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 140.7,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 5.98
+      },
+      {
+        "name": "Audio: blue_danube.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "11/4",
+        "detected_bpm": 182.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 6.36
+      },
+      {
+        "name": "Audio: blues_guitar.ogg",
+        "category": "blues",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 144.1,
+        "expected_meters": [
+          "4/4",
+          "2/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          180
+        ],
+        "elapsed_seconds": 8.09
+      },
+      {
+        "name": "Audio: bossa_nova.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "11/4",
+        "detected_bpm": 161.7,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          70,
+          170
+        ],
+        "elapsed_seconds": 8.99
+      },
+      {
+        "name": "Audio: bushwick_tarantella.oga",
+        "category": "tarantella",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 3.65
+      },
+      {
+        "name": "Audio: celebre_tarantella.ogg",
+        "category": "tarantella",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 147.2,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 9.82
+      },
+      {
+        "name": "Audio: chopin_waltz.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 133.7,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 7.01
+      },
+      {
+        "name": "Audio: djembe.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 128.5,
+        "expected_meters": [
+          "4/4",
+          "2/4",
+          "3/4",
+          "6/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 2.87
+      },
+      {
+        "name": "Audio: drum_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 112.5,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 2.73
+      },
+      {
+        "name": "Audio: drum_cadence_a.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 129.8,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 2.62
+      },
+      {
+        "name": "Audio: drum_cadence_b.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 113.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 2.36
+      },
+      {
+        "name": "Audio: dubstep_drums.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 139.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 3.94
+      },
+      {
+        "name": "Audio: erika_march.ogg",
+        "category": "march",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 116.9,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 8.37
+      },
+      {
+        "name": "Audio: greensleeves.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 63.8,
+        "expected_meters": [
+          "3/4",
+          "6/4",
+          "6/8"
+        ],
+        "expected_bpm_range": [
+          60,
+          170
+        ],
+        "elapsed_seconds": 4.41
+      },
+      {
+        "name": "Audio: irish_reel_mountain_road.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 143.5,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          240
+        ],
+        "elapsed_seconds": 7.5
+      },
+      {
+        "name": "Audio: jazz_ride.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "2/4",
+        "detected_bpm": 78.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 4.16
+      },
+      {
+        "name": "Audio: jig_doethion.ogg",
+        "category": "jig",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 136.1,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 7.61
+      },
+      {
+        "name": "Audio: jigs_gwerinos.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 129.2,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 2.64
+      },
+      {
+        "name": "Audio: joplin_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 123.0,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 8.19
+      },
+      {
+        "name": "Audio: lost_train_blues.ogg",
+        "category": "blues",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 151.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          180
+        ],
+        "elapsed_seconds": 7.79
+      },
+      {
+        "name": "Audio: maksum.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 97.7,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 1.62
+      },
+      {
+        "name": "Audio: malfuf.ogg",
+        "category": "middle_eastern",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 123.1,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 1.84
+      },
+      {
+        "name": "Audio: march_grandioso.ogg",
+        "category": "march",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 122.9,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 8.59
+      },
+      {
+        "name": "Audio: march_military.ogg",
+        "category": "march",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 103.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 7.93
+      },
+      {
+        "name": "Audio: march_suffrage.ogg",
+        "category": "march",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 126.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 3.73
+      },
+      {
+        "name": "Audio: mazurka_chopin_op7.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 152.0,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 9.11
+      },
+      {
+        "name": "Audio: midnight_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 160.9,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 4.63
+      },
+      {
+        "name": "Audio: minuet_beethoven.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 103.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 3.6
+      },
+      {
+        "name": "Audio: minuet_paderewski.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 143.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 6.08
+      },
+      {
+        "name": "Audio: polka_kathi.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 2.35
+      },
+      {
+        "name": "Audio: polka_pixel_peeker.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 144.3,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 6.7
+      },
+      {
+        "name": "Audio: polka_smetana.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 145.8,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 6.85
+      },
+      {
+        "name": "Audio: polka_tritsch_tratsch.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 160.9,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 6.58
+      },
+      {
+        "name": "Audio: reggae_one_drop.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 107.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 6.58
+      },
+      {
+        "name": "Audio: rock_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 112.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 0.74
+      },
+      {
+        "name": "Audio: roxys_birthday_jigs.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 123.0,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 6.27
+      },
+      {
+        "name": "Audio: saidi.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 104.2,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 1.07
+      },
+      {
+        "name": "Audio: sarabande_bach.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "12/4",
+        "detected_bpm": 83.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 6.32
+      },
+      {
+        "name": "Audio: sarabande_handel.oga",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "4/4",
+        "detected_bpm": 112.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 2.44
+      },
+      {
+        "name": "Audio: shuffle.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 95.9,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 2.16
+      },
+      {
+        "name": "Audio: slip_jigs.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "9/8",
+          "9/4",
+          "3/4",
+          "6/4",
+          "6/8"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 1.95
+      },
+      {
+        "name": "Audio: tango_albeniz.ogg",
+        "category": "tango",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 122.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          140
+        ],
+        "elapsed_seconds": 7.13
+      },
+      {
+        "name": "Audio: tango_argentino.ogg",
+        "category": "tango",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "4/4",
+        "detected_bpm": 252.1,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          140
+        ],
+        "elapsed_seconds": 6.23
+      },
+      {
+        "name": "Audio: tarantella_choir.ogg",
+        "category": "tarantella",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 129.2,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 6.45
+      },
+      {
+        "name": "Audio: tarantella_napoletana.ogg",
+        "category": "tarantella",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 135.4,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 5.62
+      },
+      {
+        "name": "Audio: tarantella_welsh_tenors.ogg",
+        "category": "tarantella",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 152.7,
+        "expected_meters": [
+          "6/4",
+          "6/8",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 2.21
+      },
+      {
+        "name": "Audio: waltz_stefan.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 162.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 6.45
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-02-08T16:52:26.681552+00:00",
+    "total": 72,
+    "meter_pass": 53,
+    "tempo_pass": 64,
+    "results": [
+      {
+        "name": "Synth: 4/4 @ 120",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 119.3,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          108.0,
+          132.0
+        ],
+        "elapsed_seconds": 7.53
+      },
+      {
+        "name": "Synth: 4/4 @ 90",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 89.3,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          81.0,
+          99.00000000000001
+        ],
+        "elapsed_seconds": 3.94
+      },
+      {
+        "name": "Synth: 4/4 @ 160",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 160.9,
+        "expected_meters": [
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          144.0,
+          176.0
+        ],
+        "elapsed_seconds": 4.09
+      },
+      {
+        "name": "Synth: 3/4 @ 100",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          90.0,
+          110.00000000000001
+        ],
+        "elapsed_seconds": 6.57
+      },
+      {
+        "name": "Synth: 3/4 @ 140 (fast waltz)",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 140.7,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          126.0,
+          154.0
+        ],
+        "elapsed_seconds": 4.09
+      },
+      {
+        "name": "Synth: 2/4 @ 120 (march)",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 119.3,
+        "expected_meters": [
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108.0,
+          132.0
+        ],
+        "elapsed_seconds": 3.53
+      },
+      {
+        "name": "Synth: 6/4 @ 80",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "6/4",
+        "detected_bpm": 80.4,
+        "expected_meters": [
+          "6/4"
+        ],
+        "expected_bpm_range": [
+          72.0,
+          88.0
+        ],
+        "elapsed_seconds": 4.21
+      },
+      {
+        "name": "Synth: 5/4 @ 110",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 110.4,
+        "expected_meters": [
+          "5/4"
+        ],
+        "expected_bpm_range": [
+          55.0,
+          121.00000000000001
+        ],
+        "elapsed_seconds": 4.96
+      },
+      {
+        "name": "Synth: 7/4 @ 100",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "7/4"
+        ],
+        "expected_bpm_range": [
+          50.0,
+          110.00000000000001
+        ],
+        "elapsed_seconds": 6.33
+      },
+      {
+        "name": "Synth: 7/8 (2+2+3) @ 200",
+        "category": "synthetic",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "7/4",
+        "detected_bpm": 199.3,
+        "expected_meters": [
+          "7/8",
+          "7/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          220
+        ],
+        "elapsed_seconds": 6.11
+      },
+      {
+        "name": "Synth: 5/8 (3+2) @ 220",
+        "category": "synthetic",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 219.2,
+        "expected_meters": [
+          "5/8",
+          "5/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          240
+        ],
+        "elapsed_seconds": 4.55
+      },
+      {
+        "name": "Edge: 4/4 short clip (4s)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 119.0,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 1.25
+      },
+      {
+        "name": "Edge: 3/4 short clip (5s)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 99.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          110
+        ],
+        "elapsed_seconds": 2.62
+      },
+      {
+        "name": "Edge: quiet 4/4 (amp=0.05)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 118.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 4.17
+      },
+      {
+        "name": "Edge: accel 100->140 BPM (4/4)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 128.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          90,
+          150
+        ],
+        "elapsed_seconds": 6.28
+      },
+      {
+        "name": "Edge: decel 140->90 BPM (3/4)",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 125.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          150
+        ],
+        "elapsed_seconds": 6.92
+      },
+      {
+        "name": "Edge: 4/4 with silence gaps",
+        "category": "edge_case",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 118.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          108,
+          132
+        ],
+        "elapsed_seconds": 4.65
+      },
+      {
+        "name": "Audio: 19_16_drum_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 143.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 4.64
+      },
+      {
+        "name": "Audio: ayub.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 173.5,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 3.67
+      },
+      {
+        "name": "Audio: bach_minuet.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 112.8,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 9.33
+      },
+      {
+        "name": "Audio: bach_siciliana.ogg",
+        "category": "barcarolle",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 112.0,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          30,
+          80
+        ],
+        "elapsed_seconds": 9.03
+      },
+      {
+        "name": "Audio: baladi.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 94.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 4.51
+      },
+      {
+        "name": "Audio: barcarolle_chopin.ogg",
+        "category": "barcarolle",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 160.4,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 9.28
+      },
+      {
+        "name": "Audio: barcarolle_offenbach.ogg",
+        "category": "barcarolle",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 56.2,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 10.04
+      },
+      {
+        "name": "Audio: blast_beat.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "7/4",
+        "detected_bpm": 80.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          150,
+          300
+        ],
+        "elapsed_seconds": 10.38
+      },
+      {
+        "name": "Audio: blowing_bubbles_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "9/8",
+        "detected_bpm": 74.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 3.8
+      },
+      {
+        "name": "Audio: blue_danube.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 182.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          220
+        ],
+        "elapsed_seconds": 3.95
+      },
+      {
+        "name": "Audio: blues_guitar.ogg",
+        "category": "blues",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 143.6,
+        "expected_meters": [
+          "4/4",
+          "12/8",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 3.41
+      },
+      {
+        "name": "Audio: bossa_nova.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 161.8,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          70,
+          170
+        ],
+        "elapsed_seconds": 4.94
+      },
+      {
+        "name": "Audio: bushwick_tarantella.oga",
+        "category": "tarantella",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 4.17
+      },
+      {
+        "name": "Audio: celebre_tarantella.ogg",
+        "category": "tarantella",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 148.1,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 4.18
+      },
+      {
+        "name": "Audio: chopin_waltz.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 3.06
+      },
+      {
+        "name": "Audio: djembe.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 128.5,
+        "expected_meters": [
+          "4/4",
+          "2/4",
+          "3/4",
+          "6/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          200
+        ],
+        "elapsed_seconds": 2.36
+      },
+      {
+        "name": "Audio: drum_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 112.5,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 1.39
+      },
+      {
+        "name": "Audio: drum_cadence_a.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 127.0,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 5.18
+      },
+      {
+        "name": "Audio: drum_cadence_b.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 113.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 2.47
+      },
+      {
+        "name": "Audio: dubstep_drums.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 69.8,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 1.5
+      },
+      {
+        "name": "Audio: erika_march.ogg",
+        "category": "march",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "5/4",
+        "detected_bpm": 117.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 5.91
+      },
+      {
+        "name": "Audio: greensleeves.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 130.9,
+        "expected_meters": [
+          "3/4",
+          "6/4",
+          "6/8"
+        ],
+        "expected_bpm_range": [
+          60,
+          170
+        ],
+        "elapsed_seconds": 6.16
+      },
+      {
+        "name": "Audio: irish_reel_mountain_road.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 143.5,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 6.29
+      },
+      {
+        "name": "Audio: jazz_ride.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": false,
+        "detected_meter": "2/4",
+        "detected_bpm": 78.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 3.33
+      },
+      {
+        "name": "Audio: jig_doethion.ogg",
+        "category": "jig",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 135.9,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 3.07
+      },
+      {
+        "name": "Audio: jigs_gwerinos.ogg",
+        "category": "jig",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 129.2,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 9.07
+      },
+      {
+        "name": "Audio: joplin_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 123.0,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 11.86
+      },
+      {
+        "name": "Audio: lost_train_blues.ogg",
+        "category": "blues",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 151.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 11.88
+      },
+      {
+        "name": "Audio: maksum.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 97.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 3.47
+      },
+      {
+        "name": "Audio: malfuf.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 123.1,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 4.89
+      },
+      {
+        "name": "Audio: march_grandioso.ogg",
+        "category": "march",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 122.9,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 5.79
+      },
+      {
+        "name": "Audio: march_military.ogg",
+        "category": "march",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 103.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 9.61
+      },
+      {
+        "name": "Audio: march_suffrage.ogg",
+        "category": "march",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 126.1,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          140
+        ],
+        "elapsed_seconds": 11.78
+      },
+      {
+        "name": "Audio: mazurka_chopin_op7.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 152.0,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 13.6
+      },
+      {
+        "name": "Audio: midnight_waltz.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 160.9,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 7.24
+      },
+      {
+        "name": "Audio: minuet_beethoven.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 103.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 6.89
+      },
+      {
+        "name": "Audio: minuet_paderewski.ogg",
+        "category": "classical",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 143.6,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 5.07
+      },
+      {
+        "name": "Audio: polka_kathi.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 136.1,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 12.08
+      },
+      {
+        "name": "Audio: polka_pixel_peeker.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 144.3,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 12.21
+      },
+      {
+        "name": "Audio: polka_smetana.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 145.8,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          180
+        ],
+        "elapsed_seconds": 8.13
+      },
+      {
+        "name": "Audio: polka_tritsch_tratsch.ogg",
+        "category": "polka",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 160.9,
+        "expected_meters": [
+          "2/4",
+          "4/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 10.6
+      },
+      {
+        "name": "Audio: reggae_one_drop.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 107.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 10.44
+      },
+      {
+        "name": "Audio: rock_beat.ogg",
+        "category": "drums",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 112.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          180
+        ],
+        "elapsed_seconds": 1.85
+      },
+      {
+        "name": "Audio: roxys_birthday_jigs.ogg",
+        "category": "jig",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 123.0,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 11.89
+      },
+      {
+        "name": "Audio: saidi.ogg",
+        "category": "middle_eastern",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 100.4,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          60,
+          160
+        ],
+        "elapsed_seconds": 4.05
+      },
+      {
+        "name": "Audio: sarabande_bach.ogg",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 83.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 8.86
+      },
+      {
+        "name": "Audio: sarabande_handel.oga",
+        "category": "classical",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "5/4",
+        "detected_bpm": 113.4,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          40,
+          100
+        ],
+        "elapsed_seconds": 9.45
+      },
+      {
+        "name": "Audio: shuffle.ogg",
+        "category": "drums",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "6/4",
+        "detected_bpm": 95.9,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 5.11
+      },
+      {
+        "name": "Audio: slip_jigs.ogg",
+        "category": "jig",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "2/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "9/8",
+          "9/4",
+          "3/4",
+          "6/4",
+          "6/8"
+        ],
+        "expected_bpm_range": [
+          80,
+          160
+        ],
+        "elapsed_seconds": 9.73
+      },
+      {
+        "name": "Audio: tango_albeniz.ogg",
+        "category": "tango",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 122.6,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          50,
+          120
+        ],
+        "elapsed_seconds": 11.25
+      },
+      {
+        "name": "Audio: tango_argentino.ogg",
+        "category": "tango",
+        "meter_correct": false,
+        "tempo_correct": false,
+        "detected_meter": "3/4",
+        "detected_bpm": 252.3,
+        "expected_meters": [
+          "4/4",
+          "2/4"
+        ],
+        "expected_bpm_range": [
+          50,
+          140
+        ],
+        "elapsed_seconds": 10.71
+      },
+      {
+        "name": "Audio: tarantella_choir.ogg",
+        "category": "tarantella",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 129.2,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 6.66
+      },
+      {
+        "name": "Audio: tarantella_napoletana.ogg",
+        "category": "tarantella",
+        "meter_correct": false,
+        "tempo_correct": true,
+        "detected_meter": "4/4",
+        "detected_bpm": 136.0,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          100,
+          200
+        ],
+        "elapsed_seconds": 5.91
+      },
+      {
+        "name": "Audio: tarantella_welsh_tenors.ogg",
+        "category": "tarantella",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 153.4,
+        "expected_meters": [
+          "6/8",
+          "6/4",
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 9.98
+      },
+      {
+        "name": "Audio: waltz_stefan.ogg",
+        "category": "waltz",
+        "meter_correct": true,
+        "tempo_correct": true,
+        "detected_meter": "3/4",
+        "detected_bpm": 162.3,
+        "expected_meters": [
+          "3/4"
+        ],
+        "expected_bpm_range": [
+          80,
+          200
+        ],
+        "elapsed_seconds": 11.44
+      }
+    ]
+  }
+]

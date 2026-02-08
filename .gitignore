@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.idea/
+
+# Claude
+.claude/
+MEMORY.md
+
+# Test fixtures (large audio files - use scripts/download_fixtures.py)
+tests/fixtures/*.ogg
+tests/fixtures/*.oga
+tests/fixtures/.cache/
+
+# OS
+.DS_Store
+
+# Pytest
+.pytest_cache/
