@@ -207,6 +207,26 @@ Each entry records the change, result, regressions, and decision.
 
 ---
 
+## Round 7 (2026-02-09): Signal 8 Attempts
+
+### Baseline: 59/72 (82%) meter, 66/72 (92%) tempo
+
+### R7-1: Signal 8 — Tempogram ratio
+- **Standalone test**: Computed tempogram at 2-beat and 3-beat periods, took ratio.
+- All files (duple and triple) gave ratios ~1.20. No discrimination.
+- **Decision**: ABANDONED without integration. Dead end.
+
+### R7-2: Signal 8 — Chromagram HCDF periodicity (w=0.07)
+- **Standalone test**: HCDF autocorrelation correctly separated duple from triple in 8/10 test files.
+- **Integrated**: w_hcdf=0.07, w_bar_tracking 0.12→0.11 to accommodate.
+- **Result**: 56/72 (78%) — WORSE, 6 regressions (synth 5/4, synth 7/8, decel 3/4, bach_siciliana, blues_guitar, jig_doethion)
+- **Root cause**: HCDF disrupts odd meter detection (5/4, 7/8) and compound meters. Weight redistribution from bar_tracking hurts. Signal may be correlated with periodicity (both use autocorrelation of audio features).
+- **Decision**: REVERTED.
+
+### R7 Final: 59/72 (82%). No change from baseline.
+
+---
+
 ## Key Learnings
 
 1. **Trust threshold and compound detection are coupled** — lowering trust helps marches but breaks 6/8.
@@ -219,6 +239,8 @@ Each entry records the change, result, regressions, and decision.
 8. **BeatNet pyaudio dependency** — BeatNet import fails silently without pyaudio. Always verify trackers actually run.
 9. **Untrusted NNs carry useful duple/triple info** — raw downbeat spacing from untrusted NNs can provide weak 3/4 penalty, but ONLY with strict consensus (all NNs agree) and compound guard.
 10. **Capping non-NN signals is fragile** — bar_tracking and accent don't always bias 3/4. Capping them loses correct signal for some files.
+11. **Always test signals standalone first** — tempogram ratio dead end caught in seconds; HCDF integration without standalone test would've been harder to debug.
+12. **HCDF autocorrelation not orthogonal enough** — discriminates duple/triple standalone but when integrated, disrupts odd meters (5/4, 7/8). Both HCDF and periodicity use autocorrelation → correlated.
 
 ## Remaining Failure Patterns (13 meter failures)
 

@@ -19,6 +19,10 @@ MEMORY.md
 # Test fixtures (large audio files - use scripts/download_fixtures.py)
 tests/fixtures/*.ogg
 tests/fixtures/*.oga
+tests/fixtures/*.mp3
+tests/fixtures/*.flac
+tests/fixtures/*.opus
+tests/fixtures/*.wav
 tests/fixtures/.cache/
 
 # OS

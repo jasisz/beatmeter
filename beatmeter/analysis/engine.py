@@ -1,8 +1,12 @@
 """Analysis orchestrator - combines all analysis modules."""
 
 import logging
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import soundfile as sf
 
 from beatmeter.analysis.models import AnalysisResult, Beat, BpmCandidate, MeterHypothesis, Section, TempoResult
 from beatmeter.analysis.onset import detect_onsets, onset_strength_envelope
@@ -48,27 +52,43 @@ class AnalysisEngine:
         onset_times, onset_strengths = onset_strength_envelope(audio, sr)
         onset_event_times = np.array([o.time for o in onsets])
 
-        # Step 2: Beat tracking (run all methods)
+        # Step 2: Beat tracking (run all methods in parallel)
         logger.info("Step 2: Beat tracking")
 
-        # BeatNet
-        beatnet_beats = track_beats_beatnet(audio, sr)
+        # Write shared temp WAV once for all trackers that need file paths
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sf.write(tmp.name, audio, sr)
+            shared_tmp_path = tmp.name
+
+        try:
+            def _run_all_madmom(audio, sr, tmp_path):
+                results = {}
+                for bpb in [3, 4, 5, 7]:
+                    beats = track_beats_madmom(audio, sr, beats_per_bar=bpb, tmp_path=tmp_path)
+                    if beats:
+                        results[bpb] = beats
+                return results
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                f_beatnet = pool.submit(track_beats_beatnet, audio, sr, shared_tmp_path)
+                f_beat_this = pool.submit(track_beats_beat_this, audio, sr, shared_tmp_path)
+                f_madmom = pool.submit(_run_all_madmom, audio, sr, shared_tmp_path)
+                f_librosa = pool.submit(track_beats_librosa, audio, sr)
+
+            beatnet_beats = f_beatnet.result()
+            beat_this_beats = f_beat_this.result()
+            madmom_results: dict[int, list[Beat]] = f_madmom.result()
+            librosa_beats = f_librosa.result()
+        finally:
+            os.unlink(shared_tmp_path)
+
         logger.info(f"  BeatNet: {len(beatnet_beats)} beats, "
                      f"{sum(1 for b in beatnet_beats if b.is_downbeat)} downbeats")
-
-        # Beat This! (ISMIR 2024)
-        beat_this_beats = track_beats_beat_this(audio, sr)
         logger.info(f"  Beat This!: {len(beat_this_beats)} beats, "
                      f"{sum(1 for b in beat_this_beats if b.is_downbeat)} downbeats")
-
-        # madmom with different meters
-        madmom_results: dict[int, list[Beat]] = {}
-        for bpb in [3, 4, 5, 7]:
-            madmom_beats = track_beats_madmom(audio, sr, beats_per_bar=bpb)
-            if madmom_beats:
-                madmom_results[bpb] = madmom_beats
-                logger.info(f"  madmom ({bpb}/4): {len(madmom_beats)} beats, "
-                             f"{sum(1 for b in madmom_beats if b.is_downbeat)} downbeats")
+        for bpb, madmom_beats in madmom_results.items():
+            logger.info(f"  madmom ({bpb}/4): {len(madmom_beats)} beats, "
+                         f"{sum(1 for b in madmom_beats if b.is_downbeat)} downbeats")
 
         # Validate madmom: if all variants return ~same beat count with IBI ~0.5s
         # (120 BPM), madmom's DBN has fallen back to its default prior and the
@@ -91,8 +111,6 @@ class AnalysisEngine:
                 logger.info("  madmom returned ~120 BPM for all variants (default prior); discarding")
                 madmom_results = {}
 
-        # librosa (always run as candidate, not just fallback)
-        librosa_beats = track_beats_librosa(audio, sr)
         logger.info(f"  librosa: {len(librosa_beats)} beats")
 
         # Step 2.5: Select best primary beats by onset alignment
@@ -335,6 +353,7 @@ class AnalysisEngine:
                     librosa_beats=sec_librosa,
                     beat_this_beats=sec_beat_this,
                     onset_event_times=onset_event_times,
+                    skip_bar_tracking=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]

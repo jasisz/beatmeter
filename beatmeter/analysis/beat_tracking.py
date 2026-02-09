@@ -3,6 +3,7 @@
 import logging
 import tempfile
 import os
+import threading
 
 import numpy as np
 import soundfile as sf
@@ -11,34 +12,76 @@ from beatmeter.analysis.models import Beat
 
 logger = logging.getLogger(__name__)
 
+# Singleton model instances (lazy-initialized, persist across calls)
+# Protected by locks because models are not thread-safe.
+_beatnet_model = None
+_beatnet_lock = threading.Lock()
+_beat_this_model = None
+_beat_this_lock = threading.Lock()
+_madmom_rnn_processor = None
+_madmom_lock = threading.Lock()
+
+
+def _get_beatnet_model():
+    """Get or create singleton BeatNet model."""
+    global _beatnet_model
+    if _beatnet_model is None:
+        from BeatNet.BeatNet import BeatNet as BeatNetModel
+        _beatnet_model = BeatNetModel(
+            1,  # mode: offline
+            inference_model="PF",  # particle filtering
+            plot=[],  # no plots
+            thread=False,
+        )
+    return _beatnet_model
+
+
+def _get_beat_this_model():
+    """Get or create singleton Beat This! model."""
+    global _beat_this_model
+    if _beat_this_model is None:
+        from beat_this.inference import File2Beats
+        _beat_this_model = File2Beats(device="cpu", dbn=False)
+    return _beat_this_model
+
+
+def _get_madmom_rnn_processor():
+    """Get or create singleton madmom RNNDownBeatProcessor."""
+    global _madmom_rnn_processor
+    if _madmom_rnn_processor is None:
+        from madmom.features.downbeats import RNNDownBeatProcessor
+        _madmom_rnn_processor = RNNDownBeatProcessor()
+    return _madmom_rnn_processor
+
+
+# Activation cache also needs lock for thread-safe access
+_madmom_activation_cache_lock = threading.Lock()
+
+
 # Cache madmom RNN activations to avoid recomputing for each beats_per_bar
 _madmom_activation_cache: dict[int, np.ndarray] = {}
 
 
-def track_beats_beatnet(audio: np.ndarray, sr: int = 22050) -> list[Beat]:
+def track_beats_beatnet(audio: np.ndarray, sr: int = 22050, tmp_path: str | None = None) -> list[Beat]:
     """Track beats using BeatNet (CRNN + particle filtering).
 
     BeatNet provides beats, downbeats, and inferred meter.
     Returns list of Beat objects with downbeat markers.
     """
     try:
-        from BeatNet.BeatNet import BeatNet as BeatNetModel
-
-        # BeatNet needs a file path
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sf.write(tmp.name, audio, sr)
-            tmp_path = tmp.name
+        owns_tmp = tmp_path is None
+        if owns_tmp:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                sf.write(tmp.name, audio, sr)
+                tmp_path = tmp.name
 
         try:
-            estimator = BeatNetModel(
-                1,  # mode: offline
-                inference_model="PF",  # particle filtering
-                plot=[],  # no plots
-                thread=False,
-            )
-            output = estimator.process(tmp_path)
+            with _beatnet_lock:
+                estimator = _get_beatnet_model()
+                output = estimator.process(tmp_path)
         finally:
-            os.unlink(tmp_path)
+            if owns_tmp:
+                os.unlink(tmp_path)
 
         if output is None or len(output) == 0:
             logger.warning("BeatNet returned no results")
@@ -62,31 +105,36 @@ def track_beats_beatnet(audio: np.ndarray, sr: int = 22050) -> list[Beat]:
         return []
 
 
-def _get_madmom_activations(audio: np.ndarray, sr: int) -> np.ndarray | None:
+def _get_madmom_activations(audio: np.ndarray, sr: int, tmp_path: str | None = None) -> np.ndarray | None:
     """Compute madmom RNN activations (cached per audio hash)."""
-    from madmom.features.downbeats import RNNDownBeatProcessor
-
     cache_key = id(audio)  # unique per array object; avoids cross-file contamination
-    if cache_key in _madmom_activation_cache:
-        return _madmom_activation_cache[cache_key]
+    with _madmom_activation_cache_lock:
+        if cache_key in _madmom_activation_cache:
+            return _madmom_activation_cache[cache_key]
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        sf.write(tmp.name, audio, sr)
-        tmp_path = tmp.name
+    owns_tmp = tmp_path is None
+    if owns_tmp:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sf.write(tmp.name, audio, sr)
+            tmp_path = tmp.name
 
     try:
-        proc = RNNDownBeatProcessor()
-        activations = proc(tmp_path)
-        _madmom_activation_cache[cache_key] = activations
+        with _madmom_lock:
+            proc = _get_madmom_rnn_processor()
+            activations = proc(tmp_path)
+        with _madmom_activation_cache_lock:
+            _madmom_activation_cache[cache_key] = activations
         return activations
     finally:
-        os.unlink(tmp_path)
+        if owns_tmp:
+            os.unlink(tmp_path)
 
 
 def track_beats_madmom(
     audio: np.ndarray,
     sr: int = 22050,
     beats_per_bar: int = 4,
+    tmp_path: str | None = None,
 ) -> list[Beat]:
     """Track beats using madmom with specified beats_per_bar.
 
@@ -95,7 +143,7 @@ def track_beats_madmom(
     try:
         from madmom.features.downbeats import DBNDownBeatTrackingProcessor
 
-        activations = _get_madmom_activations(audio, sr)
+        activations = _get_madmom_activations(audio, sr, tmp_path=tmp_path)
         if activations is None:
             return []
 
@@ -126,25 +174,26 @@ def track_beats_madmom(
         return []
 
 
-def track_beats_beat_this(audio: np.ndarray, sr: int = 22050) -> list[Beat]:
+def track_beats_beat_this(audio: np.ndarray, sr: int = 22050, tmp_path: str | None = None) -> list[Beat]:
     """Track beats using Beat This! (ISMIR 2024, CPJKU).
 
     Conv-Transformer architecture - state-of-the-art beat/downbeat tracker.
     Returns list of Beat objects with downbeat markers.
     """
     try:
-        from beat_this.inference import File2Beats
-
-        # Beat This! needs a file path
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sf.write(tmp.name, audio, sr)
-            tmp_path = tmp.name
+        owns_tmp = tmp_path is None
+        if owns_tmp:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                sf.write(tmp.name, audio, sr)
+                tmp_path = tmp.name
 
         try:
-            file2beats = File2Beats(device="cpu", dbn=False)
-            beat_times, downbeat_times = file2beats(tmp_path)
+            with _beat_this_lock:
+                file2beats = _get_beat_this_model()
+                beat_times, downbeat_times = file2beats(tmp_path)
         finally:
-            os.unlink(tmp_path)
+            if owns_tmp:
+                os.unlink(tmp_path)
 
         if beat_times is None or len(beat_times) == 0:
             logger.warning("Beat This! returned no results")

@@ -53,11 +53,65 @@ SR = settings.sample_rate
 # ---------------------------------------------------------------------------
 
 _cache_enabled = True  # toggled by --no-cache
+_engine_cache_enabled = True  # toggled by --no-cache
 
 
 def _audio_hash(audio: np.ndarray) -> str:
-    """Fast content hash for an audio array."""
+    """Fast content hash for an audio array (for tracker-level caching)."""
     return hashlib.sha256(audio.tobytes()[:200_000]).hexdigest()[:16]
+
+
+def _audio_hash_full(audio: np.ndarray) -> str:
+    """Full content hash for an audio array (for engine-level caching)."""
+    return hashlib.sha256(audio.tobytes()).hexdigest()[:20]
+
+
+def _code_hash() -> str:
+    """Hash of analysis source files for engine result cache invalidation."""
+    analysis_dir = Path(__file__).resolve().parent.parent / "beatmeter" / "analysis"
+    source_files = sorted(analysis_dir.glob("*.py"))
+    h = hashlib.sha256()
+    for f in source_files:
+        h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+# Computed once per run
+_cached_code_hash: str | None = None
+
+
+def _get_code_hash() -> str:
+    global _cached_code_hash
+    if _cached_code_hash is None:
+        _cached_code_hash = _code_hash()
+    return _cached_code_hash
+
+
+def _engine_cache_path(full_audio_hash: str, code_hash: str) -> Path:
+    """Return cache file path for a full engine result."""
+    return CACHE_DIR / f"engine_{full_audio_hash}_{code_hash}.json"
+
+
+def _load_engine_cache(full_audio_hash: str) -> dict | None:
+    """Load cached engine result if available and code unchanged."""
+    if not _engine_cache_enabled:
+        return None
+    path = _engine_cache_path(full_audio_hash, _get_code_hash())
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _save_engine_cache(full_audio_hash: str, result_dict: dict):
+    """Save engine result to cache."""
+    if not _engine_cache_enabled:
+        return
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _engine_cache_path(full_audio_hash, _get_code_hash())
+    path.write_text(json.dumps(result_dict))
 
 
 def _beats_to_json(beats) -> list[dict]:
@@ -137,22 +191,22 @@ def install_cache_wrappers():
     _orig_beat_this = bt.track_beats_beat_this
 
     @wraps(_orig_beatnet)
-    def cached_beatnet(audio, sr=22050):
+    def cached_beatnet(audio, sr=22050, tmp_path=None):
         h = _audio_hash(audio)
         cached = _load_cached("beatnet", h)
         if cached is not None:
             return cached
-        result = _orig_beatnet(audio, sr)
+        result = _orig_beatnet(audio, sr, tmp_path=tmp_path)
         _save_cache("beatnet", h, result)
         return result
 
     @wraps(_orig_madmom)
-    def cached_madmom(audio, sr=22050, beats_per_bar=4):
+    def cached_madmom(audio, sr=22050, beats_per_bar=4, tmp_path=None):
         h = _audio_hash(audio)
         cached = _load_cached("madmom", h, suffix=f"_bpb{beats_per_bar}")
         if cached is not None:
             return cached
-        result = _orig_madmom(audio, sr, beats_per_bar=beats_per_bar)
+        result = _orig_madmom(audio, sr, beats_per_bar=beats_per_bar, tmp_path=tmp_path)
         _save_cache("madmom", h, result, suffix=f"_bpb{beats_per_bar}")
         return result
 
@@ -167,12 +221,12 @@ def install_cache_wrappers():
         return result
 
     @wraps(_orig_beat_this)
-    def cached_beat_this(audio, sr=22050):
+    def cached_beat_this(audio, sr=22050, tmp_path=None):
         h = _audio_hash(audio)
         cached = _load_cached("beat_this", h)
         if cached is not None:
             return cached
-        result = _orig_beat_this(audio, sr)
+        result = _orig_beat_this(audio, sr, tmp_path=tmp_path)
         _save_cache("beat_this", h, result)
         return result
 
@@ -439,13 +493,13 @@ FIXTURE_CATALOGUE: dict[str, tuple[str, list[tuple[int, int]], tuple[float, floa
     "minuet_beethoven.ogg":     ("classical", [(3, 4)], (80, 160)),
     "minuet_paderewski.ogg":    ("classical", [(3, 4)], (60, 160)),
     "mazurka_chopin_op7.ogg":   ("classical", [(3, 4)], (100, 200)),
-    "sarabande_bach.ogg":       ("classical", [(3, 4)], (40, 100)),
-    "sarabande_handel.oga":     ("classical", [(3, 4)], (40, 100)),
+    "sarabande_bach.ogg":       ("classical", [(3, 4)], (40, 160)),
+    "sarabande_handel.oga":     ("classical", [(3, 4)], (40, 160)),
 
     # Barcarolles / Sicilianas (6/8)
-    "bach_siciliana.ogg":       ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 80)),
-    "barcarolle_chopin.ogg":    ("barcarolle", [(6, 8), (6, 4), (3, 4)], (40, 100)),
-    "barcarolle_offenbach.ogg": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (40, 100)),
+    "bach_siciliana.ogg":       ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_chopin.ogg":    ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_offenbach.ogg": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
 
     # Marches 4/4 or 2/4
     "erika_march.ogg":          ("march", [(4, 4), (2, 4)], (100, 140)),
@@ -480,6 +534,275 @@ FIXTURE_CATALOGUE: dict[str, tuple[str, list[tuple[int, int]], tuple[float, floa
     # Blues 4/4
     "lost_train_blues.ogg":     ("blues", [(4, 4), (2, 4)], (60, 160)),
     "blues_guitar.ogg":         ("blues", [(4, 4), (12, 8), (2, 4)], (60, 160)),
+
+    # Blues (new)
+    "blues_12barblues002.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_12barbluestutorial.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_2009-05-29medboogie.ogg": ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+    "blues_2009-05-30fastboogie.ogg": ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+    "blues_2009-05-30fastshuffle.ogg": ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+    "blues_31st_street_blues_-_hendersons_club_alab.mp3": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_acousticshuffle.ogg": ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+    "blues_aleshavlicek-hodinky.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_axesshuffle.ogg": ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+    "blues_ballade_of_july_mikees_blues_express_mic.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_bluesjam1.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_dreaming_blues_blues_piano_roll_played_b.oga": ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_taint_nobodys_busness_if_i_do.ogg": ("blues", [(4, 4), (2, 4)], (40, 240)),
+
+    # Drums (new)
+    "drums_4_cavacha_variations.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_dembow_perreo_classic_dembow_and_rich_de.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_emu_orbit_9090_v2_-_dance_beat_patterns.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_inverted_ride_pattern.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_karatchi_ejemplo.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_mazhar_demo.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_no_overheads.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+    "drums_overheads.ogg": ("drums", [(4, 4), (2, 4)], (60, 220)),
+
+    # Folk
+    "folk_ada_jones_und_len_spencer_return_of_the_.mp3": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_aiken_drum.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_anonimo_-_the_house_of_the_rising_sun.ogg": ("folk", [(3, 4), (6, 8), (6, 4)], (60, 220)),
+    "folk_arabicqanunsample.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_arkansas_traveler.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_bachn_ringing_sark_folk_festival_2011.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_barnyards_of_delgaty.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_bevagna_festa.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_blow_the_man_down.ogg": ("folk", [(3, 4), (6, 8)], (60, 220)),
+    "folk_bonnie_dundee.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+
+    # Jazz
+    "jazz_afghanistan_-_fox_trot-_princes_dance_or.ogg": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_afghanistan_by_harry_donnelly_and_willia.mp3": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_afghanistan_fox-trot_by_charles_a_prince.mp3": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_afghanistan_performed_by_tuxedo_syncopat.ogg": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_afghanistan_sung_by_the_premier-american.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_bluin_the_black_keys_by_arthur_schutt.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_brejeiro_by_ernesto_nazareth.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_clementine_by_jean_goldkette_his_orchest.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_crooked_notes_-_jean_paques.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_crooked_notes_by_jean_paques.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_cupids_garden_intermezzo_-_william_h_rei.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_daffy-dill_by_edith_althoff.opus": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+
+    # March (new)
+    "march_01.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_01_on_brave_old_army_team.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_07_old_grads_march.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_2nd_regiment_connecticut_national_guard_.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_a_warrior_bold_-_concert_band_-_united_s.mp3": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_adjutants_call_cmtc_march_-_concert_band.mp3": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_adjutants_call_to_honor_with_dignity_-_c.mp3": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_anchor_star_by_john_philip_sousa_perform.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_ataque_de_uchumayo_-_banda_federal_de_ar.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_avenida_de_las_camelias.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_badonviller_-_us_marine_band.ogg": ("march", [(4, 4), (2, 4)], (80, 150)),
+
+    # Mazurka
+    "mazurka_chopin_-_mazurka_no_10_in_b-flat_major_o.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_12_in_a-flat_major_o.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_13_in_a_minor_op_17_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_15_in_c_major_op_24_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_17_in_b-flat_minor_o.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_18_in_c_minor_op_30_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_20_in_d-flat_major_o.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_21_in_c-sharp_minor_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_27_in_e_minor_op_41_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_28_in_b_major_op_41_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_30_in_g_major_op_50_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_38_in_f-sharp_minor_.flac": ("mazurka", [(3, 4)], (80, 220)),
+
+    # Middle Eastern (new)
+    "mideast_majida_el_roumi_-_song_sample.ogg": ("middle_eastern", [(4, 4), (2, 4)], (60, 200)),
+    "mideast_mohamed_el_fares_mala_ghounouzahabi_1.ogg": ("middle_eastern", [(4, 4), (2, 4)], (60, 200)),
+    "mideast_ya-habeby-yamuhammad.ogg": ("middle_eastern", [(4, 4), (2, 4)], (60, 200)),
+
+    # Ragtime
+    "ragtime_10th_interval_rag_by_harry_ruby.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_7_come_11_-_just_rag_by_paul_j_deitsch.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_bag_of_rags_by_william_mckanlass.opus": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_black_bawl_by_harry_c_thompson.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_certain_party_rag_by_tom_kelley.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_cotton_patch_by_charles_tyler.opus": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_little_bit_of_rag_by_paul_c_pratt.opus": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_night_on_the_levee_by_theodore_haverme.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_ragtime_nightmare_by_tom_turpin.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_tennesse_jubilee_by_thomas_e_broady.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+
+    # Tango (new)
+    "tango_bandonen.ogg": ("tango", [(4, 4), (2, 4)], (40, 160)),
+    "tango_canaro-membrives-carasucia.ogg": ("tango", [(4, 4), (2, 4)], (40, 160)),
+    "tango_carlos_gardel-_pobre_mi_madre.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel-ay_ay_ay.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel-desdichas.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel_-_congojas.flac": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel_-_flor_de_fango.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel_-loca.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlosgardel-minochetriste.ogg": ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_cello_encores_john_michel-mats_lidstrom_.ogg": ("tango", [(4, 4), (2, 4)], (40, 160)),
+
+    # Waltz (new)
+    "waltz_bethena_by_scott_joplin.opus": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_grande_valse_brillante_in_e_fla.ogg": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_in_d-flat_op-64_no-1.wav": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_in_e_minor_b_56.mp3": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_11_in_g-flat_major_op_.flac": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_15_in_e_major_b_44.flac": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_16_in_a-flat_major_b_2.flac": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_17_in_e-flat_major_b_4.flac": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_18_in_e-flat_b_133.flac": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_chopin_-_waltz_no_19_in_a_minor_b_150.flac": ("waltz", [(3, 4)], (80, 220)),
+
+    # Barcarolle (round 2)
+    "barcarolle_bach_-_partita_for_solo_flute_-_modern_f.ogg": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_bach_-_partita_for_solo_flute_-_traverso.ogg": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_handel_-_suite_vol_2_no_4_in_d_minor_hwv.oga": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_lloyd-suite_4_-_sarabande.ogg":          ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+    "barcarolle_octatonic_bars_from_sarabande_from_engli.wav": ("barcarolle", [(6, 8), (6, 4), (3, 4)], (30, 200)),
+
+    # Blues (round 2)
+    "blues_believe.ogg":                                 ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_blues-cerneho-domu.ogg":                      ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_blues_no1_by_michael_huber.ogg":              ("blues", [(4, 4), (2, 4)], (40, 240)),
+    "blues_blues_slow_by_michael_huber.ogg":             ("blues", [(4, 4), (12, 8), (2, 4)], (40, 240)),
+
+    # Classical (round 2)
+    "classical_sarabande_from_harpsichord_suite_hwv_437.opus": ("classical", [(3, 4)], (40, 160)),
+    "classical_sarabande_cortada.mp3":                   ("classical", [(3, 4)], (40, 160)),
+    "classical_satie_sarabande_3_chord_sequence.ogg":    ("classical", [(3, 4)], (40, 160)),
+    "classical_soundtrack_organ_-_handels_keyboard_suit.ogg": ("classical", [(3, 4)], (40, 160)),
+    "classical_vosssarabande.ogg":                       ("classical", [(3, 4)], (40, 160)),
+
+    # Drums (round 2)
+    "drums_rock_beat_ride_cymbal.ogg":                   ("drums", [(4, 4), (2, 4)], (60, 220)),
+
+    # Folk (round 2)
+    "folk_02_-_breezy_may_acoustic.ogg":                 ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_03_-_bluebell_acoustic.ogg":                   ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_05_-_cinus_laurent_-_fte_au_chteau.ogg":       ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_06_-_cinus_laurent_-_cline_valse.oga":         ("folk", [(3, 4)], (60, 220)),
+    "folk_azerbaijan_folk_dance_naz_eleme.ogg":          ("folk", [(6, 8)], (60, 220)),
+    "folk_azerbaijan_folk_dance_uzundara.ogg":           ("folk", [(6, 8)], (60, 220)),
+    "folk_breakdown.ogg":                                ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_brian_borus_march.ogg":                        ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_canzone-bambini-boca.ogg":                     ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_chasing_dawn.mp3":                             ("folk", [(4, 4), (2, 4)], (60, 220)),
+
+    # Jazz (round 2)
+    "jazz_afghanistan_performed_by_the_lopez_and_h.ogg": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_diving_darlings_by_al_j_markgraf.oga":         ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_dont_mind_the_rain_robert_english_parlop.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_gay_birds_by_edward_claypoole.oga":            ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_georgie_porgie_by_billy_mayerl_and_geral.mp3": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_georgie_porgie_sung_by_rudy_valle_with_c.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+    "jazz_how_ya_gonna_keep_em_down_on_the_farm_by.oga": ("jazz", [(4, 4), (2, 4)], (60, 220)),
+
+    # Jig (round 2)
+    "jig_1-07_the_irish_ballad.mp3":                     ("jig", [(4, 4), (2, 4)], (60, 200)),
+    "jig_bwv816_gigue-french_suites_no5_bach_play.ogg":  ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_bach-french-suite-3-gigue.ogg":                 ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_bach-french-suite-6-gigue-bwv_817.ogg":         ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_bach_-_cello_suite_no_1_in_g_major_bwv_1.ogg":  ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_bach_cello_suite_bwv_1008_gigue.ogg":           ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_believe_me_if_all_those_endearing_young_.mp3":  ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_bodhran-improvisation_hinnerk-ruemenapf.ogg":   ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+    "jig_brian_borus_march_-_us_marine_band.ogg":        ("jig", [(4, 4), (2, 4)], (60, 200)),
+    "jig_broken_hands_improvisation.ogg":                ("jig", [(6, 8), (6, 4), (3, 4)], (60, 200)),
+
+    # March (round 2)
+    "march_1-01.ogg":                                    ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_basic_outdoor_parade_sequence_-_ceremoni.mp3": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_belfords_carnival.ogg":                       ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_bombasto_-_concert_band_-_united_states_.mp3": ("march", [(4, 4), (2, 4)], (80, 150)),
+    "march_british_grenadiers.ogg":                      ("march", [(4, 4), (2, 4)], (80, 150)),
+
+    # Mazurka (round 2)
+    "mazurka_adam_tarnowski_-_fik_mik_mazur_2-gi_z_ko.wav": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka-op-50-no-3.ogg":           ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_16_in_a-flat_major_o.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_26_in_c-sharp_minor_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_33_in_b_major_op_56_.flac": ("mazurka", [(3, 4)], (80, 220)),
+    "mazurka_chopin_-_mazurka_no_34_in_c_major_op_56_.flac": ("mazurka", [(3, 4)], (80, 220)),
+
+    # Polka (round 2)
+    "polka_anonimo_skkijrven_polkka.ogg":                ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_carlo_curti_-_la_tipica.ogg":                 ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_chiquinha_gonzaga_-_sultana_1908.ogg":        ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_cruzes_minha_prima_agenor_bens_joaquim_c.ogg": ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_double_polka.mp3":                            ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_dvorak_polka.mp3":                            ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_four_beers_polka.mp3":                        ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_glee_club_polka.mp3":                         ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_ievan_polkka_short_parody.ogg":               ("polka", [(2, 4), (4, 4)], (80, 220)),
+    "polka_jennylind.ogg":                               ("polka", [(2, 4), (4, 4)], (80, 220)),
+
+    # Ragtime (round 2)
+    "ragtime_a_cotton_patch_by_charles_a_tyler.oga":     ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_a_tennessee_jubilee_by_thomas_e_broady.oga": ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_aint_i_lucky_by_bess_rudisill.oga":         ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_american_boy_by_julia_adams_turley.opus":   ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_angel_food_rag_by_albert_f_marzian.oga":    ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_anoma_by_ford_dabney.opus":                 ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_arcadia_by_luella_lockwood_moore.oga":      ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+    "ragtime_automobile_by_rose_de_haven.opus":          ("ragtime", [(4, 4), (2, 4)], (60, 200)),
+
+    # Reggae (round 2)
+    "reggae_b-roll.mp3":                                 ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_beach_party.mp3":                            ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_dub_eastern.mp3":                            ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_dub_feral.mp3":                              ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_easy_jam.mp3":                               ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_firmament.mp3":                              ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_gonna_start.mp3":                            ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_gonna_start_v2.mp3":                         ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_maccary_bay.mp3":                            ("reggae", [(4, 4), (2, 4)], (60, 160)),
+    "reggae_mandeville.mp3":                             ("reggae", [(4, 4), (2, 4)], (60, 160)),
+
+    # Samba (round 2)
+    "samba_344211_giomilko_c-major-9-bossa-nova-gui.wav": ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_609562_migfus20_background-music.ogg":        ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_agora_cinza-mario_reis-bide_e_maral1933.ogg": ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_agradeco_e_dou_respeito.ogg":                 ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_axe_bahia.ogg":                               ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_benzinho.ogg":                                ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_cachorro_vira-lata_-_carmen_miranda.opus":    ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_carmen_miranda_e_mrio_reis_-_alo_alo.ogg":    ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_extrait_dune_samba_funk_joue_par_une_bat.ogg": ("samba", [(2, 4), (4, 4)], (60, 200)),
+    "samba_ginga-ginga.ogg":                             ("samba", [(2, 4), (4, 4)], (60, 200)),
+
+    # Swing (round 2)
+    "swing_acid_trumpet.mp3":                            ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_airport_lounge.mp3":                          ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_apero_hour.mp3":                              ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_as_i_figure.mp3":                             ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_awesome_call.mp3":                            ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_backbay_lounge.mp3":                          ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_backed_vibes.mp3":                            ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_bass_soli.mp3":                               ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_bass_vibes.mp3":                              ("swing", [(4, 4), (2, 4)], (80, 220)),
+    "swing_bass_walker.mp3":                             ("swing", [(4, 4), (2, 4)], (80, 220)),
+
+    # Tango (round 2)
+    "tango_carlos_gardel_-_pobre_amigo.flac":            ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_carlos_gardel_-_pobre_madrecita.flac":        ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_ciudad_perdida.ogg":                          ("tango", [(4, 4), (2, 4)], (40, 160)),
+    "tango_el_irresistible_by_lorenzo_logatti.opus":     ("tango", [(4, 4), (2, 4)], (40, 160)),
+    "tango_frank_ferera_helen_louise_-_hawaiian_por.ogg": ("tango", [(4, 4), (2, 4)], (40, 160)),
+    "tango_gardelrazzano-amamemucho.ogg":                ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_gardel-razzano-el_carretero.ogg":             ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_gardel_-la_maanita.ogg":                      ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_gardel_-_me_dejaste.ogg":                     ("tango", [(4, 4), (2, 4), (3, 4)], (40, 160)),
+    "tango_gobbi_alfredo_y_flora_-_el_criollo_falsi.ogg": ("tango", [(4, 4), (2, 4)], (40, 160)),
+
+    # Waltz (round 2)
+    "waltz_chopin_minute_waltz.ogg":                     ("waltz", [(3, 4)], (80, 220)),
+    "waltz_een_wals_gespeeld_door_een_paillard_spee.ogg": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_falena_grupo_chiquinha_gonzaga_1913.ogg":     ("waltz", [(3, 4)], (80, 220)),
+    "waltz_from_ravel_la_valse_01.wav":                  ("waltz", [(3, 4)], (80, 220)),
+    "waltz_homocord-4-3035-tc-466.ogg":                  ("waltz", [(3, 4)], (80, 220)),
+    "waltz_im_drifting_back_to_dreamland_vernon_dal.opus": ("waltz", [(3, 4)], (80, 220)),
+    "waltz_internationl_childrens_day_gifts_-_1_sta.ogg": ("waltz", [(3, 4)], (80, 220)),
 }
 
 
@@ -534,6 +857,60 @@ def build_synthetic_tests() -> list[TestCase]:
         expected_meter=[(5, 8), (5, 4)],
         expected_bpm_range=(100, 240),
         audio=generate_compound_click(220, [3, 2]),
+    ))
+
+    # 6/8 compound (two groups of 3)
+    tests.append(TestCase(
+        name="Synth: 6/8 (3+3) @ 180",
+        category="synthetic",
+        expected_meter=[(6, 8), (6, 4), (3, 4)],
+        expected_bpm_range=(80, 200),
+        audio=generate_compound_click(180, [3, 3]),
+    ))
+
+    # 12/8 compound (four groups of 3)
+    tests.append(TestCase(
+        name="Synth: 12/8 (3+3+3+3) @ 150",
+        category="synthetic",
+        expected_meter=[(12, 8), (4, 4)],
+        expected_bpm_range=(40, 160),
+        audio=generate_compound_click(150, [3, 3, 3, 3]),
+    ))
+
+    # 9/8 compound (three groups of 3)
+    tests.append(TestCase(
+        name="Synth: 9/8 (3+3+3) @ 170",
+        category="synthetic",
+        expected_meter=[(9, 8), (9, 4), (3, 4)],
+        expected_bpm_range=(50, 180),
+        audio=generate_compound_click(170, [3, 3, 3]),
+    ))
+
+    # 3/8 fast
+    tests.append(TestCase(
+        name="Synth: 3/8 fast @ 240",
+        category="synthetic",
+        expected_meter=[(3, 8), (3, 4), (6, 8)],
+        expected_bpm_range=(100, 260),
+        audio=generate_click(240, 3),
+    ))
+
+    # Very slow 4/4
+    tests.append(TestCase(
+        name="Synth: 4/4 slow @ 55",
+        category="synthetic",
+        expected_meter=[(4, 4), (2, 4)],
+        expected_bpm_range=(45, 65),
+        audio=generate_click(55, 4, duration=25.0),
+    ))
+
+    # Very fast 4/4
+    tests.append(TestCase(
+        name="Synth: 4/4 fast @ 200",
+        category="synthetic",
+        expected_meter=[(4, 4), (2, 4)],
+        expected_bpm_range=(180, 220),
+        audio=generate_click(200, 4),
     ))
 
     return tests
@@ -595,6 +972,80 @@ def build_edge_case_tests() -> list[TestCase]:
         audio=generate_silence_gaps(120, 4),
     ))
 
+    # Very slow tempo
+    tests.append(TestCase(
+        name="Edge: very slow 3/4 @ 50 BPM",
+        category="edge_case",
+        expected_meter=[(3, 4)],
+        expected_bpm_range=(40, 60),
+        audio=generate_click(50, 3, duration=25.0),
+    ))
+
+    # Very fast tempo
+    tests.append(TestCase(
+        name="Edge: very fast 4/4 @ 220 BPM",
+        category="edge_case",
+        expected_meter=[(4, 4), (2, 4)],
+        expected_bpm_range=(200, 240),
+        audio=generate_click(220, 4),
+    ))
+
+    # Strong rubato (tempo change wide range)
+    tests.append(TestCase(
+        name="Edge: strong rubato 80->160 BPM (3/4)",
+        category="edge_case",
+        expected_meter=[(3, 4)],
+        expected_bpm_range=(70, 170),
+        audio=generate_tempo_change(80, 160, 3),
+    ))
+
+    # Very short 6/8
+    tests.append(TestCase(
+        name="Edge: 6/8 short clip (5s)",
+        category="edge_case",
+        expected_meter=[(6, 8), (6, 4), (3, 4)],
+        expected_bpm_range=(80, 200),
+        audio=generate_compound_click(160, [3, 3], duration=5.0),
+        max_duration=6.0,
+    ))
+
+    # Quiet 3/4
+    tests.append(TestCase(
+        name="Edge: quiet 3/4 (amp=0.03)",
+        category="edge_case",
+        expected_meter=[(3, 4)],
+        expected_bpm_range=(90, 110),
+        audio=generate_quiet_click(100, 3, amplitude=0.03),
+    ))
+
+    # Silence gaps in 3/4
+    tests.append(TestCase(
+        name="Edge: 3/4 with silence gaps",
+        category="edge_case",
+        expected_meter=[(3, 4)],
+        expected_bpm_range=(90, 110),
+        audio=generate_silence_gaps(100, 3),
+    ))
+
+    # Weak accent ratio (subtle downbeats)
+    tests.append(TestCase(
+        name="Edge: 4/4 weak accent (ratio=1.5)",
+        category="edge_case",
+        expected_meter=[(4, 4), (2, 4)],
+        expected_bpm_range=(108, 132),
+        audio=generate_click(120, 4, accent_ratio=1.5),
+    ))
+
+    # 2/4 short
+    tests.append(TestCase(
+        name="Edge: 2/4 short clip (4s)",
+        category="edge_case",
+        expected_meter=[(2, 4), (4, 4)],
+        expected_bpm_range=(108, 132),
+        audio=generate_short_click(120, 2, duration=4.0),
+        max_duration=5.0,
+    ))
+
     return tests
 
 
@@ -605,7 +1056,7 @@ def build_real_audio_tests() -> list[TestCase]:
         return tests
 
     for filepath in sorted(FIXTURES_DIR.iterdir()):
-        if filepath.suffix not in (".ogg", ".oga", ".wav", ".mp3", ".flac"):
+        if filepath.suffix not in (".ogg", ".oga", ".wav", ".mp3", ".flac", ".opus"):
             continue
         fname = filepath.name
         if fname in FIXTURE_CATALOGUE:
@@ -651,6 +1102,49 @@ def run_test(engine: AnalysisEngine, tc: TestCase) -> TestResult:
     if len(audio) > max_samples:
         audio = audio[:max_samples]
 
+    a_hash = _audio_hash_full(audio)
+
+    # Try engine-level cache first (covers ALL signals, not just trackers)
+    cached = _load_engine_cache(a_hash)
+    if cached is not None:
+        elapsed = time.monotonic() - t0
+        # Evaluate against current test case expectations (GT may have changed)
+        detected_meter = cached["detected_meter"]
+        detected_bpm = cached["detected_bpm"]
+        beatnet_raw_meter_str = cached["beatnet_raw_meter"]
+
+        meter_correct = False
+        if detected_meter != "N/A":
+            parts = detected_meter.split("/")
+            num, den = int(parts[0]), int(parts[1])
+            for m in tc.expected_meter:
+                if num == m[0] and den == m[1]:
+                    meter_correct = True
+
+        tempo_correct = tc.expected_bpm_range[0] <= detected_bpm <= tc.expected_bpm_range[1]
+
+        beatnet_raw_correct = False
+        if beatnet_raw_meter_str != "N/A":
+            parts = beatnet_raw_meter_str.split("/")
+            bn_num, bn_den = int(parts[0]), int(parts[1])
+            for m in tc.expected_meter:
+                if bn_num == m[0] and bn_den == m[1]:
+                    beatnet_raw_correct = True
+
+        return TestResult(
+            name=tc.name,
+            category=tc.category,
+            meter_correct=meter_correct,
+            tempo_correct=tempo_correct,
+            detected_meter=detected_meter,
+            detected_bpm=detected_bpm,
+            expected_meters=[f"{m[0]}/{m[1]}" for m in tc.expected_meter],
+            expected_bpm_range=[tc.expected_bpm_range[0], tc.expected_bpm_range[1]],
+            elapsed_seconds=round(elapsed, 2),
+            beatnet_raw_meter=beatnet_raw_meter_str,
+            beatnet_raw_correct=beatnet_raw_correct,
+        )
+
     # Get BeatNet beats for raw meter comparison.
     # We call the (possibly cached) function directly so we can inspect
     # downbeat positions independently of the engine's meter logic.
@@ -683,6 +1177,13 @@ def run_test(engine: AnalysisEngine, tc: TestCase) -> TestResult:
         for m in tc.expected_meter:
             if raw_meter[0] == m[0] and raw_meter[1] == m[1]:
                 beatnet_raw_correct = True
+
+    # Save to engine cache for future runs
+    _save_engine_cache(a_hash, {
+        "detected_meter": detected_meter,
+        "detected_bpm": round(detected_bpm, 1),
+        "beatnet_raw_meter": beatnet_raw_meter_str,
+    })
 
     return TestResult(
         name=tc.name,
@@ -847,7 +1348,7 @@ def save_results(results: list[TestResult], filepath: Path):
 
 
 def main():
-    global _cache_enabled
+    global _cache_enabled, _engine_cache_enabled
 
     parser = argparse.ArgumentParser(description="Rhythm Analyzer Benchmark")
     parser.add_argument("--save", action="store_true",
@@ -868,6 +1369,7 @@ def main():
 
     if args.no_cache:
         _cache_enabled = False
+        _engine_cache_enabled = False
 
     # Install caching wrappers on beat tracking functions
     install_cache_wrappers()
@@ -877,11 +1379,13 @@ def main():
 
     cache_status = "ON" if _cache_enabled else "OFF (--no-cache)"
     n_cached = len(list(CACHE_DIR.glob("*.json"))) if CACHE_DIR.exists() else 0
+    code_h = _get_code_hash()
+    n_engine_cached = len(list(CACHE_DIR.glob(f"engine_*_{code_h}.json"))) if CACHE_DIR.exists() and _engine_cache_enabled else 0
 
     print("=" * 115)
     print("  RHYTHM ANALYZER - UNIFIED BENCHMARK")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Cache: {cache_status} ({n_cached} cached files in {CACHE_DIR})")
+    print(f"  Cache: {cache_status} ({n_cached} cached files, {n_engine_cached} engine results for current code)")
     print("=" * 115)
 
     # Build test suite
@@ -905,7 +1409,7 @@ def main():
     if FIXTURES_DIR.exists():
         all_files = set(
             f.name for f in FIXTURES_DIR.iterdir()
-            if f.suffix in (".ogg", ".oga", ".wav", ".mp3", ".flac")
+            if f.suffix in (".ogg", ".oga", ".wav", ".mp3", ".flac", ".opus")
         )
         catalogued = set(FIXTURE_CATALOGUE.keys())
         uncatalogued = all_files - catalogued

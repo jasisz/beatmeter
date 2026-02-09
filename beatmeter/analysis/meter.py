@@ -601,6 +601,7 @@ def generate_hypotheses(
     beat_this_beats: list[Beat] | None = None,
     beat_this_alignment: float = 0.0,
     onset_event_times: np.ndarray | None = None,
+    skip_bar_tracking: bool = False,
 ) -> list[MeterHypothesis]:
     """Generate meter hypotheses from all signals.
 
@@ -700,7 +701,7 @@ def generate_hypotheses(
         logger.debug(f"Autocorr signal: {s3}")
 
     # Signal 7: Bar tracking (DBNBarTrackingProcessor)
-    if weights["bar_tracking"] > 0.01 and audio is not None and len(beat_times) >= 6:
+    if not skip_bar_tracking and weights["bar_tracking"] > 0.01 and audio is not None and len(beat_times) >= 6:
         # Use Beat This! beats if available (best tracker), else primary
         if beat_this_beats and len(beat_this_beats) >= 6:
             bar_beat_times = np.array([b.time for b in beat_this_beats])
