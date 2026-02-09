@@ -23,6 +23,7 @@ dependencies = [
     "BeatNet",
     "numba>=0.59.0",
     "beat-this",
+    "pyaudio>=0.2.14",
 ]
 
 [project.scripts]

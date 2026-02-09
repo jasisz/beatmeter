@@ -900,6 +900,7 @@ def generate_hypotheses(
     _disambiguate_compound(all_scores, all_beats, beat_interval)
 
     # Sub-beat division analysis: detect /4 vs /8 denominator
+    sub_beat_den = 4  # default: simple meter
     if onset_event_times is not None and len(onset_event_times) > 0:
         sub_beat_den = signal_sub_beat_division(all_beats, onset_event_times, sr)
         if sub_beat_den == 8:
@@ -924,14 +925,16 @@ def generate_hypotheses(
                     all_scores[meter] *= 1.3
 
     # 3/4 vs 4/4 disambiguation using neural net tracker evidence.
-    # When periodicity says 3/4 but BOTH neural net trackers (BeatNet AND Beat This!)
-    # report even-beat spacing (2 or 4) and NEITHER reports 3, trust the trackers.
-    # This prevents spurious 3/4 on marches, polkas, and blues tracks.
-    # Only uses TRUSTED NN signals (in signal_results), not untrusted ones,
-    # because untrusted NNs also report even on genuine 3/4 and 6/8 content.
+    # When neural net trackers report even-beat spacing (2 or 4) and NEITHER
+    # reports 3, penalize 3/4. Works in two modes:
+    #
+    # 1) TRUSTED NNs (in signal_results): strong penalty (0.55)
+    # 2) UNTRUSTED NNs: weak penalty (0.80) using raw downbeat spacing,
+    #    only when compound was NOT detected (to protect 6/8).
     if (3, 4) in all_scores and ((4, 4) in all_scores or (2, 4) in all_scores):
         nn_trackers_favor_even = 0
         nn_trackers_total = 0
+        # Check trusted signals
         for sig_name in ["beatnet", "beat_this"]:
             if sig_name in signal_results:
                 sig = signal_results[sig_name]
@@ -941,9 +944,24 @@ def generate_hypotheses(
                 if has_even and not has_triple:
                     nn_trackers_favor_even += 1
         if nn_trackers_favor_even >= 1 and nn_trackers_favor_even == nn_trackers_total:
-            # ALL present neural net trackers favor even meters with no 3/4 support
             all_scores[(3, 4)] *= 0.55
-            logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} NN trackers favor even, penalizing 3/4")
+            logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} trusted NNs favor even, strong penalty")
+        elif nn_trackers_total == 0 and sub_beat_den != 8:
+            # No trusted NNs available — try untrusted raw downbeat spacing
+            # as a weak signal. Only when compound was NOT detected.
+            raw_nn_favor_even = 0
+            raw_nn_total = 0
+            for raw_beats, raw_name in [(beatnet_beats, "beatnet"), (beat_this_beats, "beat_this")]:
+                if raw_beats and len(raw_beats) > 4 and any(b.is_downbeat for b in raw_beats):
+                    raw_sig = signal_downbeat_spacing(raw_beats)
+                    raw_nn_total += 1
+                    even_score = max(raw_sig.get((2, 4), 0), raw_sig.get((4, 4), 0))
+                    triple_score = raw_sig.get((3, 4), 0)
+                    if even_score > 0.4 and triple_score < 0.3:
+                        raw_nn_favor_even += 1
+            if raw_nn_favor_even >= 1 and raw_nn_favor_even == raw_nn_total:
+                all_scores[(3, 4)] *= 0.65
+                logger.debug(f"3/4 vs even: {raw_nn_favor_even}/{raw_nn_total} untrusted NNs favor even, weak penalty")
 
     # Filter noise: remove hypotheses scoring less than 10% of the best
     max_raw = max(all_scores.values())

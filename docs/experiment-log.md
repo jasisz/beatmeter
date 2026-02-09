@@ -145,6 +145,68 @@ Each entry records the change, result, regressions, and decision.
 
 ---
 
+## Round 6 (2026-02-09): BeatNet Fix + Re-tuning
+
+### Discovery: BeatNet was broken (pyaudio missing)
+- BeatNet import failed silently; all Round 3-5 results used stale cache from an older run.
+- `uv add pyaudio` fixed the import. Cache cleared, fresh baseline established.
+
+### Baseline: 58/72 (81%) meter, 66/72 (92%) tempo (with live BeatNet)
+
+| Category | R5 (cached BN) | R6 Baseline (live BN) | Change |
+|----------|----------------|----------------------|--------|
+| blues | 0/2 (0%) | **1/2 (50%)** | **+1** |
+| synth | 9/11 | **10/11 (91%)** | **+1** |
+| march | 3/4 (75%) | 2/4 (50%) | -1 |
+| waltz | 4/5 (80%) | 4/5 (80%) | — |
+| tango | 2/2 (100%) | 1/2 (50%) | -1 |
+| polka | 4/4 (100%) | 3/4 (75%) | -1 |
+
+### R6-1: Trust ramp 0.2→0.6 (was 0.4→0.8)
+- **Result**: 56/72 (78%), 5 regressions
+- NNs override compound meters (jig, tarantella) and 3/4 classical.
+- **Decision**: REVERTED.
+
+### R6-2: Trust ramp 0.3→0.7
+- **Result**: 53/72 (74%), 5 regressions
+- Even worse. Trust threshold and compound detection remain coupled.
+- **Decision**: REVERTED.
+
+### R6-3: Cap bar_tracking 0.12→0.08 when NNs untrusted
+- **Result**: 57/72 (79%), 1 regression (blues_guitar)
+- Bar tracking doesn't always bias 3/4 — for blues_guitar it correctly said 4/4.
+  Capping it removed that correct signal.
+- **Decision**: REVERTED.
+
+### R6-4: Cap accent+bar_tracking when NNs untrusted
+- **Result**: 57/72 (79%), 1 regression (blues_guitar)
+- Same result as R6-3. Accent cap had no additional effect.
+- **Decision**: REVERTED.
+
+### R6-5: Untrusted NN weak vote for 3/4 penalty ✅
+- When all NNs are untrusted AND compound not detected, compute raw downbeat
+  spacing from BeatNet/Beat This! beats. If ALL available NNs favor even meter
+  (even > 0.4, triple < 0.3), apply mild 3/4 penalty (×0.65).
+- Tested penalties: 0.80, 0.75, 0.70, 0.65 (all gave 59/72), 0.55 (regressed bach_siciliana)
+- **Result**: 59/72 (82%), zero regressions
+- Fix: tango_albeniz now correct (4/4).
+- **Decision**: KEPT at 0.65.
+
+### R6-6: Relaxed condition (any NN even, no NN triple)
+- **Result**: 57/72 (79%), 5 regressions (3 tarantellas, sarabande, edge)
+- Beat This! says even for tarantellas → penalty fires on genuine 3/4.
+- **Root cause**: NNs say 2/4 for 6/8 content. Cannot relax without compound guard.
+- **Decision**: REVERTED.
+
+### R6 Final: 59/72 (82%). New baseline saved.
+
+| Category | R6 Baseline | R6 Final | Change |
+|----------|-------------|----------|--------|
+| tango | 1/2 (50%) | **2/2 (100%)** | **+1** |
+| (all others unchanged) |
+
+---
+
 ## Key Learnings
 
 1. **Trust threshold and compound detection are coupled** — lowering trust helps marches but breaks 6/8.
@@ -154,9 +216,13 @@ Each entry records the change, result, regressions, and decision.
 5. **New signals must be orthogonal** — spectrogram accent is too correlated with RMS accent. Need CNN/metrogram.
 6. **Reducing periodicity below 0.20 breaks odd meter detection** (5/4, 7/8).
 7. **Parameter tuning ceiling ~82%** — structural changes (CNN classifier, better beat tracking) needed for 85%+.
+8. **BeatNet pyaudio dependency** — BeatNet import fails silently without pyaudio. Always verify trackers actually run.
+9. **Untrusted NNs carry useful duple/triple info** — raw downbeat spacing from untrusted NNs can provide weak 3/4 penalty, but ONLY with strict consensus (all NNs agree) and compound guard.
+10. **Capping non-NN signals is fragile** — bar_tracking and accent don't always bias 3/4. Capping them loses correct signal for some files.
 
-## Remaining Failure Patterns
+## Remaining Failure Patterns (13 meter failures)
 
-- **Pattern A** (false 3/4 on duple): 4 files — march, blues, drum. Periodicity forces 3/4.
-- **Pattern B** (false compound /8): down from 6 to 2 files after triplet check.
-- **Pattern C** (low NN trust + wrong tracker): 4 files — classical, waltz with extreme tracker failure.
+- **Pattern A** (false 3/4 on duple): 6 files — 19_16_drum, erika_march, irish_reel, lost_train_blues, march_grandioso, polka_smetana. Periodicity+accent+bar_tracking force 3/4 when NNs untrusted or ambiguous.
+- **Pattern B** (false 4/4 on 3/4): 2 files — blowing_bubbles_waltz, sarabande_bach.
+- **Pattern C** (compound miss): 2 files — barcarolle_offenbach, tarantella_napoletana.
+- **Pattern D** (other): mazurka→7/4, synth 5/8→4/4, edge 4/4 short→3/4.
