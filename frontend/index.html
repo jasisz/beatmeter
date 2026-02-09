@@ -22,38 +22,38 @@
     </header>
 
     <!-- ===== Tabs ===== -->
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="tab-upload" data-i18n="tab.upload">Upload</button>
-      <button class="tab-btn" data-tab="tab-live" data-i18n="tab.live">Live</button>
-      <button class="tab-btn" data-tab="tab-metronome" data-i18n="tab.metronome">Metronom</button>
+    <div class="tabs" role="tablist">
+      <button class="tab-btn active" data-tab="tab-upload" data-i18n="tab.upload" role="tab" id="btn-tab-upload" aria-selected="true" aria-controls="tab-upload">Upload</button>
+      <button class="tab-btn" data-tab="tab-live" data-i18n="tab.live" role="tab" id="btn-tab-live" aria-selected="false" aria-controls="tab-live">Live</button>
+      <button class="tab-btn" data-tab="tab-metronome" data-i18n="tab.metronome" role="tab" id="btn-tab-metronome" aria-selected="false" aria-controls="tab-metronome">Metronom</button>
     </div>
 
     <!-- ===== Upload Tab ===== -->
-    <div id="tab-upload" class="tab-panel active">
+    <div id="tab-upload" class="tab-panel active" role="tabpanel" aria-labelledby="btn-tab-upload">
 
       <div class="card">
-        <div id="drop-zone" class="drop-zone">
+        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Choose audio file to analyze">
           <span class="icon">&#127925;</span>
-          <p data-i18n="upload.dropzone">Upusc plik audio tutaj lub kliknij, zeby wybrac</p>
+          <p data-i18n="upload.dropzone">Upuść plik audio tutaj lub kliknij, żeby wybrać</p>
           <span class="hint" data-i18n="upload.hint">MP3, WAV, FLAC, OGG &mdash; do 50 MB</span>
-          <input type="file" id="file-input" accept="audio/*" />
+          <input type="file" id="file-input" accept="audio/*" aria-label="Choose audio file to analyze" />
         </div>
       </div>
 
-      <div id="upload-error" class="error-msg"></div>
+      <div id="upload-error" class="error-msg" role="alert"></div>
 
-      <div id="upload-loading" class="loading-overlay">
+      <div id="upload-loading" class="loading-overlay" role="status" aria-live="polite">
         <div class="spinner"></div>
         <p id="upload-loading-text" data-i18n="upload.analyzing">Analizuje rytm...</p>
         <div class="loading-steps">
-          <div class="step" data-step="1" data-i18n="upload.step1">Wykrywanie uderzen</div>
-          <div class="step" data-step="2" data-i18n="upload.step2">Sledzenie beatow</div>
+          <div class="step" data-step="1" data-i18n="upload.step1">Wykrywanie uderzeń</div>
+          <div class="step" data-step="2" data-i18n="upload.step2">Śledzenie beatów</div>
           <div class="step" data-step="3" data-i18n="upload.step3">Estymacja tempa</div>
           <div class="step" data-step="4" data-i18n="upload.step4">Analiza metrum</div>
         </div>
       </div>
 
-      <div id="upload-results" class="results-area">
+      <div id="upload-results" class="results-area" role="status" aria-live="polite">
         <div class="results-grid">
           <div class="card" id="upload-bpm"></div>
           <div class="card" id="upload-meter"></div>
@@ -65,7 +65,7 @@
         <!-- User override -->
         <div class="card user-override-card">
           <div class="override-row">
-            <span class="override-label" data-i18n="upload.override_label">Wiesz lepiej? Ustaw metrum recznie:</span>
+            <span class="override-label" data-i18n="upload.override_label">Wiesz lepiej? Ustaw metrum ręcznie:</span>
             <select id="upload-meter-override" class="override-select">
               <option value="" data-i18n="upload.override_auto">-- automatyczne --</option>
               <option value="2/4">2/4</option>
@@ -96,7 +96,7 @@
 
         <div class="results-grid">
           <div class="card">
-            <h3 data-i18n="heading.beat_grid">Siatka beatow</h3>
+            <h3 data-i18n="heading.beat_grid">Siatka beatów</h3>
             <div class="beat-grid-wrapper">
               <canvas id="upload-beat-grid" class="beat-grid-canvas"></canvas>
             </div>
@@ -121,17 +121,17 @@
     </div>
 
     <!-- ===== Live Tab ===== -->
-    <div id="tab-live" class="tab-panel">
+    <div id="tab-live" class="tab-panel" role="tabpanel" aria-labelledby="btn-tab-live">
 
       <div class="card">
-        <h2 data-i18n="live.title">Analiza na zywo</h2>
+        <h2 data-i18n="live.title">Analiza na żywo</h2>
         <p style="color:var(--text-secondary);margin-bottom:16px;" data-i18n="live.description">
-          Uzyj mikrofonu, zeby analizowac rytm w czasie rzeczywistym.
-          Stukaj w stol, klaskaj lub graj na instrumencie.
+          Użyj mikrofonu, żeby analizować rytm w czasie rzeczywistym.
+          Stukaj w stół, klaskaj lub graj na instrumencie.
         </p>
 
         <div class="live-controls">
-          <button id="live-start" class="btn btn-primary" data-i18n="live.start">Zacznij sluchac</button>
+          <button id="live-start" class="btn btn-primary" data-i18n="live.start">Zacznij słuchać</button>
           <button id="live-stop" class="btn btn-secondary" data-i18n="live.stop">Stop</button>
           <span id="recording-indicator" class="recording-indicator"></span>
         </div>
@@ -145,15 +145,15 @@
         <div id="live-guard-message" class="guard-message"></div>
       </div>
 
-      <div id="live-error" class="error-msg"></div>
+      <div id="live-error" class="error-msg" role="alert"></div>
 
-      <div id="live-results" class="results-area">
+      <div id="live-results" class="results-area" role="status" aria-live="polite">
         <div class="results-grid">
           <div class="card" id="live-bpm"></div>
           <div class="card" id="live-meter"></div>
         </div>
 
-        <button id="live-hear-it" class="btn btn-primary" style="display:flex;margin:0 auto 20px;font-size:1rem;padding:12px 32px;" data-i18n="live.hear_it">Posluchaj</button>
+        <button id="live-hear-it" class="btn btn-primary" style="display:flex;margin:0 auto 20px;font-size:1rem;padding:12px 32px;" data-i18n="live.hear_it">Posłuchaj</button>
 
         <!-- Disambiguation hint -->
         <div id="live-disambiguation" class="disambiguation-hint"></div>
@@ -166,7 +166,7 @@
         </div>
 
         <div class="card">
-          <h3 data-i18n="heading.beat_grid">Siatka beatow</h3>
+          <h3 data-i18n="heading.beat_grid">Siatka beatów</h3>
           <div class="beat-grid-wrapper">
             <canvas id="live-beat-grid" class="beat-grid-canvas"></canvas>
           </div>
@@ -176,7 +176,7 @@
     </div>
 
     <!-- ===== Metronome Tab ===== -->
-    <div id="tab-metronome" class="tab-panel">
+    <div id="tab-metronome" class="tab-panel" role="tabpanel" aria-labelledby="btn-tab-metronome">
 
       <div class="card">
         <h2 data-i18n="met.title">Metronom</h2>
@@ -209,7 +209,7 @@
           </div>
 
           <div class="control-group">
-            <label data-i18n="met.volume">Glosnosc</label>
+            <label data-i18n="met.volume">Głośność</label>
             <input type="range" id="met-volume" min="0" max="1" step="0.05" value="0.7" />
           </div>
         </div>
@@ -218,7 +218,7 @@
           <button id="met-start" class="btn btn-success" data-i18n="met.start">Start</button>
           <button id="met-stop" class="btn btn-secondary" data-i18n="met.stop">Stop</button>
           <button id="met-tap" class="btn btn-primary tap-tempo-btn" data-i18n="met.tap">Tap Tempo</button>
-          <button id="met-apply" class="btn btn-secondary" disabled data-i18n="met.apply">Uzyj wykrytego</button>
+          <button id="met-apply" class="btn btn-secondary" disabled data-i18n="met.apply">Użyj wykrytego</button>
         </div>
       </div>
 

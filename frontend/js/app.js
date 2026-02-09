@@ -41,10 +41,14 @@ function initTabs() {
     btn.addEventListener('click', () => {
       const target = btn.dataset.tab;
 
-      tabBtns.forEach(b => b.classList.remove('active'));
+      tabBtns.forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
       tabPanels.forEach(p => p.classList.remove('active'));
 
       btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
       document.getElementById(target).classList.add('active');
     });
   });

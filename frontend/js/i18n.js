@@ -17,7 +17,7 @@ const translations = {
 
   // ===== Upload =====
   'upload.dropzone': {
-    pl: 'Upusc plik audio tutaj lub kliknij, zeby wybrac',
+    pl: 'Upuść plik audio tutaj lub kliknij, żeby wybrać',
     en: 'Drop an audio file here or click to browse',
   },
   'upload.hint': {
@@ -25,12 +25,12 @@ const translations = {
     en: 'MP3, WAV, FLAC, OGG \u2014 up to 50 MB',
   },
   'upload.analyzing': { pl: 'Analizuje rytm...', en: 'Analyzing rhythm...' },
-  'upload.step1': { pl: 'Wykrywanie uderzen', en: 'Onset detection' },
-  'upload.step2': { pl: 'Sledzenie beatow', en: 'Beat tracking' },
+  'upload.step1': { pl: 'Wykrywanie uderzeń', en: 'Onset detection' },
+  'upload.step2': { pl: 'Śledzenie beatów', en: 'Beat tracking' },
   'upload.step3': { pl: 'Estymacja tempa', en: 'Tempo estimation' },
   'upload.step4': { pl: 'Analiza metrum', en: 'Meter analysis' },
   'upload.override_label': {
-    pl: 'Wiesz lepiej? Ustaw metrum recznie:',
+    pl: 'Wiesz lepiej? Ustaw metrum ręcznie:',
     en: 'Know better? Set meter manually:',
   },
   'upload.override_auto': {
@@ -42,12 +42,16 @@ const translations = {
     en: 'Please select an audio file (MP3, WAV, FLAC, OGG...).',
   },
   'upload.error_server': {
-    pl: 'Blad serwera',
+    pl: 'Błąd serwera',
     en: 'Server error',
   },
   'upload.error_generic': {
-    pl: 'Analiza nie powiodla sie. Sprobuj ponownie.',
+    pl: 'Analiza nie powiodła się. Spróbuj ponownie.',
     en: 'Analysis failed. Please try again.',
+  },
+  'upload.error_too_large': {
+    pl: 'Plik jest za duży (max 50 MB).',
+    en: 'File is too large (max 50 MB).',
   },
 
   // ===== Section headings =====
@@ -60,7 +64,7 @@ const translations = {
     en: 'Detected Meter',
   },
   'heading.beat_grid': {
-    pl: 'Siatka beatow',
+    pl: 'Siatka beatów',
     en: 'Beat Grid',
   },
   'heading.tempo_curve': {
@@ -73,35 +77,35 @@ const translations = {
   },
 
   // ===== Live =====
-  'live.title': { pl: 'Analiza na zywo', en: 'Live Analysis' },
+  'live.title': { pl: 'Analiza na żywo', en: 'Live Analysis' },
   'live.description': {
-    pl: 'Uzyj mikrofonu, zeby analizowac rytm w czasie rzeczywistym. Stukaj w stol, klaskaj lub graj na instrumencie.',
+    pl: 'Użyj mikrofonu, żeby analizować rytm w czasie rzeczywistym. Stukaj w stół, klaskaj lub graj na instrumencie.',
     en: 'Use your microphone to analyze rhythm in real time. Tap on a table, clap, or play an instrument.',
   },
-  'live.start': { pl: 'Zacznij sluchac', en: 'Start Listening' },
+  'live.start': { pl: 'Zacznij słuchać', en: 'Start Listening' },
   'live.stop': { pl: 'Stop', en: 'Stop' },
-  'live.warmup': { pl: 'Slucham... rozgrzewka', en: 'Listening... warming up' },
+  'live.warmup': { pl: 'Słucham... rozgrzewka', en: 'Listening... warming up' },
   'live.warmup_progress': {
     pl: (s, total) => `Rozgrzewka... ${s}s / ${total}s`,
     en: (s, total) => `Warming up... ${s}s / ${total}s`,
   },
   'live.ready': { pl: 'Analiza gotowa', en: 'Analysis ready' },
   'live.onset_count': {
-    pl: (n) => `Wykryto ${n} uderzen...`,
+    pl: (n) => `Wykryto ${n} uderzeń...`,
     en: (n) => `Detected ${n} onsets...`,
   },
   'live.converged': { pl: 'Stabilne', en: 'Stable' },
   'live.analyzing': { pl: 'Analizuje...', en: 'Analyzing...' },
   'live.error_mic': {
-    pl: 'Nie mozna uzyskac dostepu do mikrofonu. Zezwol na dostep i sprobuj ponownie.',
+    pl: 'Nie można uzyskać dostępu do mikrofonu. Zezwól na dostęp i spróbuj ponownie.',
     en: 'Could not access microphone. Please allow mic access and try again.',
   },
   'live.error_ws': {
-    pl: 'Blad polaczenia WebSocket. Czy serwer jest uruchomiony?',
+    pl: 'Błąd połączenia WebSocket. Czy serwer jest uruchomiony?',
     en: 'WebSocket connection error. Is the server running?',
   },
   'live.error_capture': {
-    pl: 'Nie mozna rozpoczac przechwytywania audio: ',
+    pl: 'Nie można rozpocząć przechwytywania audio: ',
     en: 'Could not start audio capture: ',
   },
 
@@ -109,19 +113,19 @@ const translations = {
   'met.title': { pl: 'Metronom', en: 'Metronome' },
   'met.tempo': { pl: 'Tempo (BPM)', en: 'Tempo (BPM)' },
   'met.meter': { pl: 'Metrum', en: 'Meter' },
-  'met.volume': { pl: 'Glosnosc', en: 'Volume' },
+  'met.volume': { pl: 'Głośność', en: 'Volume' },
   'met.start': { pl: 'Start', en: 'Start' },
   'met.stop': { pl: 'Stop', en: 'Stop' },
   'met.tap': { pl: 'Tap Tempo', en: 'Tap Tempo' },
-  'met.apply': { pl: 'Zagraj to metrum', en: 'Play This Meter' },
+  'met.apply': { pl: 'Użyj wykrytego', en: 'Play This Meter' },
 
   // ===== BPM display =====
   'bpm.confidence': {
-    pl: (pct) => `Pewnosc: ${pct}%`,
+    pl: (pct) => `Pewność: ${pct}%`,
     en: (pct) => `Confidence: ${pct}%`,
   },
   'meter.confidence': {
-    pl: (pct) => `Pewnosc: ${pct}%`,
+    pl: (pct) => `Pewność: ${pct}%`,
     en: (pct) => `Confidence: ${pct}%`,
   },
   'meter.grouping': {
@@ -129,7 +133,7 @@ const translations = {
     en: (g) => `Grouping: ${g}`,
   },
   'chart.confidence_label': {
-    pl: (pct) => `${pct}% pewnosci`,
+    pl: (pct) => `${pct}% pewności`,
     en: (pct) => `${pct}% confidence`,
   },
 
@@ -140,40 +144,40 @@ const translations = {
   'confidence.not_sure': { pl: 'Nie jestem pewien', en: 'Not sure' },
 
   // "Hear It" button
-  'live.hear_it': { pl: 'Posluchaj', en: 'Hear It' },
+  'live.hear_it': { pl: 'Posłuchaj', en: 'Hear It' },
 
   // Minimum input guard
   'live.keep_tapping': {
-    pl: 'Stukaj dalej! Potrzebuje jeszcze kilku taktow...',
+    pl: 'Stukaj dalej! Potrzebuję jeszcze kilku taktów...',
     en: 'Keep tapping! I need a few more bars...',
   },
 
   // No onsets detected
   'live.no_onsets': {
-    pl: 'Nie slysze zadnych uderzen. Upewnij sie, ze mikrofon dziala i stukaj mocniej.',
+    pl: 'Nie słyszę żadnych uderzeń. Upewnij się, że mikrofon działa i stukaj mocniej.',
     en: "I don't hear any taps yet. Make sure your mic is working and tap firmly.",
   },
 
   // Low confidence fallback (<40%)
   'live.low_confidence_fallback': {
-    pl: 'Jeszcze nie jestem pewien. Sprobuj stukac dluzej z wyrazniejszym akcentem na raz.',
+    pl: 'Jeszcze nie jestem pewien. Spróbuj stukać dłużej z wyraźniejszym akcentem na raz.',
     en: "I'm not sure yet. Try tapping a bit longer with clearer accents on beat 1.",
   },
 
   // "Could also be" for medium confidence
   'live.could_also_be': {
-    pl: (sig) => `moze tez byc ${sig}`,
+    pl: (sig) => `może też być ${sig}`,
     en: (sig) => `could also be ${sig}`,
   },
 
   // Warmup groove label
   'live.getting_groove': {
-    pl: 'Lapie rytm...',
+    pl: 'Łapię rytm...',
     en: 'Getting your groove...',
   },
 
   // ===== Tempo categories =====
-  'tempo.steady': { pl: 'Stale tempo', en: 'Steady tempo' },
+  'tempo.steady': { pl: 'Stałe tempo', en: 'Steady tempo' },
   'tempo.slightly_variable': { pl: 'Lekko zmienne', en: 'Slightly variable' },
   'tempo.variable': { pl: 'Zmienne tempo', en: 'Variable tempo' },
   'tempo.rubato': { pl: 'Rubato / freestyle', en: 'Rubato / freestyle' },
@@ -182,15 +186,15 @@ const translations = {
     en: 'Tempo is stable and regular.',
   },
   'tempo.slightly_variable_desc': {
-    pl: 'Tempo jest w wiekszosci stale z drobnymi wahaniami.',
+    pl: 'Tempo jest w większości stałe z drobnymi wahaniami.',
     en: 'Tempo is mostly steady with minor fluctuations.',
   },
   'tempo.variable_desc': {
-    pl: 'Tempo zmienia sie wyraznie w trakcie utworu. Moze to byc celowy efekt artystyczny.',
+    pl: 'Tempo zmienia się wyraźnie w trakcie utworu. Może to być celowy efekt artystyczny.',
     en: 'Tempo changes noticeably throughout the piece. This may be an intentional artistic effect.',
   },
   'tempo.rubato_desc': {
-    pl: 'Tempo jest bardzo swobodne - typowe dla rubato, improwizacji lub freestyle.',
+    pl: 'Tempo jest bardzo swobodne — typowe dla rubato, improwizacji lub freestyle.',
     en: 'Tempo is very free-flowing - typical of rubato, improvisation, or freestyle.',
   },
 
@@ -199,36 +203,36 @@ const translations = {
   'meter.3/4': { pl: 'Trzy uderzenia na takt \u2014 walc (np. Blue Danube)', en: 'Three beats per bar \u2014 waltz feel (e.g. Blue Danube)' },
   'meter.3/8': { pl: 'Trzy szybkie uderzenia na takt \u2014 gigue', en: 'Three fast beats per bar \u2014 gigue' },
   'meter.4/4': { pl: 'Cztery uderzenia na takt \u2014 najpopularniejsze metrum', en: 'Four beats per bar \u2014 the most common meter' },
-  'meter.5/4': { pl: 'Piec uderzen na takt \u2014 grupowanie 3+2 lub 2+3 (np. Take Five)', en: 'Five beats per bar \u2014 grouped 3+2 or 2+3 (e.g. Take Five)' },
-  'meter.5/8': { pl: 'Piec szybkich uderzen na takt \u2014 grupowanie 3+2 lub 2+3', en: 'Five fast beats per bar \u2014 grouped 3+2 or 2+3' },
-  'meter.6/4': { pl: 'Szesc uderzen na takt \u2014 wolne, w dwoch grupach po 3', en: 'Six beats per bar \u2014 slow, in two groups of three' },
-  'meter.6/8': { pl: 'Szesc uderzen na takt w dwoch grupach po trzy \u2014 kolyszacy feel (np. Nothing Else Matters)', en: 'Six beats per bar in two groups of three \u2014 a swaying feel (e.g. Nothing Else Matters)' },
-  'meter.7/4': { pl: 'Siedem uderzen na takt \u2014 asymetryczne metrum (np. Money, Pink Floyd)', en: 'Seven beats per bar \u2014 asymmetric meter (e.g. Money by Pink Floyd)' },
-  'meter.7/8': { pl: 'Siedem szybkich uderzen na takt \u2014 czesto 2+2+3 (np. Money, Pink Floyd)', en: 'Seven fast beats per bar \u2014 often grouped 2+2+3 (e.g. Money by Pink Floyd)' },
-  'meter.9/8': { pl: 'Dziewiec uderzen na takt \u2014 czesto 2+2+2+3 (np. Blue Rondo a la Turk)', en: 'Nine beats per bar \u2014 often 2+2+2+3 (e.g. Blue Rondo a la Turk)' },
-  'meter.10/8': { pl: 'Dziesiec uderzen na takt \u2014 rzadkie, asymetryczne metrum', en: 'Ten beats per bar \u2014 rare, asymmetric meter' },
-  'meter.11/8': { pl: 'Jedenascie uderzen na takt \u2014 rzadkie, asymetryczne metrum', en: 'Eleven beats per bar \u2014 rare, asymmetric meter' },
-  'meter.12/8': { pl: 'Dwanascie uderzen na takt w czterech grupach po 3 \u2014 blues shuffle', en: 'Twelve beats per bar in four groups of three \u2014 blues shuffle' },
+  'meter.5/4': { pl: 'Pięć uderzeń na takt \u2014 grupowanie 3+2 lub 2+3 (np. Take Five)', en: 'Five beats per bar \u2014 grouped 3+2 or 2+3 (e.g. Take Five)' },
+  'meter.5/8': { pl: 'Pięć szybkich uderzeń na takt \u2014 grupowanie 3+2 lub 2+3', en: 'Five fast beats per bar \u2014 grouped 3+2 or 2+3' },
+  'meter.6/4': { pl: 'Sześć uderzeń na takt \u2014 wolne, w dwóch grupach po 3', en: 'Six beats per bar \u2014 slow, in two groups of three' },
+  'meter.6/8': { pl: 'Sześć uderzeń na takt w dwóch grupach po trzy \u2014 kołyszący feel (np. Nothing Else Matters)', en: 'Six beats per bar in two groups of three \u2014 a swaying feel (e.g. Nothing Else Matters)' },
+  'meter.7/4': { pl: 'Siedem uderzeń na takt \u2014 asymetryczne metrum (np. Money, Pink Floyd)', en: 'Seven beats per bar \u2014 asymmetric meter (e.g. Money by Pink Floyd)' },
+  'meter.7/8': { pl: 'Siedem szybkich uderzeń na takt \u2014 często 2+2+3 (np. Money, Pink Floyd)', en: 'Seven fast beats per bar \u2014 often grouped 2+2+3 (e.g. Money by Pink Floyd)' },
+  'meter.9/8': { pl: 'Dziewięć uderzeń na takt \u2014 często 2+2+2+3 (np. Blue Rondo a la Turk)', en: 'Nine beats per bar \u2014 often 2+2+2+3 (e.g. Blue Rondo a la Turk)' },
+  'meter.10/8': { pl: 'Dziesięć uderzeń na takt \u2014 rzadkie, asymetryczne metrum', en: 'Ten beats per bar \u2014 rare, asymmetric meter' },
+  'meter.11/8': { pl: 'Jedenaście uderzeń na takt \u2014 rzadkie, asymetryczne metrum', en: 'Eleven beats per bar \u2014 rare, asymmetric meter' },
+  'meter.12/8': { pl: 'Dwanaście uderzeń na takt w czterech grupach po 3 \u2014 blues shuffle', en: 'Twelve beats per bar in four groups of three \u2014 blues shuffle' },
 
   // ===== Disambiguation hints =====
   'hint.6_8_vs_3_4': {
-    pl: '6/8 i 3/4 maja taka sama liczbe impulsow, ale inny podzial wewnetrzny. 6/8 = dwie grupy po 3 (raz-dwa-trzy-raz-dwa-trzy), 3/4 = trzy rowne uderzenia (raz-dwa-trzy). Sprobuj zaklaskac - jesli "naturalnie" dzielisz na dwie grupy, to 6/8.',
+    pl: '6/8 i 3/4 mają taką samą liczbę impulsów, ale inny podział wewnętrzny. 6/8 = dwie grupy po 3 (raz-dwa-trzy-raz-dwa-trzy), 3/4 = trzy równe uderzenia (raz-dwa-trzy). Spróbuj zaklaskać — jeśli "naturalnie" dzielisz na dwie grupy, to 6/8.',
     en: '6/8 and 3/4 have the same number of pulses but different internal divisions. 6/8 = two groups of 3 (ONE-two-three-ONE-two-three), 3/4 = three equal beats (ONE-two-three). Try clapping along - if you naturally divide into two groups, it\'s 6/8.',
   },
   'hint.3_4_vs_6_8': {
-    pl: '3/4 i 6/8 sa czesto mylone. 3/4 to trzy rowne beaty (walc: raz-dwa-trzy). 6/8 to dwie grupy po trzy osmki. Jesli czujesz "kolysanie", to 6/8.',
+    pl: '3/4 i 6/8 są często mylone. 3/4 to trzy równe beaty (walc: raz-dwa-trzy). 6/8 to dwie grupy po trzy ósemki. Jeśli czujesz "kołysanie", to 6/8.',
     en: '3/4 and 6/8 are often confused. 3/4 has three equal beats (waltz: ONE-two-three). 6/8 has two groups of three eighth notes. If you feel a "swaying" motion, it\'s 6/8.',
   },
   'hint.4_4_vs_2_4': {
-    pl: '2/4 to w zasadzie 4/4 ze skroconym taktem. Jesli muzyka ma wyrazny akcent co 4 uderzenia, to raczej 4/4.',
+    pl: '2/4 to w zasadzie 4/4 ze skróconym taktem. Jeśli muzyka ma wyraźny akcent co 4 uderzenia, to raczej 4/4.',
     en: '2/4 is essentially 4/4 with a shorter bar. If the music has a clear accent every 4 beats, it\'s probably 4/4.',
   },
   'hint.2_4_vs_4_4': {
-    pl: '2/4 czesto brzmi jak szybkie 4/4. Jesli czujesz 2 silne uderzenia w cyklu (jak marsz), to 2/4.',
+    pl: '2/4 często brzmi jak szybkie 4/4. Jeśli czujesz 2 silne uderzenia w cyklu (jak marsz), to 2/4.',
     en: '2/4 often sounds like fast 4/4. If you feel 2 strong beats per cycle (like a march), it\'s 2/4.',
   },
   'hint.12_8_vs_4_4': {
-    pl: '12/8 to "swingowe" 4/4 - kazdy beat jest podzielony na trojki. Typowe dla bluesa i slow rock. Jesli beat "kolysza sie", to 12/8.',
+    pl: '12/8 to "swingowe" 4/4 — każdy beat jest podzielony na trójki. Typowe dla bluesa i slow rock. Jeśli beaty "kołyszą się", to 12/8.',
     en: '12/8 is "swung" 4/4 - each beat is divided into triplets. Typical of blues and slow rock. If the beats "swing", it\'s 12/8.',
   },
 

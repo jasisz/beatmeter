@@ -33,6 +33,12 @@ export function init() {
   overrideSelect = document.getElementById('upload-meter-override');
 
   dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
   fileInput.addEventListener('change', handleFileSelect);
 
   dropZone.addEventListener('dragover', e => {
@@ -123,6 +129,11 @@ async function processFile(file) {
     return;
   }
 
+  if (file.size > 50 * 1024 * 1024) {
+    showError(t('upload.error_too_large'));
+    return;
+  }
+
   uploadedFile = file;
   currentResult = null;
   hideError();
@@ -156,8 +167,10 @@ async function processFile(file) {
     showResults(result);
   } catch (err) {
     showError(err.message || t('upload.error_generic'));
+    dropZone.querySelector('p').textContent = t('upload.dropzone');
   } finally {
     hideLoading();
+    fileInput.value = '';
   }
 }
 
