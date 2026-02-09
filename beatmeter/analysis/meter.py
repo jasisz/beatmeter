@@ -54,8 +54,8 @@ GROUPINGS = {
 
 # Prior: common meters get a slight boost (kept mild to avoid overwhelming signals)
 METER_PRIOR = {
-    (4, 4): 1.15,
-    (3, 4): 1.03,
+    (4, 4): 1.13,
+    (3, 4): 1.05,
     (6, 8): 1.05,
     (2, 4): 1.05,
     (12, 8): 1.02,
@@ -532,7 +532,7 @@ def signal_bar_tracking(
     # Check that audio has enough non-silent content.
     rms = float(np.sqrt(np.mean(audio[:min(len(audio), sr * 5)] ** 2)))
     non_silent = float(np.mean(np.abs(audio) > rms * 0.1))
-    if non_silent < 0.3:
+    if non_silent < 0.15:
         logger.debug(f"Bar tracking: sparse audio (non_silent={non_silent:.2f}), skipping")
         return scores
 
@@ -602,6 +602,7 @@ def generate_hypotheses(
     beat_this_alignment: float = 0.0,
     onset_event_times: np.ndarray | None = None,
     skip_bar_tracking: bool = False,
+    skip_resnet: bool = False,
 ) -> list[MeterHypothesis]:
     """Generate meter hypotheses from all signals.
 
@@ -632,27 +633,40 @@ def generate_hypotheses(
     beat_this_trust = max(0.0, min(1.0, (beat_this_alignment - 0.4) / 0.4)) if has_beat_this else 0.0
     madmom_trust = max(0.0, min(1.0, (madmom_alignment - 0.4) / 0.4)) if has_madmom else 0.0
 
+    # Signal 8: ResNet18 — check availability once
+    _resnet_mod = None
+    resnet_available = False
+    if not skip_resnet and audio is not None:
+        try:
+            import beatmeter.analysis.resnet_signal as _resnet_mod
+            resnet_available = True
+        except ImportError:
+            pass
+
     # Base weights with trust scaling
     w_beatnet = 0.13 * beatnet_trust
     w_beat_this = 0.16 * beat_this_trust  # Beat This! gets slightly higher weight (SOTA)
     w_madmom = 0.10 * madmom_trust
     w_autocorr = 0.13
-    w_accent = 0.18
+    w_accent = 0.18  # was 0.16 with Signal 8 active
     w_bar_tracking = 0.12  # Signal 7: DBNBarTrackingProcessor
+    # Signal 8: ResNet18 — disabled pending better model
+    # (75% METER2800 accuracy insufficient: class confusion causes regressions)
+    w_resnet = 0.0
 
     # Periodicity cap: when all NN trackers have zero trust, periodicity
     # naturally gets ~44% of total weight (0.24 / 0.55), which lets it force
     # 3/4 on duple music (marches, blues). Cap it to prevent dominance.
     total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
     if total_nn_trust < 0.01:
-        w_periodicity = 0.17  # ~31% instead of ~44%
-        logger.debug("Periodicity cap: all NNs untrusted, reducing 0.24→0.17")
+        w_periodicity = 0.16  # ~25% instead of ~44% — bar tracking is more reliable
+        logger.debug("Periodicity cap: all NNs untrusted, reducing 0.20→0.16")
     else:
-        w_periodicity = 0.24
+        w_periodicity = 0.20
 
     # Normalize to sum to 1.0
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
-               + w_accent + w_periodicity + w_bar_tracking)
+               + w_accent + w_periodicity + w_bar_tracking + w_resnet)
     if total_w > 0:
         weights = {
             "beatnet": w_beatnet / total_w,
@@ -662,9 +676,10 @@ def generate_hypotheses(
             "accent": w_accent / total_w,
             "periodicity": w_periodicity / total_w,
             "bar_tracking": w_bar_tracking / total_w,
+            "resnet": w_resnet / total_w,
         }
     else:
-        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.3, "periodicity": 0.4, "bar_tracking": 0.1}
+        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1}
 
     logger.debug(f"Meter weights: {weights}")
 
@@ -711,6 +726,13 @@ def generate_hypotheses(
         if s7:
             signal_results["bar_tracking"] = s7
 
+    # Signal 8: ResNet18 MFCC classifier (orthogonal to beat tracking)
+    if resnet_available and weights["resnet"] > 0.01 and audio is not None and _resnet_mod is not None:
+        s8 = _resnet_mod.signal_resnet_meter(audio, sr)
+        if s8:
+            signal_results["resnet"] = s8
+            logger.debug(f"ResNet signal: {s8}")
+
     # Signals 4 & 5: Multi-tracker accent analysis.
     # Run accent signals on ALL tracker candidates (not just primary) and take
     # the best RAW score per meter. This prevents a poorly-chosen primary from
@@ -749,7 +771,7 @@ def generate_hypotheses(
             weights["accent"] = 0.0
             weights["periodicity"] = 0.0
             # Redistribute weight to other signals
-            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"]
+            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"]
             if remaining_w > 0:
                 scale = 1.0 / remaining_w
                 weights["beatnet"] *= scale
@@ -757,6 +779,7 @@ def generate_hypotheses(
                 weights["madmom"] *= scale
                 weights["autocorr"] *= scale
                 weights["bar_tracking"] *= scale
+                weights["resnet"] *= scale
 
         for name, beats in accent_trackers:
             # Skip trackers whose tempo deviates >25% from consensus.
@@ -881,7 +904,7 @@ def generate_hypotheses(
     # Suppress rare meters: odd/high meters are uncommon in most music.
     # Without this, noise in accent signals produces spurious 5/4, 7/4, etc.
     # 5/4 and 7/4 get mild penalties; 8+ get strong penalties.
-    _rarity_penalty = {5: 0.7, 7: 0.6, 8: 0.3, 9: 0.3, 10: 0.3, 11: 0.3, 12: 0.3}
+    _rarity_penalty = {5: 0.65, 7: 0.55, 8: 0.3, 9: 0.3, 10: 0.3, 11: 0.3, 12: 0.3}
     for num, penalty in _rarity_penalty.items():
         key = (num, 4)
         if key in all_scores:
@@ -930,8 +953,19 @@ def generate_hypotheses(
     # reports 3, penalize 3/4. Works in two modes:
     #
     # 1) TRUSTED NNs (in signal_results): strong penalty (0.55)
-    # 2) UNTRUSTED NNs: weak penalty (0.80) using raw downbeat spacing,
+    # 2) UNTRUSTED NNs: weak penalty (0.65) using raw downbeat spacing,
     #    only when compound was NOT detected (to protect 6/8).
+    #
+    # Gate: if Signal 7 (bar tracking) strongly supports 3/4, reduce or
+    # skip penalty — bar tracking is independent of trust mechanism and
+    # directly estimates meter via Viterbi decoding.
+    bar_tracking_supports_triple = False
+    if "bar_tracking" in signal_results:
+        bt_score_3 = signal_results["bar_tracking"].get((3, 4), 0)
+        if bt_score_3 > 0.5:
+            bar_tracking_supports_triple = True
+            logger.debug(f"Bar tracking supports 3/4 (score={bt_score_3:.2f})")
+
     if (3, 4) in all_scores and ((4, 4) in all_scores or (2, 4) in all_scores):
         nn_trackers_favor_even = 0
         nn_trackers_total = 0
@@ -945,8 +979,14 @@ def generate_hypotheses(
                 if has_even and not has_triple:
                     nn_trackers_favor_even += 1
         if nn_trackers_favor_even >= 1 and nn_trackers_favor_even == nn_trackers_total:
-            all_scores[(3, 4)] *= 0.55
-            logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} trusted NNs favor even, strong penalty")
+            if bar_tracking_supports_triple:
+                # Conflict: trusted NNs say even but bar tracking says 3/4.
+                # Apply mild penalty instead of strong — bar tracking is reliable.
+                all_scores[(3, 4)] *= 0.80
+                logger.debug(f"3/4 vs even: trusted NNs favor even but bar tracking says 3/4, mild penalty 0.80")
+            else:
+                all_scores[(3, 4)] *= 0.55
+                logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} trusted NNs favor even, strong penalty")
         elif nn_trackers_total == 0 and sub_beat_den != 8:
             # No trusted NNs available — try untrusted raw downbeat spacing
             # as a weak signal. Only when compound was NOT detected.
@@ -961,8 +1001,18 @@ def generate_hypotheses(
                     if even_score > 0.4 and triple_score < 0.3:
                         raw_nn_favor_even += 1
             if raw_nn_favor_even >= 1 and raw_nn_favor_even == raw_nn_total:
-                all_scores[(3, 4)] *= 0.65
-                logger.debug(f"3/4 vs even: {raw_nn_favor_even}/{raw_nn_total} untrusted NNs favor even, weak penalty")
+                if bar_tracking_supports_triple:
+                    # Conflict: untrusted NNs say even but bar tracking says 3/4.
+                    # Apply reduced penalty — bar tracking is somewhat reliable but
+                    # can be fooled by syncopated music (ragtime, tango).
+                    all_scores[(3, 4)] *= 0.80
+                    logger.debug(f"3/4 vs even: untrusted NNs favor even but bar tracking says 3/4, reduced penalty 0.80")
+                else:
+                    all_scores[(3, 4)] *= 0.65
+                    logger.debug(f"3/4 vs even: {raw_nn_favor_even}/{raw_nn_total} untrusted NNs favor even, weak penalty")
+            elif raw_nn_total == 0 and bar_tracking_supports_triple:
+                # No NN data at all + bar tracking says 3/4: skip penalty.
+                logger.debug("3/4 vs even: no NN data, bar tracking supports 3/4, skipping penalty")
 
     # Filter noise: remove hypotheses scoring less than 10% of the best
     max_raw = max(all_scores.values())

@@ -180,6 +180,29 @@ def _load_bar_tracking_cache(audio_hash: str, beat_times_hash: str) -> dict | No
         return None
 
 
+def _save_resnet_cache(audio_hash: str, scores: dict):
+    """Save ResNet meter scores to cache."""
+    if not _cache_enabled:
+        return
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path("resnet", audio_hash)
+    path.write_text(json.dumps({str(k): v for k, v in scores.items()}))
+
+
+def _load_resnet_cache(audio_hash: str) -> dict | None:
+    """Load cached ResNet meter scores if available."""
+    if not _cache_enabled:
+        return None
+    path = _cache_path("resnet", audio_hash)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return {eval(k): v for k, v in data.items()}
+    except (json.JSONDecodeError, SyntaxError):
+        return None
+
+
 def install_cache_wrappers():
     """Monkey-patch beat tracking functions with caching wrappers."""
     import beatmeter.analysis.beat_tracking as bt
@@ -256,6 +279,25 @@ def install_cache_wrappers():
         return result
 
     meter_mod.signal_bar_tracking = cached_bar_tracking
+
+    # Cache ResNet (Signal 8) results
+    try:
+        import beatmeter.analysis.resnet_signal as resnet_mod
+        _orig_resnet = resnet_mod.signal_resnet_meter
+
+        @wraps(_orig_resnet)
+        def cached_resnet(audio, sr):
+            h = _audio_hash(audio)
+            cached = _load_resnet_cache(h)
+            if cached is not None:
+                return cached
+            result = _orig_resnet(audio, sr)
+            _save_resnet_cache(h, result)
+            return result
+
+        resnet_mod.signal_resnet_meter = cached_resnet
+    except ImportError:
+        pass  # ResNet signal module not available
 
 # ---------------------------------------------------------------------------
 # Data model

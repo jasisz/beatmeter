@@ -25,6 +25,9 @@ tests/fixtures/*.opus
 tests/fixtures/*.wav
 tests/fixtures/.cache/
 
+# Training data and model checkpoints
+data/
+
 # OS
 .DS_Store
 

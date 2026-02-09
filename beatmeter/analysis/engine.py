@@ -354,6 +354,7 @@ class AnalysisEngine:
                     beat_this_beats=sec_beat_this,
                     onset_event_times=onset_event_times,
                     skip_bar_tracking=True,
+                    skip_resnet=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]
