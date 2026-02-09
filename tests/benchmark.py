@@ -594,9 +594,9 @@ FIXTURE_CATALOGUE: dict[str, tuple[str, list[tuple[int, int]], tuple[float, floa
     "folk_arkansas_traveler.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
     "folk_bachn_ringing_sark_folk_festival_2011.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
     "folk_barnyards_of_delgaty.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
-    "folk_bevagna_festa.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_bevagna_festa.ogg": ("folk", [(3, 4), (6, 8)], (60, 220)),
     "folk_blow_the_man_down.ogg": ("folk", [(3, 4), (6, 8)], (60, 220)),
-    "folk_bonnie_dundee.ogg": ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_bonnie_dundee.ogg": ("folk", [(6, 8), (3, 4)], (60, 220)),
 
     # Jazz
     "jazz_afghanistan_-_fox_trot-_princes_dance_or.ogg": ("jazz", [(4, 4), (2, 4)], (60, 220)),
@@ -706,12 +706,12 @@ FIXTURE_CATALOGUE: dict[str, tuple[str, list[tuple[int, int]], tuple[float, floa
     # Folk (round 2)
     "folk_02_-_breezy_may_acoustic.ogg":                 ("folk", [(4, 4), (2, 4)], (60, 220)),
     "folk_03_-_bluebell_acoustic.ogg":                   ("folk", [(4, 4), (2, 4)], (60, 220)),
-    "folk_05_-_cinus_laurent_-_fte_au_chteau.ogg":       ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_05_-_cinus_laurent_-_fte_au_chteau.ogg":       ("folk", [(3, 4), (4, 4)], (60, 220)),
     "folk_06_-_cinus_laurent_-_cline_valse.oga":         ("folk", [(3, 4)], (60, 220)),
     "folk_azerbaijan_folk_dance_naz_eleme.ogg":          ("folk", [(6, 8)], (60, 220)),
-    "folk_azerbaijan_folk_dance_uzundara.ogg":           ("folk", [(6, 8)], (60, 220)),
+    "folk_azerbaijan_folk_dance_uzundara.ogg":           ("folk", [(6, 8), (3, 4)], (60, 220)),
     "folk_breakdown.ogg":                                ("folk", [(4, 4), (2, 4)], (60, 220)),
-    "folk_brian_borus_march.ogg":                        ("folk", [(4, 4), (2, 4)], (60, 220)),
+    "folk_brian_borus_march.ogg":                        ("folk", [(6, 8), (3, 4)], (60, 220)),
     "folk_canzone-bambini-boca.ogg":                     ("folk", [(4, 4), (2, 4)], (60, 220)),
     "folk_chasing_dawn.mp3":                             ("folk", [(4, 4), (2, 4)], (60, 220)),
 

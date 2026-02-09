@@ -87,8 +87,8 @@ COMPOUND_ONSET_MIN = 1.5
 COMPOUND_ONSET_MAX = 3.5
 COMPOUND_EVENNESS_CV_MAX = 0.4      # max CV for "evenly spaced" sub-beats
 COMPOUND_TRIPLET_POS_MIN = 0.4      # min fraction of beats at triplet positions
-COMPOUND_TRANSFER_RATIO = 0.5       # fraction of /4 score transferred to /8
-COMPOUND_BOOST = 1.3                # boost for existing /8 scores
+COMPOUND_TRANSFER_RATIO = 0.0       # disabled: 0 benefit, 9 false 6/8 regressions
+COMPOUND_BOOST = 1.0                # disabled: compound detection not reliable enough
 
 # 2/4 sub-period suppression
 SUBPERIOD_4_4_THRESHOLD = 0.4       # min ratio of 4/4 to 2/4 score
