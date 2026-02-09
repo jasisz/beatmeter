@@ -52,270 +52,236 @@ SR = settings.sample_rate
 # Beat tracker result caching
 # ---------------------------------------------------------------------------
 
-_cache_enabled = True  # toggled by --no-cache
-_engine_cache_enabled = True  # toggled by --no-cache
 
+class BenchmarkCache:
+    """Centralized cache for beat tracker, signal, and engine results."""
 
-def _audio_hash(audio: np.ndarray) -> str:
-    """Fast content hash for an audio array (for tracker-level caching)."""
-    return hashlib.sha256(audio.tobytes()[:200_000]).hexdigest()[:16]
+    def __init__(self, cache_dir: Path, tracker_enabled: bool = True,
+                 engine_enabled: bool = True):
+        self.cache_dir = cache_dir
+        self.tracker_enabled = tracker_enabled
+        self.engine_enabled = engine_enabled
+        self._code_hash: str | None = None
 
+    # -- Hashing helpers --
 
-def _audio_hash_full(audio: np.ndarray) -> str:
-    """Full content hash for an audio array (for engine-level caching)."""
-    return hashlib.sha256(audio.tobytes()).hexdigest()[:20]
+    @staticmethod
+    def audio_hash(audio: np.ndarray) -> str:
+        """Fast content hash for tracker-level caching."""
+        return hashlib.sha256(audio.tobytes()[:200_000]).hexdigest()[:16]
 
+    @staticmethod
+    def audio_hash_full(audio: np.ndarray) -> str:
+        """Full content hash for engine-level caching."""
+        return hashlib.sha256(audio.tobytes()).hexdigest()[:20]
 
-def _code_hash() -> str:
-    """Hash of analysis source files for engine result cache invalidation."""
-    analysis_dir = Path(__file__).resolve().parent.parent / "beatmeter" / "analysis"
-    source_files = sorted(analysis_dir.glob("*.py"))
-    h = hashlib.sha256()
-    for f in source_files:
-        h.update(f.read_bytes())
-    return h.hexdigest()[:16]
+    def code_hash(self) -> str:
+        """Hash of analysis source files for cache invalidation."""
+        if self._code_hash is None:
+            analysis_dir = Path(__file__).resolve().parent.parent / "beatmeter" / "analysis"
+            source_files = sorted(analysis_dir.glob("*.py"))
+            h = hashlib.sha256()
+            for f in source_files:
+                h.update(f.read_bytes())
+            self._code_hash = h.hexdigest()[:16]
+        return self._code_hash
 
+    # -- Serialization helpers --
 
-# Computed once per run
-_cached_code_hash: str | None = None
+    @staticmethod
+    def _beats_to_json(beats) -> list[dict]:
+        return [{"time": b.time, "is_downbeat": b.is_downbeat, "strength": b.strength}
+                for b in beats]
 
+    @staticmethod
+    def _beats_from_json(data: list[dict]):
+        from beatmeter.analysis.models import Beat
+        return [Beat(time=d["time"], is_downbeat=d["is_downbeat"], strength=d["strength"])
+                for d in data]
 
-def _get_code_hash() -> str:
-    global _cached_code_hash
-    if _cached_code_hash is None:
-        _cached_code_hash = _code_hash()
-    return _cached_code_hash
+    @staticmethod
+    def _meter_key_to_str(meter: tuple) -> str:
+        return f"{meter[0]}_{meter[1]}"
 
+    @staticmethod
+    def _str_to_meter_key(s: str) -> tuple:
+        if "_" in s and "(" not in s:
+            a, b = s.split("_")
+            return (int(a), int(b))
+        s = s.strip("() ")
+        a, b = s.split(",")
+        return (int(a.strip()), int(b.strip()))
 
-def _engine_cache_path(full_audio_hash: str, code_hash: str) -> Path:
-    """Return cache file path for a full engine result."""
-    return CACHE_DIR / f"engine_{full_audio_hash}_{code_hash}.json"
+    # -- Path helpers --
 
+    def _path(self, name: str, audio_hash: str, suffix: str = "") -> Path:
+        return self.cache_dir / f"{name}_{audio_hash}{suffix}.json"
 
-def _load_engine_cache(full_audio_hash: str) -> dict | None:
-    """Load cached engine result if available and code unchanged."""
-    if not _engine_cache_enabled:
-        return None
-    path = _engine_cache_path(full_audio_hash, _get_code_hash())
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, KeyError):
-        return None
+    def _ensure_dir(self):
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # -- Tracker cache (Beat objects) --
 
-def _save_engine_cache(full_audio_hash: str, result_dict: dict):
-    """Save engine result to cache."""
-    if not _engine_cache_enabled:
-        return
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _engine_cache_path(full_audio_hash, _get_code_hash())
-    path.write_text(json.dumps(result_dict))
+    def load_tracker(self, name: str, audio_hash: str, suffix: str = ""):
+        """Load cached beats. Returns list[Beat] or None."""
+        if not self.tracker_enabled:
+            return None
+        path = self._path(name, audio_hash, suffix)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            return self._beats_from_json(data)
+        except (json.JSONDecodeError, KeyError):
+            return None
 
+    def save_tracker(self, name: str, audio_hash: str, beats, suffix: str = ""):
+        if not self.tracker_enabled:
+            return
+        self._ensure_dir()
+        path = self._path(name, audio_hash, suffix)
+        path.write_text(json.dumps(self._beats_to_json(beats)))
 
-def _beats_to_json(beats) -> list[dict]:
-    """Serialize Beat objects to JSON-serializable dicts."""
-    return [{"time": b.time, "is_downbeat": b.is_downbeat, "strength": b.strength}
-            for b in beats]
+    # -- Signal cache (meter score dicts) --
 
+    def load_signal(self, name: str, audio_hash: str, suffix: str = "") -> dict | None:
+        """Load cached signal scores ({meter_tuple: float})."""
+        if not self.tracker_enabled:
+            return None
+        path = self._path(name, audio_hash, suffix)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            return {self._str_to_meter_key(k): v for k, v in data.items()}
+        except (json.JSONDecodeError, ValueError):
+            return None
 
-def _beats_from_json(data: list[dict]):
-    """Deserialize Beat objects from dicts."""
-    from beatmeter.analysis.models import Beat
-    return [Beat(time=d["time"], is_downbeat=d["is_downbeat"], strength=d["strength"])
-            for d in data]
+    def save_signal(self, name: str, audio_hash: str, scores: dict, suffix: str = ""):
+        if not self.tracker_enabled:
+            return
+        self._ensure_dir()
+        path = self._path(name, audio_hash, suffix)
+        path.write_text(json.dumps({self._meter_key_to_str(k): v for k, v in scores.items()}))
 
+    # -- Engine cache (full result) --
 
-def _cache_path(tracker_name: str, audio_hash: str, suffix: str = "") -> Path:
-    """Return cache file path for a tracker + audio hash."""
-    fname = f"{tracker_name}_{audio_hash}{suffix}.json"
-    return CACHE_DIR / fname
+    def load_engine(self, full_audio_hash: str) -> dict | None:
+        if not self.engine_enabled:
+            return None
+        path = self.cache_dir / f"engine_{full_audio_hash}_{self.code_hash()}.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, KeyError):
+            return None
 
+    def save_engine(self, full_audio_hash: str, result_dict: dict):
+        if not self.engine_enabled:
+            return
+        self._ensure_dir()
+        path = self.cache_dir / f"engine_{full_audio_hash}_{self.code_hash()}.json"
+        path.write_text(json.dumps(result_dict))
 
-def _load_cached(tracker_name: str, audio_hash: str, suffix: str = ""):
-    """Load cached beats if available. Returns list[Beat] or None."""
-    if not _cache_enabled:
-        return None
-    path = _cache_path(tracker_name, audio_hash, suffix)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        return _beats_from_json(data)
-    except (json.JSONDecodeError, KeyError):
-        return None
+    # -- Monkey-patching --
 
+    def install_wrappers(self):
+        """Monkey-patch beat tracking and signal functions with caching."""
+        import beatmeter.analysis.beat_tracking as bt
+        import beatmeter.analysis.engine as eng
 
-def _save_cache(tracker_name: str, audio_hash: str, beats, suffix: str = ""):
-    """Save beat results to cache."""
-    if not _cache_enabled:
-        return
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path(tracker_name, audio_hash, suffix)
-    path.write_text(json.dumps(_beats_to_json(beats)))
+        cache = self
 
+        _orig_beatnet = bt.track_beats_beatnet
+        _orig_madmom = bt.track_beats_madmom
+        _orig_librosa = bt.track_beats_librosa
+        _orig_beat_this = bt.track_beats_beat_this
 
-def _meter_key_to_str(meter: tuple) -> str:
-    """Serialize a meter tuple to a safe JSON-compatible string key."""
-    return f"{meter[0]}_{meter[1]}"
-
-
-def _str_to_meter_key(s: str) -> tuple:
-    """Deserialize a string key back to a meter tuple.
-
-    Handles both new format '3_4' and legacy '(3, 4)' format.
-    """
-    if "_" in s and "(" not in s:
-        a, b = s.split("_")
-        return (int(a), int(b))
-    # Legacy "(3, 4)" format
-    s = s.strip("() ")
-    a, b = s.split(",")
-    return (int(a.strip()), int(b.strip()))
-
-
-def _save_bar_tracking_cache(audio_hash: str, beat_times_hash: str, scores: dict):
-    """Save bar tracking scores to cache."""
-    if not _cache_enabled:
-        return
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path("bar_tracking", audio_hash, suffix=f"_{beat_times_hash}")
-    path.write_text(json.dumps({_meter_key_to_str(k): v for k, v in scores.items()}))
-
-
-def _load_bar_tracking_cache(audio_hash: str, beat_times_hash: str) -> dict | None:
-    """Load cached bar tracking scores if available."""
-    if not _cache_enabled:
-        return None
-    path = _cache_path("bar_tracking", audio_hash, suffix=f"_{beat_times_hash}")
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        return {_str_to_meter_key(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def _save_resnet_cache(audio_hash: str, scores: dict):
-    """Save ResNet meter scores to cache."""
-    if not _cache_enabled:
-        return
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path("resnet", audio_hash)
-    path.write_text(json.dumps({_meter_key_to_str(k): v for k, v in scores.items()}))
-
-
-def _load_resnet_cache(audio_hash: str) -> dict | None:
-    """Load cached ResNet meter scores if available."""
-    if not _cache_enabled:
-        return None
-    path = _cache_path("resnet", audio_hash)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-        return {_str_to_meter_key(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def install_cache_wrappers():
-    """Monkey-patch beat tracking functions with caching wrappers."""
-    import beatmeter.analysis.beat_tracking as bt
-    import beatmeter.analysis.engine as eng
-
-    _orig_beatnet = bt.track_beats_beatnet
-    _orig_madmom = bt.track_beats_madmom
-    _orig_librosa = bt.track_beats_librosa
-    _orig_beat_this = bt.track_beats_beat_this
-
-    @wraps(_orig_beatnet)
-    def cached_beatnet(audio, sr=22050, tmp_path=None):
-        h = _audio_hash(audio)
-        cached = _load_cached("beatnet", h)
-        if cached is not None:
-            return cached
-        result = _orig_beatnet(audio, sr, tmp_path=tmp_path)
-        _save_cache("beatnet", h, result)
-        return result
-
-    @wraps(_orig_madmom)
-    def cached_madmom(audio, sr=22050, beats_per_bar=4, tmp_path=None):
-        h = _audio_hash(audio)
-        cached = _load_cached("madmom", h, suffix=f"_bpb{beats_per_bar}")
-        if cached is not None:
-            return cached
-        result = _orig_madmom(audio, sr, beats_per_bar=beats_per_bar, tmp_path=tmp_path)
-        _save_cache("madmom", h, result, suffix=f"_bpb{beats_per_bar}")
-        return result
-
-    @wraps(_orig_librosa)
-    def cached_librosa(audio, sr=22050):
-        h = _audio_hash(audio)
-        cached = _load_cached("librosa", h)
-        if cached is not None:
-            return cached
-        result = _orig_librosa(audio, sr)
-        _save_cache("librosa", h, result)
-        return result
-
-    @wraps(_orig_beat_this)
-    def cached_beat_this(audio, sr=22050, tmp_path=None):
-        h = _audio_hash(audio)
-        cached = _load_cached("beat_this", h)
-        if cached is not None:
-            return cached
-        result = _orig_beat_this(audio, sr, tmp_path=tmp_path)
-        _save_cache("beat_this", h, result)
-        return result
-
-    # Patch both the module and the engine's imports
-    bt.track_beats_beatnet = cached_beatnet
-    bt.track_beats_madmom = cached_madmom
-    bt.track_beats_librosa = cached_librosa
-    bt.track_beats_beat_this = cached_beat_this
-    eng.track_beats_beatnet = cached_beatnet
-    eng.track_beats_madmom = cached_madmom
-    eng.track_beats_librosa = cached_librosa
-    eng.track_beats_beat_this = cached_beat_this
-
-    # Cache bar tracking (Signal 7) results
-    import beatmeter.analysis.meter as meter_mod
-    _orig_bar_tracking = meter_mod.signal_bar_tracking
-
-    @wraps(_orig_bar_tracking)
-    def cached_bar_tracking(audio, sr, beat_times_array, meters_to_test=None):
-        h = _audio_hash(audio)
-        bt_hash = hashlib.sha256(beat_times_array.tobytes()).hexdigest()[:12]
-        cached = _load_bar_tracking_cache(h, bt_hash)
-        if cached is not None:
-            return cached
-        result = _orig_bar_tracking(audio, sr, beat_times_array, meters_to_test)
-        _save_bar_tracking_cache(h, bt_hash, result)
-        return result
-
-    meter_mod.signal_bar_tracking = cached_bar_tracking
-
-    # Cache ResNet (Signal 8) results
-    try:
-        import beatmeter.analysis.resnet_signal as resnet_mod
-        _orig_resnet = resnet_mod.signal_resnet_meter
-
-        @wraps(_orig_resnet)
-        def cached_resnet(audio, sr):
-            h = _audio_hash(audio)
-            cached = _load_resnet_cache(h)
+        @wraps(_orig_beatnet)
+        def cached_beatnet(audio, sr=22050, tmp_path=None):
+            h = cache.audio_hash(audio)
+            cached = cache.load_tracker("beatnet", h)
             if cached is not None:
                 return cached
-            result = _orig_resnet(audio, sr)
-            _save_resnet_cache(h, result)
+            result = _orig_beatnet(audio, sr, tmp_path=tmp_path)
+            cache.save_tracker("beatnet", h, result)
             return result
 
-        resnet_mod.signal_resnet_meter = cached_resnet
-    except ImportError:
-        pass  # ResNet signal module not available
+        @wraps(_orig_madmom)
+        def cached_madmom(audio, sr=22050, beats_per_bar=4, tmp_path=None):
+            h = cache.audio_hash(audio)
+            cached = cache.load_tracker("madmom", h, suffix=f"_bpb{beats_per_bar}")
+            if cached is not None:
+                return cached
+            result = _orig_madmom(audio, sr, beats_per_bar=beats_per_bar, tmp_path=tmp_path)
+            cache.save_tracker("madmom", h, result, suffix=f"_bpb{beats_per_bar}")
+            return result
+
+        @wraps(_orig_librosa)
+        def cached_librosa(audio, sr=22050):
+            h = cache.audio_hash(audio)
+            cached = cache.load_tracker("librosa", h)
+            if cached is not None:
+                return cached
+            result = _orig_librosa(audio, sr)
+            cache.save_tracker("librosa", h, result)
+            return result
+
+        @wraps(_orig_beat_this)
+        def cached_beat_this(audio, sr=22050, tmp_path=None):
+            h = cache.audio_hash(audio)
+            cached = cache.load_tracker("beat_this", h)
+            if cached is not None:
+                return cached
+            result = _orig_beat_this(audio, sr, tmp_path=tmp_path)
+            cache.save_tracker("beat_this", h, result)
+            return result
+
+        bt.track_beats_beatnet = cached_beatnet
+        bt.track_beats_madmom = cached_madmom
+        bt.track_beats_librosa = cached_librosa
+        bt.track_beats_beat_this = cached_beat_this
+        eng.track_beats_beatnet = cached_beatnet
+        eng.track_beats_madmom = cached_madmom
+        eng.track_beats_librosa = cached_librosa
+        eng.track_beats_beat_this = cached_beat_this
+
+        # Cache bar tracking (Signal 7) results
+        import beatmeter.analysis.meter as meter_mod
+        _orig_bar_tracking = meter_mod.signal_bar_tracking
+
+        @wraps(_orig_bar_tracking)
+        def cached_bar_tracking(audio, sr, beat_times_array, meters_to_test=None):
+            h = cache.audio_hash(audio)
+            bt_hash = hashlib.sha256(beat_times_array.tobytes()).hexdigest()[:12]
+            cached = cache.load_signal("bar_tracking", h, suffix=f"_{bt_hash}")
+            if cached is not None:
+                return cached
+            result = _orig_bar_tracking(audio, sr, beat_times_array, meters_to_test)
+            cache.save_signal("bar_tracking", h, result, suffix=f"_{bt_hash}")
+            return result
+
+        meter_mod.signal_bar_tracking = cached_bar_tracking
+
+        # Cache ResNet (Signal 8) results
+        try:
+            import beatmeter.analysis.resnet_signal as resnet_mod
+            _orig_resnet = resnet_mod.signal_resnet_meter
+
+            @wraps(_orig_resnet)
+            def cached_resnet(audio, sr):
+                h = cache.audio_hash(audio)
+                cached = cache.load_signal("resnet", h)
+                if cached is not None:
+                    return cached
+                result = _orig_resnet(audio, sr)
+                cache.save_signal("resnet", h, result)
+                return result
+
+            resnet_mod.signal_resnet_meter = cached_resnet
+        except ImportError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -1162,10 +1128,10 @@ def run_test(engine: AnalysisEngine, tc: TestCase) -> TestResult:
     if len(audio) > max_samples:
         audio = audio[:max_samples]
 
-    a_hash = _audio_hash_full(audio)
+    a_hash = _cache.audio_hash_full(audio)
 
     # Try engine-level cache first (covers ALL signals, not just trackers)
-    cached = _load_engine_cache(a_hash)
+    cached = _cache.load_engine(a_hash)
     if cached is not None:
         elapsed = time.monotonic() - t0
         # Evaluate against current test case expectations (GT may have changed)
@@ -1239,7 +1205,7 @@ def run_test(engine: AnalysisEngine, tc: TestCase) -> TestResult:
                 beatnet_raw_correct = True
 
     # Save to engine cache for future runs
-    _save_engine_cache(a_hash, {
+    _cache.save_engine(a_hash, {
         "detected_meter": detected_meter,
         "detected_bpm": round(detected_bpm, 1),
         "beatnet_raw_meter": beatnet_raw_meter_str,
@@ -1407,8 +1373,11 @@ def save_results(results: list[TestResult], filepath: Path):
 # ---------------------------------------------------------------------------
 
 
+_cache: BenchmarkCache = BenchmarkCache(CACHE_DIR)
+
+
 def main():
-    global _cache_enabled, _engine_cache_enabled
+    global _cache
 
     parser = argparse.ArgumentParser(description="Rhythm Analyzer Benchmark")
     parser.add_argument("--save", action="store_true",
@@ -1428,19 +1397,18 @@ def main():
     args = parser.parse_args()
 
     if args.no_cache:
-        _cache_enabled = False
-        _engine_cache_enabled = False
+        _cache = BenchmarkCache(CACHE_DIR, tracker_enabled=False, engine_enabled=False)
 
     # Install caching wrappers on beat tracking functions
-    install_cache_wrappers()
+    _cache.install_wrappers()
 
     if args.verbose:
         logging.getLogger("beatmeter").setLevel(logging.INFO)
 
-    cache_status = "ON" if _cache_enabled else "OFF (--no-cache)"
+    cache_status = "ON" if _cache.tracker_enabled else "OFF (--no-cache)"
     n_cached = len(list(CACHE_DIR.glob("*.json"))) if CACHE_DIR.exists() else 0
-    code_h = _get_code_hash()
-    n_engine_cached = len(list(CACHE_DIR.glob(f"engine_*_{code_h}.json"))) if CACHE_DIR.exists() and _engine_cache_enabled else 0
+    code_h = _cache.code_hash()
+    n_engine_cached = len(list(CACHE_DIR.glob(f"engine_*_{code_h}.json"))) if CACHE_DIR.exists() and _cache.engine_enabled else 0
 
     print("=" * 115)
     print("  RHYTHM ANALYZER - UNIFIED BENCHMARK")
