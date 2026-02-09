@@ -156,13 +156,32 @@ def _save_cache(tracker_name: str, audio_hash: str, beats, suffix: str = ""):
     path.write_text(json.dumps(_beats_to_json(beats)))
 
 
+def _meter_key_to_str(meter: tuple) -> str:
+    """Serialize a meter tuple to a safe JSON-compatible string key."""
+    return f"{meter[0]}_{meter[1]}"
+
+
+def _str_to_meter_key(s: str) -> tuple:
+    """Deserialize a string key back to a meter tuple.
+
+    Handles both new format '3_4' and legacy '(3, 4)' format.
+    """
+    if "_" in s and "(" not in s:
+        a, b = s.split("_")
+        return (int(a), int(b))
+    # Legacy "(3, 4)" format
+    s = s.strip("() ")
+    a, b = s.split(",")
+    return (int(a.strip()), int(b.strip()))
+
+
 def _save_bar_tracking_cache(audio_hash: str, beat_times_hash: str, scores: dict):
     """Save bar tracking scores to cache."""
     if not _cache_enabled:
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _cache_path("bar_tracking", audio_hash, suffix=f"_{beat_times_hash}")
-    path.write_text(json.dumps({str(k): v for k, v in scores.items()}))
+    path.write_text(json.dumps({_meter_key_to_str(k): v for k, v in scores.items()}))
 
 
 def _load_bar_tracking_cache(audio_hash: str, beat_times_hash: str) -> dict | None:
@@ -174,9 +193,8 @@ def _load_bar_tracking_cache(audio_hash: str, beat_times_hash: str) -> dict | No
         return None
     try:
         data = json.loads(path.read_text())
-        # Convert string keys back to tuple keys
-        return {eval(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, SyntaxError):
+        return {_str_to_meter_key(k): v for k, v in data.items()}
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
@@ -186,7 +204,7 @@ def _save_resnet_cache(audio_hash: str, scores: dict):
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _cache_path("resnet", audio_hash)
-    path.write_text(json.dumps({str(k): v for k, v in scores.items()}))
+    path.write_text(json.dumps({_meter_key_to_str(k): v for k, v in scores.items()}))
 
 
 def _load_resnet_cache(audio_hash: str) -> dict | None:
@@ -198,8 +216,8 @@ def _load_resnet_cache(audio_hash: str) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text())
-        return {eval(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, SyntaxError):
+        return {_str_to_meter_key(k): v for k, v in data.items()}
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
