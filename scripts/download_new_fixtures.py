@@ -157,12 +157,11 @@ def main():
 
     # Load existing fixtures to avoid duplicates
     existing_urls = set()
-    # Read existing download_fixtures.py to get known URLs
-    dl_script = Path(__file__).resolve().parent / "download_fixtures.py"
-    if dl_script.exists():
-        content = dl_script.read_text()
-        for match in re.finditer(r'"(https://upload\.wikimedia\.org[^"]+)"', content):
-            existing_urls.add(match.group(1))
+    manifest_path = Path(__file__).resolve().parent / "fixtures_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        for entry in manifest:
+            existing_urls.add(entry["url"])
 
     # Select candidates per category
     selected: list[dict] = []  # list of {filename, category, meters, bpm, url, title}

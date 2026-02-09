@@ -70,7 +70,7 @@ uv sync --group dev
 uv run pytest tests/test_engine.py tests/test_meter.py -v
 
 # Run full benchmark (requires fixture files)
-python scripts/download_fixtures.py
+python scripts/download_new_fixtures.py
 uv run python tests/benchmark.py
 ```
 
