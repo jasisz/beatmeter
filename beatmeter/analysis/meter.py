@@ -52,6 +52,62 @@ GROUPINGS = {
     (11, 8): ["3+3+3+2", "2+2+3+2+2", "3+2+3+3"],
 }
 
+# ---------------------------------------------------------------------------
+# Tunable constants — all magic numbers extracted for easy adjustment.
+# ---------------------------------------------------------------------------
+
+# Trust calibration: NN signals are weighted by alignment quality.
+# Trust = 0 when alignment < TRUST_LOWER, ramps to 1 at TRUST_UPPER.
+TRUST_LOWER = 0.4
+TRUST_RANGE = 0.4  # TRUST_UPPER - TRUST_LOWER (0.8 - 0.4)
+
+# Signal weights (pre-normalization)
+W_BEATNET = 0.13
+W_BEAT_THIS = 0.16       # Beat This! gets slightly higher weight (SOTA)
+W_MADMOM = 0.10
+W_AUTOCORR = 0.13
+W_ACCENT = 0.18
+W_PERIODICITY = 0.20
+W_PERIODICITY_CAPPED = 0.16  # used when all NNs untrusted
+W_BAR_TRACKING = 0.12
+W_RESNET = 0.0           # disabled pending better model
+
+# Consensus bonus: meters supported by multiple signals
+CONSENSUS_SUPPORT_THRESHOLD = 0.3   # min signal score to count as "supporting"
+CONSENSUS_3_BONUS = 1.15            # 3 supporting signals
+CONSENSUS_4_BONUS = 1.25            # 4+ supporting signals
+
+# NN 3/4 penalty: when neural nets favor even meters
+NN_PENALTY_STRONG = 0.55            # trusted NNs, no bar tracking conflict
+NN_PENALTY_WEAK = 0.65              # untrusted NNs, no bar tracking conflict
+NN_PENALTY_MILD = 0.80              # any NNs, but bar tracking supports 3/4
+
+# Compound meter detection (signal_sub_beat_division)
+COMPOUND_ONSET_MIN = 1.5
+COMPOUND_ONSET_MAX = 3.5
+COMPOUND_EVENNESS_CV_MAX = 0.4      # max CV for "evenly spaced" sub-beats
+COMPOUND_TRIPLET_POS_MIN = 0.4      # min fraction of beats at triplet positions
+COMPOUND_TRANSFER_RATIO = 0.5       # fraction of /4 score transferred to /8
+COMPOUND_BOOST = 1.3                # boost for existing /8 scores
+
+# 2/4 sub-period suppression
+SUBPERIOD_4_4_THRESHOLD = 0.4       # min ratio of 4/4 to 2/4 score
+SUBPERIOD_4_4_BOOST = 1.3
+SUBPERIOD_3_4_THRESHOLD = 0.7       # min ratio of 3/4 to 2/4 score
+SUBPERIOD_3_4_BOOST = 1.2
+
+# Quality gates
+BAR_TRACKING_SPARSE_THRESHOLD = 0.15  # min non-silent fraction for bar tracking
+FLAT_DYNAMICS_CV = 0.05               # max CV to consider dynamics "flat"
+NOISE_FLOOR_RATIO = 0.10              # min energy fraction to count beat as active
+ACTIVE_BEATS_MIN_FRAC = 0.7           # min fraction of active beats per tracker
+
+# Noise filter: remove hypotheses scoring less than this fraction of the best
+NOISE_FILTER_RATIO = 0.10
+
+# Rarity penalties for uncommon meters
+RARITY_PENALTY = {5: 0.65, 7: 0.55, 8: 0.3, 9: 0.3, 10: 0.3, 11: 0.3, 12: 0.3}
+
 # Prior: common meters get a slight boost (kept mild to avoid overwhelming signals)
 METER_PRIOR = {
     (4, 4): 1.13,
@@ -435,7 +491,7 @@ def signal_sub_beat_division(
 
     # If median is ~2 (i.e., 2 onsets between beats = 3 sub-divisions = triplet feel)
     # this indicates compound meter (/8)
-    if 1.5 <= median_count <= 3.5:
+    if COMPOUND_ONSET_MIN <= median_count <= COMPOUND_ONSET_MAX:
         # Evenness check: true compound meter has evenly-spaced sub-beats.
         # Measure CV (std/mean) of inter-onset intervals within each beat.
         # Ornaments and accompaniment arpeggios produce unevenly spaced onsets.
@@ -457,8 +513,8 @@ def signal_sub_beat_division(
             logger.debug(f"Sub-beat evenness: median CV = {median_cv:.3f}")
             # True triplets: CV < 0.3 (evenly spaced)
             # Ornaments: CV > 0.5 (unevenly spaced)
-            if median_cv > 0.4:
-                logger.debug("Sub-beat intervals uneven (CV > 0.4): not compound")
+            if median_cv > COMPOUND_EVENNESS_CV_MAX:
+                logger.debug(f"Sub-beat intervals uneven (CV > {COMPOUND_EVENNESS_CV_MAX}): not compound")
                 return 4
 
         # Positional consistency: true compound meter has sub-onsets at ~1/3
@@ -484,13 +540,13 @@ def signal_sub_beat_division(
         if checked_beats >= 4:
             triplet_frac = triplet_beats / checked_beats
             logger.debug(f"Triplet position check: {triplet_beats}/{checked_beats} = {triplet_frac:.2f}")
-            if triplet_frac < 0.4:
+            if triplet_frac < COMPOUND_TRIPLET_POS_MIN:
                 logger.debug("Sub-onsets not at triplet positions: not compound")
                 return 4
 
         return 8
     # If median is ~1 or 0 (1 onset between = 2 sub-divisions = simple feel)
-    elif median_count < 1.5:
+    elif median_count < COMPOUND_ONSET_MIN:
         return 4
     # Very dense onsets (>3.5) - could be fast ornaments, inconclusive
     return None
@@ -531,8 +587,8 @@ def signal_bar_tracking(
     # features (harmonic+percussive) are meaningless.
     # Check that audio has enough non-silent content.
     rms = float(np.sqrt(np.mean(audio[:min(len(audio), sr * 5)] ** 2)))
-    non_silent = float(np.mean(np.abs(audio) > rms * 0.1))
-    if non_silent < 0.15:
+    non_silent = float(np.mean(np.abs(audio) > rms * NOISE_FLOOR_RATIO))
+    if non_silent < BAR_TRACKING_SPARSE_THRESHOLD:
         logger.debug(f"Bar tracking: sparse audio (non_silent={non_silent:.2f}), skipping")
         return scores
 
@@ -628,10 +684,10 @@ def generate_hypotheses(
     has_beat_this = beat_this_beats is not None and len(beat_this_beats) > 0 and any(b.is_downbeat for b in beat_this_beats)
     has_madmom = len(madmom_results) > 0
 
-    # Trust factor: 0 when alignment < 0.4, ramps to 1 when alignment > 0.8
-    beatnet_trust = max(0.0, min(1.0, (beatnet_alignment - 0.4) / 0.4)) if has_beatnet else 0.0
-    beat_this_trust = max(0.0, min(1.0, (beat_this_alignment - 0.4) / 0.4)) if has_beat_this else 0.0
-    madmom_trust = max(0.0, min(1.0, (madmom_alignment - 0.4) / 0.4)) if has_madmom else 0.0
+    # Trust factor: 0 when alignment < TRUST_LOWER, ramps to 1 at TRUST_UPPER
+    beatnet_trust = max(0.0, min(1.0, (beatnet_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_beatnet else 0.0
+    beat_this_trust = max(0.0, min(1.0, (beat_this_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_beat_this else 0.0
+    madmom_trust = max(0.0, min(1.0, (madmom_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_madmom else 0.0
 
     # Signal 8: ResNet18 — check availability once
     _resnet_mod = None
@@ -644,25 +700,23 @@ def generate_hypotheses(
             pass
 
     # Base weights with trust scaling
-    w_beatnet = 0.13 * beatnet_trust
-    w_beat_this = 0.16 * beat_this_trust  # Beat This! gets slightly higher weight (SOTA)
-    w_madmom = 0.10 * madmom_trust
-    w_autocorr = 0.13
-    w_accent = 0.18  # was 0.16 with Signal 8 active
-    w_bar_tracking = 0.12  # Signal 7: DBNBarTrackingProcessor
-    # Signal 8: ResNet18 — disabled pending better model
-    # (75% METER2800 accuracy insufficient: class confusion causes regressions)
-    w_resnet = 0.0
+    w_beatnet = W_BEATNET * beatnet_trust
+    w_beat_this = W_BEAT_THIS * beat_this_trust
+    w_madmom = W_MADMOM * madmom_trust
+    w_autocorr = W_AUTOCORR
+    w_accent = W_ACCENT
+    w_bar_tracking = W_BAR_TRACKING
+    w_resnet = W_RESNET
 
     # Periodicity cap: when all NN trackers have zero trust, periodicity
     # naturally gets ~44% of total weight (0.24 / 0.55), which lets it force
     # 3/4 on duple music (marches, blues). Cap it to prevent dominance.
     total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
     if total_nn_trust < 0.01:
-        w_periodicity = 0.16  # ~25% instead of ~44% — bar tracking is more reliable
-        logger.debug("Periodicity cap: all NNs untrusted, reducing 0.20→0.16")
+        w_periodicity = W_PERIODICITY_CAPPED
+        logger.debug(f"Periodicity cap: all NNs untrusted, reducing {W_PERIODICITY}→{W_PERIODICITY_CAPPED}")
     else:
-        w_periodicity = 0.20
+        w_periodicity = W_PERIODICITY
 
     # Normalize to sum to 1.0
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
@@ -766,7 +820,7 @@ def generate_hypotheses(
                 if _mean > 0:
                     _all_cvs.append(float(np.std(_energies)) / _mean)
         _max_cv = max(_all_cvs) if _all_cvs else 0.0
-        if _max_cv < 0.05:
+        if _max_cv < FLAT_DYNAMICS_CV:
             logger.debug(f"Flat dynamics (max CV={_max_cv:.4f}): suppressing accent/periodicity signals")
             weights["accent"] = 0.0
             weights["periodicity"] = 0.0
@@ -812,8 +866,8 @@ def generate_hypotheses(
             # spurious 3/4 because every 3rd madmom beat aligns with a click).
             max_e = float(np.max(energies)) if len(energies) > 0 else 0
             if max_e > 0:
-                active_frac = float(np.sum(energies > max_e * 0.1)) / len(energies)
-                if active_frac < 0.7:
+                active_frac = float(np.sum(energies > max_e * NOISE_FLOOR_RATIO)) / len(energies)
+                if active_frac < ACTIVE_BEATS_MIN_FRAC:
                     logger.debug(f"Skipping {name}: only {active_frac:.0%} beats have energy")
                     continue
 
@@ -881,13 +935,13 @@ def generate_hypotheses(
                 continue
             if meter in sig_scores:
                 score += w * sig_scores[meter]
-                if sig_scores[meter] > 0.3:
+                if sig_scores[meter] > CONSENSUS_SUPPORT_THRESHOLD:
                     n_supporting += 1
         # Consensus bonus: meters supported by multiple signals get a boost
         if n_supporting >= 4:
-            score *= 1.25
+            score *= CONSENSUS_4_BONUS
         elif n_supporting >= 3:
-            score *= 1.15
+            score *= CONSENSUS_3_BONUS
         all_scores[meter] = score
 
     if not all_scores:
@@ -904,8 +958,7 @@ def generate_hypotheses(
     # Suppress rare meters: odd/high meters are uncommon in most music.
     # Without this, noise in accent signals produces spurious 5/4, 7/4, etc.
     # 5/4 and 7/4 get mild penalties; 8+ get strong penalties.
-    _rarity_penalty = {5: 0.65, 7: 0.55, 8: 0.3, 9: 0.3, 10: 0.3, 11: 0.3, 12: 0.3}
-    for num, penalty in _rarity_penalty.items():
+    for num, penalty in RARITY_PENALTY.items():
         key = (num, 4)
         if key in all_scores:
             all_scores[key] *= penalty
@@ -915,10 +968,10 @@ def generate_hypotheses(
     # Also boost 3/4 if it's already close to 2/4 (waltz detection).
     if (2, 4) in all_scores:
         s2 = all_scores[(2, 4)]
-        if (4, 4) in all_scores and all_scores[(4, 4)] > s2 * 0.4:
-            all_scores[(4, 4)] *= 1.3
-        if (3, 4) in all_scores and all_scores[(3, 4)] > s2 * 0.7:
-            all_scores[(3, 4)] *= 1.2
+        if (4, 4) in all_scores and all_scores[(4, 4)] > s2 * SUBPERIOD_4_4_THRESHOLD:
+            all_scores[(4, 4)] *= SUBPERIOD_4_4_BOOST
+        if (3, 4) in all_scores and all_scores[(3, 4)] > s2 * SUBPERIOD_3_4_THRESHOLD:
+            all_scores[(3, 4)] *= SUBPERIOD_3_4_BOOST
 
     # 6/8 vs 3/4 disambiguation
     _disambiguate_compound(all_scores, all_beats, beat_interval)
@@ -941,12 +994,12 @@ def generate_hypotheses(
             for simple, compound in _compound_map.items():
                 if simple in all_scores:
                     # Transfer part of the simple meter score to compound
-                    transfer = all_scores[simple] * 0.5
+                    transfer = all_scores[simple] * COMPOUND_TRANSFER_RATIO
                     all_scores[compound] = all_scores.get(compound, 0) + transfer
             # Boost existing /8 scores
             for meter in list(all_scores.keys()):
                 if meter[1] == 8:
-                    all_scores[meter] *= 1.3
+                    all_scores[meter] *= COMPOUND_BOOST
 
     # 3/4 vs 4/4 disambiguation using neural net tracker evidence.
     # When neural net trackers report even-beat spacing (2 or 4) and NEITHER
@@ -982,10 +1035,10 @@ def generate_hypotheses(
             if bar_tracking_supports_triple:
                 # Conflict: trusted NNs say even but bar tracking says 3/4.
                 # Apply mild penalty instead of strong — bar tracking is reliable.
-                all_scores[(3, 4)] *= 0.80
-                logger.debug(f"3/4 vs even: trusted NNs favor even but bar tracking says 3/4, mild penalty 0.80")
+                all_scores[(3, 4)] *= NN_PENALTY_MILD
+                logger.debug(f"3/4 vs even: trusted NNs favor even but bar tracking says 3/4, mild penalty {NN_PENALTY_MILD}")
             else:
-                all_scores[(3, 4)] *= 0.55
+                all_scores[(3, 4)] *= NN_PENALTY_STRONG
                 logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} trusted NNs favor even, strong penalty")
         elif nn_trackers_total == 0 and sub_beat_den != 8:
             # No trusted NNs available — try untrusted raw downbeat spacing
@@ -1005,10 +1058,10 @@ def generate_hypotheses(
                     # Conflict: untrusted NNs say even but bar tracking says 3/4.
                     # Apply reduced penalty — bar tracking is somewhat reliable but
                     # can be fooled by syncopated music (ragtime, tango).
-                    all_scores[(3, 4)] *= 0.80
-                    logger.debug(f"3/4 vs even: untrusted NNs favor even but bar tracking says 3/4, reduced penalty 0.80")
+                    all_scores[(3, 4)] *= NN_PENALTY_MILD
+                    logger.debug(f"3/4 vs even: untrusted NNs favor even but bar tracking says 3/4, reduced penalty {NN_PENALTY_MILD}")
                 else:
-                    all_scores[(3, 4)] *= 0.65
+                    all_scores[(3, 4)] *= NN_PENALTY_WEAK
                     logger.debug(f"3/4 vs even: {raw_nn_favor_even}/{raw_nn_total} untrusted NNs favor even, weak penalty")
             elif raw_nn_total == 0 and bar_tracking_supports_triple:
                 # No NN data at all + bar tracking says 3/4: skip penalty.
@@ -1017,7 +1070,7 @@ def generate_hypotheses(
     # Filter noise: remove hypotheses scoring less than 10% of the best
     max_raw = max(all_scores.values())
     if max_raw > 0:
-        all_scores = {k: v for k, v in all_scores.items() if v >= max_raw * 0.10}
+        all_scores = {k: v for k, v in all_scores.items() if v >= max_raw * NOISE_FILTER_RATIO}
 
     # Normalize to probabilities
     total = sum(all_scores.values())
