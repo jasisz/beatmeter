@@ -641,65 +641,26 @@ def signal_bar_tracking(
     return scores
 
 
-def generate_hypotheses(
+def _compute_weights(
     beatnet_beats: list[Beat],
     madmom_results: dict[int, list[Beat]],
-    onset_times: np.ndarray,
-    onset_strengths: np.ndarray,
-    all_beats: list[Beat],
-    sr: int = 22050,
-    max_hypotheses: int = 5,
-    tempo_bpm: float | None = None,
-    beatnet_alignment: float = 1.0,
-    madmom_alignment: float = 1.0,
-    audio: np.ndarray | None = None,
-    librosa_beats: list[Beat] | None = None,
-    beat_this_beats: list[Beat] | None = None,
-    beat_this_alignment: float = 0.0,
-    onset_event_times: np.ndarray | None = None,
-    skip_bar_tracking: bool = False,
-    skip_resnet: bool = False,
-) -> list[MeterHypothesis]:
-    """Generate meter hypotheses from all signals.
+    beat_this_beats: list[Beat] | None,
+    beatnet_alignment: float,
+    beat_this_alignment: float,
+    madmom_alignment: float,
+) -> tuple[dict[str, float], float, float, float]:
+    """Compute normalized signal weights based on tracker trust.
 
-    Merges and normalizes scores, returns top N with confidence.
+    Returns (weights_dict, beatnet_trust, beat_this_trust, madmom_trust).
     """
-    # Beat interval from tempo
-    beat_interval = None
-    if tempo_bpm and tempo_bpm > 0:
-        beat_interval = 60.0 / tempo_bpm
-    elif len(all_beats) >= 3:
-        times = np.array([b.time for b in all_beats])
-        ibis = np.diff(times)
-        if len(ibis) > 0:
-            beat_interval = float(np.median(ibis))
-
-    beat_times = np.array([b.time for b in all_beats]) if all_beats else np.array([])
-
-    # Adaptive weights based on available data AND tracker reliability.
-    # Neural net signals (BeatNet, madmom) are weighted by how well their
-    # beats align with actual audio events. If alignment is poor (e.g.
-    # hallucinated beats), these signals get zero weight.
     has_beatnet = len(beatnet_beats) > 0 and any(b.is_downbeat for b in beatnet_beats)
     has_beat_this = beat_this_beats is not None and len(beat_this_beats) > 0 and any(b.is_downbeat for b in beat_this_beats)
     has_madmom = len(madmom_results) > 0
 
-    # Trust factor: 0 when alignment < TRUST_LOWER, ramps to 1 at TRUST_UPPER
     beatnet_trust = max(0.0, min(1.0, (beatnet_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_beatnet else 0.0
     beat_this_trust = max(0.0, min(1.0, (beat_this_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_beat_this else 0.0
     madmom_trust = max(0.0, min(1.0, (madmom_alignment - TRUST_LOWER) / TRUST_RANGE)) if has_madmom else 0.0
 
-    # Signal 8: ResNet18 — check availability once
-    _resnet_mod = None
-    resnet_available = False
-    if not skip_resnet and audio is not None:
-        try:
-            import beatmeter.analysis.resnet_signal as _resnet_mod
-            resnet_available = True
-        except ImportError:
-            pass
-
-    # Base weights with trust scaling
     w_beatnet = W_BEATNET * beatnet_trust
     w_beat_this = W_BEAT_THIS * beat_this_trust
     w_madmom = W_MADMOM * madmom_trust
@@ -708,9 +669,6 @@ def generate_hypotheses(
     w_bar_tracking = W_BAR_TRACKING
     w_resnet = W_RESNET
 
-    # Periodicity cap: when all NN trackers have zero trust, periodicity
-    # naturally gets ~44% of total weight (0.24 / 0.55), which lets it force
-    # 3/4 on duple music (marches, blues). Cap it to prevent dominance.
     total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
     if total_nn_trust < 0.01:
         w_periodicity = W_PERIODICITY_CAPPED
@@ -718,7 +676,6 @@ def generate_hypotheses(
     else:
         w_periodicity = W_PERIODICITY
 
-    # Normalize to sum to 1.0
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
                + w_accent + w_periodicity + w_bar_tracking + w_resnet)
     if total_w > 0:
@@ -736,9 +693,24 @@ def generate_hypotheses(
         weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1}
 
     logger.debug(f"Meter weights: {weights}")
+    return weights, beatnet_trust, beat_this_trust, madmom_trust
 
-    # Collect per-signal score dicts for product-of-experts combination.
-    # Each signal produces {meter: score} normalized to [0, 1].
+
+def _collect_signal_scores(
+    weights: dict[str, float],
+    beatnet_beats: list[Beat],
+    madmom_results: dict[int, list[Beat]],
+    onset_times: np.ndarray,
+    onset_strengths: np.ndarray,
+    beat_interval: float | None,
+    beat_times: np.ndarray,
+    sr: int,
+    audio: np.ndarray | None,
+    beat_this_beats: list[Beat] | None,
+    skip_bar_tracking: bool,
+    skip_resnet: bool,
+) -> dict[str, dict[tuple[int, int], float]]:
+    """Collect scores from signals 1a, 1b, 2, 3, 7, 8."""
     signal_results: dict[str, dict[tuple[int, int], float]] = {}
 
     # Signal 1a: BeatNet downbeat spacing
@@ -771,7 +743,6 @@ def generate_hypotheses(
 
     # Signal 7: Bar tracking (DBNBarTrackingProcessor)
     if not skip_bar_tracking and weights["bar_tracking"] > 0.01 and audio is not None and len(beat_times) >= 6:
-        # Use Beat This! beats if available (best tracker), else primary
         if beat_this_beats and len(beat_this_beats) >= 6:
             bar_beat_times = np.array([b.time for b in beat_this_beats])
         else:
@@ -780,18 +751,38 @@ def generate_hypotheses(
         if s7:
             signal_results["bar_tracking"] = s7
 
-    # Signal 8: ResNet18 MFCC classifier (orthogonal to beat tracking)
-    if resnet_available and weights["resnet"] > 0.01 and audio is not None and _resnet_mod is not None:
-        s8 = _resnet_mod.signal_resnet_meter(audio, sr)
-        if s8:
-            signal_results["resnet"] = s8
-            logger.debug(f"ResNet signal: {s8}")
+    # Signal 8: ResNet18 MFCC classifier
+    if not skip_resnet and weights["resnet"] > 0.01 and audio is not None:
+        try:
+            import beatmeter.analysis.resnet_signal as _resnet_mod
+            s8 = _resnet_mod.signal_resnet_meter(audio, sr)
+            if s8:
+                signal_results["resnet"] = s8
+                logger.debug(f"ResNet signal: {s8}")
+        except ImportError:
+            pass
 
-    # Signals 4 & 5: Multi-tracker accent analysis.
-    # Run accent signals on ALL tracker candidates (not just primary) and take
-    # the best RAW score per meter. This prevents a poorly-chosen primary from
-    # producing wrong accent patterns. The tracker with the strongest accent
-    # signal for each meter naturally dominates.
+    return signal_results
+
+
+def _collect_accent_scores(
+    weights: dict[str, float],
+    signal_results: dict[str, dict[tuple[int, int], float]],
+    all_beats: list[Beat],
+    beatnet_beats: list[Beat],
+    beat_this_beats: list[Beat] | None,
+    librosa_beats: list[Beat] | None,
+    madmom_results: dict[int, list[Beat]],
+    onset_times: np.ndarray,
+    onset_strengths: np.ndarray,
+    audio: np.ndarray | None,
+    sr: int,
+    tempo_bpm: float | None,
+) -> None:
+    """Collect accent (signal 4) and periodicity (signal 5) scores.
+
+    Mutates weights and signal_results in place.
+    """
     accent_trackers: list[tuple[str, list[Beat]]] = []
     if all_beats and len(all_beats) >= 8:
         accent_trackers.append(('primary', all_beats))
@@ -811,7 +802,6 @@ def generate_hypotheses(
 
         # Quality gate: if beat energy CV is very low (flat dynamics), signals
         # 4+5 pick up noise at arbitrary lags and produce spurious odd meters.
-        # Compute CV across all tracker candidates; if ALL are flat, suppress.
         _all_cvs: list[float] = []
         for _name, _beats in accent_trackers:
             _energies = compute_beat_energies(_beats, audio, sr)
@@ -824,7 +814,6 @@ def generate_hypotheses(
             logger.debug(f"Flat dynamics (max CV={_max_cv:.4f}): suppressing accent/periodicity signals")
             weights["accent"] = 0.0
             weights["periodicity"] = 0.0
-            # Redistribute weight to other signals
             remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"]
             if remaining_w > 0:
                 scale = 1.0 / remaining_w
@@ -837,16 +826,12 @@ def generate_hypotheses(
 
         for name, beats in accent_trackers:
             # Skip trackers whose tempo deviates >25% from consensus.
-            # e.g. madmom_3 at 78.9 BPM on a 107 BPM track creates artificial
-            # accent alignments that produce wrong 3/4.
-            # Allow octave relationships (half/double speed).
             if tempo_bpm and tempo_bpm > 0 and len(beats) >= 3:
                 _bt = np.array([b.time for b in beats])
                 _ibis = np.diff(_bt)
                 _valid_ibis = _ibis[(_ibis > 0.1) & (_ibis < 3.0)]
                 if len(_valid_ibis) >= 2:
                     tracker_bpm = 60.0 / float(np.median(_valid_ibis))
-                    # Normalize to the same octave as consensus tempo
                     ratio = tracker_bpm / tempo_bpm
                     while ratio > 1.4:
                         ratio /= 2.0
@@ -860,10 +845,6 @@ def generate_hypotheses(
             energies = compute_beat_energies(beats, audio, sr)
 
             # Skip trackers where many beats land in silence (wrong tempo).
-            # If a tracker is at the wrong BPM, some of its beats fall between
-            # real audio events, giving near-zero energy. This creates artificial
-            # accent patterns (e.g., madmom at 120 BPM on 160 BPM audio shows
-            # spurious 3/4 because every 3rd madmom beat aligns with a click).
             max_e = float(np.max(energies)) if len(energies) > 0 else 0
             if max_e > 0:
                 active_frac = float(np.sum(energies > max_e * NOISE_FLOOR_RATIO)) / len(energies)
@@ -916,56 +897,33 @@ def generate_hypotheses(
             if s5:
                 signal_results["periodicity"] = s5
 
-    # -----------------------------------------------------------------------
-    # Weighted additive combination with consensus bonus.
-    # Each signal contributes weight * score. Meters supported by multiple
-    # signals get a mild bonus to reward cross-signal agreement.
-    # -----------------------------------------------------------------------
-    all_candidate_meters: set[tuple[int, int]] = set()
-    for sig_scores in signal_results.values():
-        all_candidate_meters.update(sig_scores.keys())
 
-    all_scores: dict[tuple[int, int], float] = {}
-    for meter in all_candidate_meters:
-        score = 0.0
-        n_supporting = 0
-        for sig_name, sig_scores in signal_results.items():
-            w = weights.get(sig_name, 0)
-            if w < 0.001:
-                continue
-            if meter in sig_scores:
-                score += w * sig_scores[meter]
-                if sig_scores[meter] > CONSENSUS_SUPPORT_THRESHOLD:
-                    n_supporting += 1
-        # Consensus bonus: meters supported by multiple signals get a boost
-        if n_supporting >= 4:
-            score *= CONSENSUS_4_BONUS
-        elif n_supporting >= 3:
-            score *= CONSENSUS_3_BONUS
-        all_scores[meter] = score
+def _apply_score_adjustments(
+    all_scores: dict[tuple[int, int], float],
+    signal_results: dict[str, dict[tuple[int, int], float]],
+    all_beats: list[Beat],
+    beat_interval: float | None,
+    onset_event_times: np.ndarray | None,
+    sr: int,
+    beatnet_beats: list[Beat],
+    beat_this_beats: list[Beat] | None,
+) -> int:
+    """Apply priors, rarity penalties, compound meter, and NN 3/4 penalty.
 
-    if not all_scores:
-        return [MeterHypothesis(
-            numerator=4, denominator=4, confidence=0.3,
-            description=_get_description(4, 4),
-        )]
-
+    Mutates all_scores in place. Returns detected sub-beat denominator (4 or 8).
+    """
     # Apply priors
     for meter, prior in METER_PRIOR.items():
         if meter in all_scores:
             all_scores[meter] *= prior
 
-    # Suppress rare meters: odd/high meters are uncommon in most music.
-    # Without this, noise in accent signals produces spurious 5/4, 7/4, etc.
-    # 5/4 and 7/4 get mild penalties; 8+ get strong penalties.
+    # Suppress rare meters
     for num, penalty in RARITY_PENALTY.items():
         key = (num, 4)
         if key in all_scores:
             all_scores[key] *= penalty
 
-    # 2/4 sub-period suppression: 2/4 is a sub-period of nearly any accent
-    # structure. If 4/4 is also present and reasonably close, boost it.
-    # Also boost 3/4 if it's already close to 2/4 (waltz detection).
+    # 2/4 sub-period suppression
     if (2, 4) in all_scores:
         s2 = all_scores[(2, 4)]
         if (4, 4) in all_scores and all_scores[(4, 4)] > s2 * SUBPERIOD_4_4_THRESHOLD:
@@ -977,15 +935,11 @@ def generate_hypotheses(
     _disambiguate_compound(all_scores, all_beats, beat_interval)
 
     # Sub-beat division analysis: detect /4 vs /8 denominator
-    sub_beat_den = 4  # default: simple meter
+    sub_beat_den = 4
     if onset_event_times is not None and len(onset_event_times) > 0:
         sub_beat_den = signal_sub_beat_division(all_beats, onset_event_times, sr)
         if sub_beat_den == 8:
             logger.debug("Sub-beat analysis: compound (/8) detected")
-            # Boost /8 variants and convert /4 scores to /8 equivalents
-            # 3/4 -> 6/8 (same bar duration, different subdivision)
-            # 4/4 -> 12/8 (same bar duration, different subdivision)
-            # 2/4 -> 6/8 (same bar duration, different subdivision)
             _compound_map = {
                 (3, 4): (6, 8),
                 (4, 4): (12, 8),
@@ -993,25 +947,13 @@ def generate_hypotheses(
             }
             for simple, compound in _compound_map.items():
                 if simple in all_scores:
-                    # Transfer part of the simple meter score to compound
                     transfer = all_scores[simple] * COMPOUND_TRANSFER_RATIO
                     all_scores[compound] = all_scores.get(compound, 0) + transfer
-            # Boost existing /8 scores
             for meter in list(all_scores.keys()):
                 if meter[1] == 8:
                     all_scores[meter] *= COMPOUND_BOOST
 
     # 3/4 vs 4/4 disambiguation using neural net tracker evidence.
-    # When neural net trackers report even-beat spacing (2 or 4) and NEITHER
-    # reports 3, penalize 3/4. Works in two modes:
-    #
-    # 1) TRUSTED NNs (in signal_results): strong penalty (0.55)
-    # 2) UNTRUSTED NNs: weak penalty (0.65) using raw downbeat spacing,
-    #    only when compound was NOT detected (to protect 6/8).
-    #
-    # Gate: if Signal 7 (bar tracking) strongly supports 3/4, reduce or
-    # skip penalty — bar tracking is independent of trust mechanism and
-    # directly estimates meter via Viterbi decoding.
     bar_tracking_supports_triple = False
     if "bar_tracking" in signal_results:
         bt_score_3 = signal_results["bar_tracking"].get((3, 4), 0)
@@ -1022,7 +964,6 @@ def generate_hypotheses(
     if (3, 4) in all_scores and ((4, 4) in all_scores or (2, 4) in all_scores):
         nn_trackers_favor_even = 0
         nn_trackers_total = 0
-        # Check trusted signals
         for sig_name in ["beatnet", "beat_this"]:
             if sig_name in signal_results:
                 sig = signal_results[sig_name]
@@ -1033,16 +974,12 @@ def generate_hypotheses(
                     nn_trackers_favor_even += 1
         if nn_trackers_favor_even >= 1 and nn_trackers_favor_even == nn_trackers_total:
             if bar_tracking_supports_triple:
-                # Conflict: trusted NNs say even but bar tracking says 3/4.
-                # Apply mild penalty instead of strong — bar tracking is reliable.
                 all_scores[(3, 4)] *= NN_PENALTY_MILD
                 logger.debug(f"3/4 vs even: trusted NNs favor even but bar tracking says 3/4, mild penalty {NN_PENALTY_MILD}")
             else:
                 all_scores[(3, 4)] *= NN_PENALTY_STRONG
                 logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} trusted NNs favor even, strong penalty")
         elif nn_trackers_total == 0 and sub_beat_den != 8:
-            # No trusted NNs available — try untrusted raw downbeat spacing
-            # as a weak signal. Only when compound was NOT detected.
             raw_nn_favor_even = 0
             raw_nn_total = 0
             for raw_beats, raw_name in [(beatnet_beats, "beatnet"), (beat_this_beats, "beat_this")]:
@@ -1055,19 +992,23 @@ def generate_hypotheses(
                         raw_nn_favor_even += 1
             if raw_nn_favor_even >= 1 and raw_nn_favor_even == raw_nn_total:
                 if bar_tracking_supports_triple:
-                    # Conflict: untrusted NNs say even but bar tracking says 3/4.
-                    # Apply reduced penalty — bar tracking is somewhat reliable but
-                    # can be fooled by syncopated music (ragtime, tango).
                     all_scores[(3, 4)] *= NN_PENALTY_MILD
                     logger.debug(f"3/4 vs even: untrusted NNs favor even but bar tracking says 3/4, reduced penalty {NN_PENALTY_MILD}")
                 else:
                     all_scores[(3, 4)] *= NN_PENALTY_WEAK
                     logger.debug(f"3/4 vs even: {raw_nn_favor_even}/{raw_nn_total} untrusted NNs favor even, weak penalty")
             elif raw_nn_total == 0 and bar_tracking_supports_triple:
-                # No NN data at all + bar tracking says 3/4: skip penalty.
                 logger.debug("3/4 vs even: no NN data, bar tracking supports 3/4, skipping penalty")
 
-    # Filter noise: remove hypotheses scoring less than 10% of the best
+    return sub_beat_den
+
+
+def _format_hypotheses(
+    all_scores: dict[tuple[int, int], float],
+    max_hypotheses: int,
+) -> list[MeterHypothesis]:
+    """Filter, normalize, sort and format final hypotheses."""
+    # Filter noise
     max_raw = max(all_scores.values())
     if max_raw > 0:
         all_scores = {k: v for k, v in all_scores.items() if v >= max_raw * NOISE_FILTER_RATIO}
@@ -1099,6 +1040,100 @@ def generate_hypotheses(
         ))
 
     return hypotheses
+
+
+def generate_hypotheses(
+    beatnet_beats: list[Beat],
+    madmom_results: dict[int, list[Beat]],
+    onset_times: np.ndarray,
+    onset_strengths: np.ndarray,
+    all_beats: list[Beat],
+    sr: int = 22050,
+    max_hypotheses: int = 5,
+    tempo_bpm: float | None = None,
+    beatnet_alignment: float = 1.0,
+    madmom_alignment: float = 1.0,
+    audio: np.ndarray | None = None,
+    librosa_beats: list[Beat] | None = None,
+    beat_this_beats: list[Beat] | None = None,
+    beat_this_alignment: float = 0.0,
+    onset_event_times: np.ndarray | None = None,
+    skip_bar_tracking: bool = False,
+    skip_resnet: bool = False,
+) -> list[MeterHypothesis]:
+    """Generate meter hypotheses from all signals.
+
+    Merges and normalizes scores, returns top N with confidence.
+    """
+    # Beat interval from tempo
+    beat_interval = None
+    if tempo_bpm and tempo_bpm > 0:
+        beat_interval = 60.0 / tempo_bpm
+    elif len(all_beats) >= 3:
+        times = np.array([b.time for b in all_beats])
+        ibis = np.diff(times)
+        if len(ibis) > 0:
+            beat_interval = float(np.median(ibis))
+
+    beat_times = np.array([b.time for b in all_beats]) if all_beats else np.array([])
+
+    # Step 1: Compute signal weights based on tracker trust
+    weights, beatnet_trust, beat_this_trust, madmom_trust = _compute_weights(
+        beatnet_beats, madmom_results, beat_this_beats,
+        beatnet_alignment, beat_this_alignment, madmom_alignment,
+    )
+
+    # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8
+    signal_results = _collect_signal_scores(
+        weights, beatnet_beats, madmom_results,
+        onset_times, onset_strengths, beat_interval, beat_times,
+        sr, audio, beat_this_beats, skip_bar_tracking, skip_resnet,
+    )
+
+    # Step 3: Collect accent and periodicity scores (signals 4 & 5)
+    _collect_accent_scores(
+        weights, signal_results,
+        all_beats, beatnet_beats, beat_this_beats, librosa_beats,
+        madmom_results, onset_times, onset_strengths, audio, sr, tempo_bpm,
+    )
+
+    # Step 4: Weighted additive combination with consensus bonus
+    all_candidate_meters: set[tuple[int, int]] = set()
+    for sig_scores in signal_results.values():
+        all_candidate_meters.update(sig_scores.keys())
+
+    all_scores: dict[tuple[int, int], float] = {}
+    for meter in all_candidate_meters:
+        score = 0.0
+        n_supporting = 0
+        for sig_name, sig_scores in signal_results.items():
+            w = weights.get(sig_name, 0)
+            if w < 0.001:
+                continue
+            if meter in sig_scores:
+                score += w * sig_scores[meter]
+                if sig_scores[meter] > CONSENSUS_SUPPORT_THRESHOLD:
+                    n_supporting += 1
+        if n_supporting >= 4:
+            score *= CONSENSUS_4_BONUS
+        elif n_supporting >= 3:
+            score *= CONSENSUS_3_BONUS
+        all_scores[meter] = score
+
+    if not all_scores:
+        return [MeterHypothesis(
+            numerator=4, denominator=4, confidence=0.3,
+            description=_get_description(4, 4),
+        )]
+
+    # Step 5: Apply adjustments (priors, rarity, compound, NN penalties)
+    _apply_score_adjustments(
+        all_scores, signal_results, all_beats, beat_interval,
+        onset_event_times, sr, beatnet_beats, beat_this_beats,
+    )
+
+    # Step 6: Filter, normalize, and format hypotheses
+    return _format_hypotheses(all_scores, max_hypotheses)
 
 
 def _disambiguate_compound(
