@@ -461,6 +461,33 @@ def signal_sub_beat_division(
                 logger.debug("Sub-beat intervals uneven (CV > 0.4): not compound")
                 return 4
 
+        # Positional consistency: true compound meter has sub-onsets at ~1/3
+        # and ~2/3 of the beat interval. Accompaniment patterns (waltz "oom-pah",
+        # polka chords) create onsets at different fractional positions.
+        margin = 0.03
+        triplet_beats = 0
+        checked_beats = 0
+        for i in range(len(beat_times) - 1):
+            t_start, t_end = beat_times[i], beat_times[i + 1]
+            interval = t_end - t_start
+            if interval < 0.15 or interval > 2.0:
+                continue
+            sub = onset_event_times[(onset_event_times > t_start + margin) & (onset_event_times < t_end - margin)]
+            if len(sub) == 2:
+                checked_beats += 1
+                pos1 = (sub[0] - t_start) / interval
+                pos2 = (sub[1] - t_start) / interval
+                # True triplets: onsets at ~0.33 and ~0.67 (tolerance 0.15)
+                if abs(pos1 - 1/3) < 0.15 and abs(pos2 - 2/3) < 0.15:
+                    triplet_beats += 1
+
+        if checked_beats >= 4:
+            triplet_frac = triplet_beats / checked_beats
+            logger.debug(f"Triplet position check: {triplet_beats}/{checked_beats} = {triplet_frac:.2f}")
+            if triplet_frac < 0.4:
+                logger.debug("Sub-onsets not at triplet positions: not compound")
+                return 4
+
         return 8
     # If median is ~1 or 0 (1 onset between = 2 sub-divisions = simple feel)
     elif median_count < 1.5:
@@ -610,8 +637,17 @@ def generate_hypotheses(
     w_madmom = 0.10 * madmom_trust
     w_autocorr = 0.13
     w_accent = 0.18
-    w_periodicity = 0.24
     w_bar_tracking = 0.12  # Signal 7: DBNBarTrackingProcessor
+
+    # Periodicity cap: when all NN trackers have zero trust, periodicity
+    # naturally gets ~44% of total weight (0.24 / 0.55), which lets it force
+    # 3/4 on duple music (marches, blues). Cap it to prevent dominance.
+    total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
+    if total_nn_trust < 0.01:
+        w_periodicity = 0.17  # ~31% instead of ~44%
+        logger.debug("Periodicity cap: all NNs untrusted, reducing 0.24→0.17")
+    else:
+        w_periodicity = 0.24
 
     # Normalize to sum to 1.0
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
@@ -860,26 +896,6 @@ def generate_hypotheses(
         if (3, 4) in all_scores and all_scores[(3, 4)] > s2 * 0.7:
             all_scores[(3, 4)] *= 1.2
 
-    # 3/4 vs 4/4 disambiguation using neural net tracker evidence.
-    # When periodicity says 3/4 but BOTH neural net trackers (BeatNet AND Beat This!)
-    # report even-beat spacing (2 or 4) and NEITHER reports 3, trust the trackers.
-    # This prevents spurious 3/4 on marches, polkas, and blues tracks.
-    if (3, 4) in all_scores and ((4, 4) in all_scores or (2, 4) in all_scores):
-        nn_trackers_favor_even = 0
-        nn_trackers_total = 0
-        for sig_name in ["beatnet", "beat_this"]:
-            if sig_name in signal_results:
-                sig = signal_results[sig_name]
-                nn_trackers_total += 1
-                has_even = any(sig.get(m, 0) > 0.5 for m in [(2, 4), (4, 4)])
-                has_triple = sig.get((3, 4), 0) > 0.3
-                if has_even and not has_triple:
-                    nn_trackers_favor_even += 1
-        if nn_trackers_favor_even >= 1 and nn_trackers_favor_even == nn_trackers_total:
-            # ALL present neural net trackers favor even meters with no 3/4 support
-            all_scores[(3, 4)] *= 0.55
-            logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} NN trackers favor even, penalizing 3/4")
-
     # 6/8 vs 3/4 disambiguation
     _disambiguate_compound(all_scores, all_beats, beat_interval)
 
@@ -906,6 +922,28 @@ def generate_hypotheses(
             for meter in list(all_scores.keys()):
                 if meter[1] == 8:
                     all_scores[meter] *= 1.3
+
+    # 3/4 vs 4/4 disambiguation using neural net tracker evidence.
+    # When periodicity says 3/4 but BOTH neural net trackers (BeatNet AND Beat This!)
+    # report even-beat spacing (2 or 4) and NEITHER reports 3, trust the trackers.
+    # This prevents spurious 3/4 on marches, polkas, and blues tracks.
+    # Only uses TRUSTED NN signals (in signal_results), not untrusted ones,
+    # because untrusted NNs also report even on genuine 3/4 and 6/8 content.
+    if (3, 4) in all_scores and ((4, 4) in all_scores or (2, 4) in all_scores):
+        nn_trackers_favor_even = 0
+        nn_trackers_total = 0
+        for sig_name in ["beatnet", "beat_this"]:
+            if sig_name in signal_results:
+                sig = signal_results[sig_name]
+                nn_trackers_total += 1
+                has_even = any(sig.get(m, 0) > 0.5 for m in [(2, 4), (4, 4)])
+                has_triple = sig.get((3, 4), 0) > 0.3
+                if has_even and not has_triple:
+                    nn_trackers_favor_even += 1
+        if nn_trackers_favor_even >= 1 and nn_trackers_favor_even == nn_trackers_total:
+            # ALL present neural net trackers favor even meters with no 3/4 support
+            all_scores[(3, 4)] *= 0.55
+            logger.debug(f"3/4 vs even: {nn_trackers_favor_even}/{nn_trackers_total} NN trackers favor even, penalizing 3/4")
 
     # Filter noise: remove hypotheses scoring less than 10% of the best
     max_raw = max(all_scores.values())
