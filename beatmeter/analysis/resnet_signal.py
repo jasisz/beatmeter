@@ -9,6 +9,7 @@ empty dict (graceful degradation — zero weight in ensemble).
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ _resnet_model = None
 _resnet_device = None
 _resnet_class_map: dict[int, int] | None = None
 _resnet_mfcc_params: dict | None = None
+_resnet_lock = threading.Lock()
 
 # Search paths for the model checkpoint (checked in priority order)
 MODEL_PATHS = [
@@ -36,16 +38,28 @@ MODEL_PATHS = [
 # ---------------------------------------------------------------------------
 
 def _load_resnet_model() -> bool:
-    """Load the ResNet18 meter classifier from disk (singleton).
+    """Load the ResNet18 meter classifier from disk (singleton, thread-safe).
 
     Returns True if the model is ready, False if no checkpoint was found.
     Catches all exceptions so the pipeline never crashes.
     """
     global _resnet_model, _resnet_device, _resnet_class_map, _resnet_mfcc_params
 
-    # Already loaded — fast path
+    # Double-check locking: fast path without lock
     if _resnet_model is not None:
         return True
+
+    with _resnet_lock:
+        # Re-check after acquiring lock
+        if _resnet_model is not None:
+            return True
+
+        return _load_resnet_model_locked()
+
+
+def _load_resnet_model_locked() -> bool:
+    """Inner model loading (called under lock)."""
+    global _resnet_model, _resnet_device, _resnet_class_map, _resnet_mfcc_params
 
     try:
         import torch
