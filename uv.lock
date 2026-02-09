@@ -112,24 +112,13 @@ wheels = [
 [[package]]
 name = "beat-this"
 version = "0.1"
-source = { url = "https://github.com/CPJKU/beat_this/archive/main.zip" }
+source = { git = "https://github.com/CPJKU/beat_this.git?rev=2c0389b0#2c0389b0f24ebb2cdd8043a9a61adbf9f433287c" }
 dependencies = [
     { name = "einops" },
     { name = "numpy" },
     { name = "rotary-embedding-torch" },
     { name = "soxr" },
     { name = "torch" },
-    { name = "torchaudio" },
-]
-sdist = { hash = "sha256:856501db6e3a04ca037abee2483341f62795ef6e0020b5885cf3762a973bf750" }
-
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "numpy", specifier = ">=1.20" },
-    { name = "rotary-embedding-torch" },
-    { name = "soxr" },
-    { name = "torch", specifier = ">=2" },
     { name = "torchaudio" },
 ]
 
@@ -166,11 +155,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "beat-this", url = "https://github.com/CPJKU/beat_this/archive/main.zip" },
-    { name = "beatnet", git = "https://github.com/mjhydri/BeatNet.git" },
+    { name = "beat-this", git = "https://github.com/CPJKU/beat_this.git?rev=2c0389b0" },
+    { name = "beatnet", git = "https://github.com/mjhydri/BeatNet.git?rev=40336132" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "librosa", specifier = ">=0.10.0" },
-    { name = "madmom", git = "https://github.com/CPJKU/madmom.git" },
+    { name = "madmom", git = "https://github.com/CPJKU/madmom.git?rev=27f032e8" },
     { name = "numba", specifier = ">=0.59.0" },
     { name = "numpy", specifier = "<2.0" },
     { name = "pyaudio", specifier = ">=0.2.14" },
@@ -195,7 +184,7 @@ dev = [
 [[package]]
 name = "beatnet"
 version = "1.1.3"
-source = { git = "https://github.com/mjhydri/BeatNet.git#40336132a0ce0371d0f1d601d08550094ec7c106" }
+source = { git = "https://github.com/mjhydri/BeatNet.git?rev=40336132#40336132a0ce0371d0f1d601d08550094ec7c106" }
 dependencies = [
     { name = "cython" },
     { name = "librosa" },
@@ -812,7 +801,7 @@ wheels = [
 [[package]]
 name = "madmom"
 version = "0.17.dev0"
-source = { git = "https://github.com/CPJKU/madmom.git#27f032e8947204902c675e5e341a3faf5dc86dae" }
+source = { git = "https://github.com/CPJKU/madmom.git?rev=27f032e8#27f032e8947204902c675e5e341a3faf5dc86dae" }
 dependencies = [
     { name = "mido" },
     { name = "numpy" },

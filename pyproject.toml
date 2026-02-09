@@ -38,9 +38,9 @@ build-backend = "hatchling.build"
 packages = ["beatmeter"]
 
 [tool.uv.sources]
-madmom = { git = "https://github.com/CPJKU/madmom.git" }
-BeatNet = { git = "https://github.com/mjhydri/BeatNet.git" }
-beat-this = { url = "https://github.com/CPJKU/beat_this/archive/main.zip" }
+madmom = { git = "https://github.com/CPJKU/madmom.git", rev = "27f032e8" }
+BeatNet = { git = "https://github.com/mjhydri/BeatNet.git", rev = "40336132" }
+beat-this = { git = "https://github.com/CPJKU/beat_this.git", rev = "2c0389b0" }
 
 [tool.uv]
 override-dependencies = [
