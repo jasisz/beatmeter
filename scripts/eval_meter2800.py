@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.train_meter_resnet import _resolve_audio_path
+from scripts.utils import resolve_audio_path as _resolve_audio_path
 
 # Worker script that runs in a subprocess
 WORKER_SCRIPT = """

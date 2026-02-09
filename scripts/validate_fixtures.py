@@ -59,26 +59,7 @@ class ValidationResult:
 
 def load_catalogue() -> dict:
     """Import FIXTURE_CATALOGUE from benchmark.py."""
-    benchmark_path = Path(__file__).resolve().parent.parent / "tests" / "benchmark.py"
-    # Use exec to load just the catalogue dict
-    namespace = {}
-    with open(benchmark_path) as f:
-        content = f.read()
-
-    # Extract the FIXTURE_CATALOGUE block
-    import re
-    match = re.search(
-        r"^FIXTURE_CATALOGUE.*?^}",
-        content,
-        re.MULTILINE | re.DOTALL,
-    )
-    if match:
-        exec(match.group(), namespace)
-        return namespace.get("FIXTURE_CATALOGUE", {})
-
-    # Fallback: import directly
-    sys.path.insert(0, str(benchmark_path.parent))
-    from benchmark import FIXTURE_CATALOGUE
+    from tests.benchmark import FIXTURE_CATALOGUE
     return FIXTURE_CATALOGUE
 
 

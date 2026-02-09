@@ -29,7 +29,7 @@ DATASET_URL = f"{API_BASE}/datasets/:persistentId/?persistentId={DOI}"
 TAR_FILES = {"FMA.tar.gz", "MAG.tar.gz", "OWN.tar.gz"}
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "meter2800"
 
-AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".oga", ".opus", ".aiff", ".aif"}
+from scripts.utils import AUDIO_EXTENSIONS, md5_file
 
 
 def create_ssl_context() -> ssl.SSLContext:
@@ -181,13 +181,6 @@ def download_file(file_id: int, filename: str, dest: Path, expected_size: int,
     return False
 
 
-def md5_file(path: Path) -> str:
-    """Compute MD5 hash of a file."""
-    h = hashlib.md5()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def extract_tar(tar_path: Path, audio_dir: Path) -> int:

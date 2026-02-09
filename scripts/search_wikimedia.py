@@ -100,7 +100,7 @@ WIKIMEDIA_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
-AUDIO_EXTENSIONS = {".ogg", ".oga", ".wav", ".flac", ".mp3", ".opus"}
+from scripts.utils import AUDIO_EXTENSIONS
 
 
 def api_request(params: dict) -> dict:

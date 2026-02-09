@@ -12,13 +12,13 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import re
 import sys
 import time
-import urllib.request
 from pathlib import Path
+
+from scripts.utils import sha256_file, download_file
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 CANDIDATES_FILE = Path(__file__).resolve().parent / "wikimedia_candidates.json"
@@ -100,35 +100,6 @@ def title_fingerprint(title: str) -> str:
     return ' '.join(t.split())[:30]
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def download_file(url: str, dest: Path, max_retries: int = 3) -> bool:
-    """Download with retry and exponential backoff."""
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "RhythmAnalyzerBenchmark/1.0 (jasisz@gmail.com; research)"
-            })
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                dest.write_bytes(resp.read())
-            return True
-        except Exception as e:
-            if "429" in str(e):
-                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
-                print(f" rate-limited, waiting {wait}s...", end="", flush=True)
-                time.sleep(wait)
-            elif attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                print(f" ERROR: {e}", end="")
-                return False
-    return False
 
 
 def get_meters_for_title(title: str, category: str) -> list[tuple[int, int]] | None:

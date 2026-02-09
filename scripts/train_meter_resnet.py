@@ -83,130 +83,17 @@ def _find_label_files(data_dir: Path, pattern: str = "*_4_classes*") -> list[Pat
     return files
 
 
-def _resolve_audio_path(raw_fname: str, data_dir: Path) -> Path | None:
-    """Resolve a METER2800 .tab filename to an actual audio file on disk.
-
-    The .tab files reference paths like "/MAG/00553.wav" but actual files
-    are flattened into data_dir/audio/ as "00553.mp3" (or with collision
-    prefix like "OWN_0001.mp3").
-    """
-    # Strip quotes
-    raw_fname = raw_fname.strip('"').strip("'").strip()
-    if not raw_fname:
-        return None
-
-    p = Path(raw_fname)
-    src_dir = p.parent.name  # e.g. "MAG", "FMA", "GTZAN", "OWN"
-    stem = p.stem            # e.g. "00553", "rock.00099"
-    audio_dir = data_dir / "audio"
-
-    # Try different extension and prefix combinations
-    for ext in (".mp3", ".wav", ".ogg", ".flac", p.suffix):
-        # Direct: audio/00553.mp3
-        candidate = audio_dir / f"{stem}{ext}"
-        if candidate.exists():
-            return candidate
-        # Collision prefix: audio/OWN_0001.mp3
-        if src_dir:
-            candidate = audio_dir / f"{src_dir}_{stem}{ext}"
-            if candidate.exists():
-                return candidate
-            # Download artifact prefix: audio/OWN_._0001.mp3
-            candidate = audio_dir / f"{src_dir}_._{stem}{ext}"
-            if candidate.exists():
-                return candidate
-
-    return None
+from scripts.utils import resolve_audio_path as _resolve_audio_path
+from scripts.utils import parse_label_file as _parse_label_file_generic
 
 
 def _parse_label_file(
     label_path: Path, data_dir: Path
 ) -> list[tuple[Path, int]]:
-    """Parse a CSV/TSV label file from METER2800.
-
-    Auto-detects delimiter (tab vs comma).
-    Handles METER2800 .tab format: filename<TAB>label<TAB>meter<TAB>alt_meter
-
-    Returns list of (audio_path, meter) tuples where audio_path is resolved.
-    """
-    import csv
-
-    # Ordered: prefer specific names first (METER2800 has both "meter" and "label" columns)
-    filename_cols = ["filename", "file", "audio_file", "audio_path", "audio", "path"]
-    label_cols = ["meter", "time_signature", "ts", "time_sig", "signature", "label"]
-
-    entries: list[tuple[Path, int]] = []
-    missing = 0
-
-    # Detect delimiter from first line
-    with open(label_path, "r", encoding="utf-8") as f:
-        first_line = f.readline()
-    delimiter = "\t" if "\t" in first_line else ","
-
-    with open(label_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
-        if reader.fieldnames is None:
-            warnings.warn(f"Empty label file: {label_path}")
-            return entries
-
-        # Normalize header names to lowercase stripped (remove quotes)
-        header_map = {
-            h.strip().lower().strip('"').strip("'"): h
-            for h in reader.fieldnames
-        }
-
-        # Find the filename column
-        fname_key = None
-        for candidate in filename_cols:
-            if candidate in header_map:
-                fname_key = header_map[candidate]
-                break
-        if fname_key is None:
-            warnings.warn(
-                f"No filename column found in {label_path}. "
-                f"Headers: {list(reader.fieldnames)}"
-            )
-            return entries
-
-        # Find the label column (prefer "meter" over "label" for METER2800)
-        label_key = None
-        for candidate in label_cols:
-            if candidate in header_map:
-                label_key = header_map[candidate]
-                break
-        if label_key is None:
-            warnings.warn(
-                f"No label column found in {label_path}. "
-                f"Headers: {list(reader.fieldnames)}"
-            )
-            return entries
-
-        for row in reader:
-            raw_fname = row.get(fname_key, "").strip().strip('"').strip("'")
-            raw_label = row.get(label_key, "").strip().strip('"').strip("'")
-            if not raw_fname or not raw_label:
-                continue
-
-            # Parse meter — accept "3", "3/4", "4/4", etc.
-            meter_str = raw_label.split("/")[0].strip()
-            try:
-                meter = int(meter_str)
-            except ValueError:
-                continue
-
-            if meter not in METER_TO_IDX:
-                continue
-
-            # Resolve audio path
-            audio_path = _resolve_audio_path(raw_fname, data_dir)
-            if audio_path is None:
-                missing += 1
-                continue
-
-            entries.append((audio_path, meter))
-
-    if missing > 0:
-        print(f"    ({missing} entries skipped — audio file not found)")
+    """Parse a CSV/TSV label file, filtering to valid meter classes."""
+    return _parse_label_file_generic(
+        label_path, data_dir, valid_meters=set(METER_TO_IDX.keys())
+    )
 
     return entries
 
