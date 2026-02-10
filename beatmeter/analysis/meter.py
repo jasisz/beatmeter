@@ -207,6 +207,7 @@ def _collect_signal_scores(
     skip_mert: bool = False,
     cache=None,
     audio_hash: str | None = None,
+    tmp_path: str | None = None,
 ) -> dict[str, dict[tuple[int, int], float]]:
     """Collect scores from signals 1a, 1b, 2, 3, 7, 8a, 8b."""
     from beatmeter.analysis.cache import str_to_meter_key
@@ -272,7 +273,7 @@ def _collect_signal_scores(
                 bar_beat_times = np.array([b.time for b in beat_this_beats])
             else:
                 bar_beat_times = beat_times
-            s7 = signal_bar_tracking(audio, sr, bar_beat_times)
+            s7 = signal_bar_tracking(audio, sr, bar_beat_times, tmp_path=tmp_path)
             _save_cache("bar_tracking", s7)
         if s7:
             signal_results["bar_tracking"] = s7
@@ -619,6 +620,7 @@ def generate_hypotheses(
     skip_mert: bool = False,
     cache=None,
     audio_hash: str | None = None,
+    tmp_path: str | None = None,
 ) -> list[MeterHypothesis]:
     """Generate meter hypotheses from all signals.
 
@@ -647,7 +649,7 @@ def generate_hypotheses(
         weights, beatnet_beats, madmom_results,
         onset_times, onset_strengths, beat_interval, beat_times,
         sr, audio, beat_this_beats, skip_bar_tracking, skip_resnet,
-        skip_mert, cache=cache, audio_hash=audio_hash,
+        skip_mert, cache=cache, audio_hash=audio_hash, tmp_path=tmp_path,
     )
 
     # Step 3: Collect accent and periodicity scores (signals 4 & 5)

@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 """Unified evaluation script for meter detection.
 
-Uses subprocess isolation per file to avoid BeatNet/madmom deadlocks.
-Beat tracking cached via AnalysisCache (per-tracker, smart invalidation).
-Parallel execution via persistent WorkerPool for ~4x speedup.
+Supports both in-process (--workers 0) and multiprocess (--workers N) modes.
+Multiprocess gives true parallelism on cold cache; in-process is simpler
+and sufficient on warm cache.
 
 Usage:
-    uv run python scripts/eval.py --limit 3 --workers 1   # smoke test
-    uv run python scripts/eval.py --quick                  # stratified 100 (~20 min)
-    uv run python scripts/eval.py --split test --limit 0   # hold-out 700
-    uv run python scripts/eval.py --save                   # save baseline
-    uv run python scripts/eval.py --verbose                # per-file details
-    uv run python scripts/eval.py --meter 5                # only meter 5
+    uv run python scripts/eval.py --limit 3            # smoke test
+    uv run python scripts/eval.py --quick               # stratified 100 (~20 min)
+    uv run python scripts/eval.py --split test --limit 0 # hold-out 700
+    uv run python scripts/eval.py --workers 4            # parallel cold cache
+    uv run python scripts/eval.py --save                 # save baseline
+    uv run python scripts/eval.py --verbose              # per-file details
+    uv run python scripts/eval.py --meter 5              # only meter 5
 """
 
 import argparse
 import csv
 import json
-import os
+import multiprocessing as mp
 import random
-import subprocess
 import sys
-import threading
 import time
 import warnings
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
@@ -39,7 +40,6 @@ from scripts.utils import resolve_audio_path
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORKER_SCRIPT = PROJECT_ROOT / "scripts" / "eval_worker.py"
 RUNS_DIR = PROJECT_ROOT / "data" / "runs"
 
 # ---------------------------------------------------------------------------
@@ -123,90 +123,6 @@ def stratified_sample(
 
     rng.shuffle(sampled)
     return sampled
-
-
-# ---------------------------------------------------------------------------
-# Persistent worker pool
-# ---------------------------------------------------------------------------
-
-
-class WorkerPool:
-    """Pool of persistent subprocess workers. Each loads the engine once."""
-
-    def __init__(self, n_workers: int):
-        self.workers: list[subprocess.Popen] = []
-        self._lock = threading.Lock()
-        self._available: list[subprocess.Popen] = []
-        self._condition = threading.Condition(self._lock)
-
-        print(f"  Starting {n_workers} workers...", flush=True)
-        for _ in range(n_workers):
-            w = subprocess.Popen(
-                [sys.executable, str(WORKER_SCRIPT)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                cwd=str(PROJECT_ROOT),
-            )
-            ready = w.stdout.readline().strip()
-            if ready != "READY":
-                raise RuntimeError(f"Worker failed to start: {ready}")
-            self.workers.append(w)
-            self._available.append(w)
-        print(f"  All {n_workers} workers ready.\n", flush=True)
-
-    def analyze(self, audio_path: Path) -> dict:
-        """Send file to an available worker, return result."""
-        with self._condition:
-            while not self._available:
-                self._condition.wait()
-            worker = self._available.pop()
-
-        try:
-            worker.stdin.write(str(audio_path) + "\n")
-            worker.stdin.flush()
-            line = worker.stdout.readline().strip()
-            if line:
-                result = json.loads(line)
-            else:
-                result = {"meter": None, "bpm": None}
-        except (json.JSONDecodeError, BrokenPipeError, OSError):
-            result = {"meter": None, "bpm": None}
-
-        with self._condition:
-            self._available.append(worker)
-            self._condition.notify()
-
-        return result
-
-    def shutdown(self):
-        for w in self.workers:
-            try:
-                w.stdin.close()
-                w.wait(timeout=5)
-            except Exception:
-                w.kill()
-
-
-def process_one_file(
-    pool: WorkerPool,
-    audio_path: Path,
-    expected_meter: int,
-) -> dict:
-    """Process a single file through the worker pool."""
-    fname = audio_path.name
-    result = pool.analyze(audio_path)
-    predicted = result.get("meter")
-    bpm = result.get("bpm")
-
-    return {
-        "fname": fname,
-        "expected": expected_meter,
-        "predicted": predicted,
-        "bpm": bpm,
-        "ok": predicted == expected_meter,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +259,51 @@ def print_summary(
 
 
 # ---------------------------------------------------------------------------
+# Subprocess worker
+# ---------------------------------------------------------------------------
+
+_worker_engine = None
+
+
+def _worker_init():
+    """Initialize engine in each worker process."""
+    global _worker_engine
+    warnings.filterwarnings("ignore")
+    import torch  # noqa: F401
+    from beatmeter.analysis.cache import AnalysisCache
+    from beatmeter.analysis.engine import AnalysisEngine
+    _worker_engine = AnalysisEngine(cache=AnalysisCache())
+
+
+def _worker_process_file(args: tuple[str, int]) -> dict:
+    """Process a single file in a worker process."""
+    import torch
+    audio_path_str, expected_meter = args
+    fname = Path(audio_path_str).name
+    try:
+        with torch.inference_mode():
+            result = _worker_engine.analyze_file(audio_path_str, skip_sections=True)
+        if result and result.meter_hypotheses:
+            best = result.meter_hypotheses[0]
+            predicted = best.numerator
+            bpm = result.tempo.bpm if result.tempo else None
+        else:
+            predicted = None
+            bpm = None
+    except Exception:
+        predicted = None
+        bpm = None
+
+    return {
+        "fname": fname,
+        "expected": expected_meter,
+        "predicted": predicted,
+        "bpm": bpm,
+        "ok": predicted == expected_meter,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -371,11 +332,9 @@ def main():
                         help="Stratified 100 from tuning split")
     parser.add_argument("--meter", type=int, default=0,
                         help="Filter by meter class (3, 4, 5, 7)")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="Number of worker processes (0=in-process, default=0)")
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument(
-        "--workers", type=int, default=0,
-        help="Parallel workers (default: cpu_count//2, 1=sequential)",
-    )
     parser.add_argument("--save", action="store_true",
                         help="Save run snapshot for history & regression tracking")
     args = parser.parse_args()
@@ -416,12 +375,6 @@ def main():
     elif args.limit > 0:
         entries = entries[: args.limit]
 
-    # Determine worker count
-    max_workers = args.workers
-    if max_workers <= 0:
-        max_workers = max(1, (os.cpu_count() or 4) // 2)
-    max_workers = min(max_workers, len(entries))
-
     split_label = args.split
     if args.quick:
         split_label = "tuning (quick)"
@@ -429,96 +382,104 @@ def main():
     class_dist = Counter(m for _, m in entries)
     dist_str = ", ".join(f"{m}/x: {class_dist[m]}" for m in sorted(class_dist))
 
+    n_workers = args.workers
+    mode_str = f"{n_workers} workers" if n_workers > 0 else "in-process"
+
     print(flush=True)
     print(f"  {'─' * 56}", flush=True)
-    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {max_workers} workers", flush=True)
+    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {mode_str}", flush=True)
     print(f"  {dist_str}", flush=True)
     print(f"  {'─' * 56}", flush=True)
     print(flush=True)
 
-    # Shared state
-    lock = threading.Lock()
     correct = 0
     total = 0
     total_by_class: Counter = Counter()
     correct_by_class: Counter = Counter()
     file_results: list[dict] = []
-    completed = 0
     t0 = time.time()
 
-    def on_result(r: dict):
-        nonlocal correct, total, completed
+    if n_workers > 0:
+        # --- Multiprocess mode ---
+        print(f"  Starting {n_workers} workers...", flush=True)
+        work_items = [(str(p), m) for p, m in entries]
 
-        with lock:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(n_workers, initializer=_worker_init) as pool:
+            pbar = tqdm(
+                pool.imap_unordered(_worker_process_file, work_items),
+                total=len(entries), desc="Eval", unit="file",
+                bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] acc={postfix}",
+            )
+            for result in pbar:
+                total += 1
+                total_by_class[result["expected"]] += 1
+                if result["ok"]:
+                    correct += 1
+                    correct_by_class[result["expected"]] += 1
+                file_results.append(result)
+
+                if args.verbose:
+                    status = "OK  " if result["ok"] else "FAIL"
+                    pred_str = f"{result['predicted']}/x" if result["predicted"] else "None"
+                    tqdm.write(f"  {status} {pred_str:5s} exp={result['expected']}/x  {result['fname']}")
+
+                pct = f"{correct}/{total} ({correct/total*100:.0f}%)" if total > 0 else "0/0"
+                pbar.set_postfix_str(pct)
+
+    else:
+        # --- In-process mode ---
+        print("  Loading engine...", flush=True)
+        import torch
+        from beatmeter.analysis.cache import AnalysisCache
+        from beatmeter.analysis.engine import AnalysisEngine
+
+        cache = AnalysisCache()
+        engine = AnalysisEngine(cache=cache)
+        print("  Engine ready.\n", flush=True)
+
+        pbar = tqdm(entries, desc="Eval", unit="file",
+                    bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] acc={postfix}")
+        for audio_path, expected_meter in pbar:
+            fname = audio_path.name
+            try:
+                with torch.inference_mode():
+                    result = engine.analyze_file(str(audio_path), skip_sections=True)
+                if result and result.meter_hypotheses:
+                    best = result.meter_hypotheses[0]
+                    predicted = best.numerator
+                    bpm = result.tempo.bpm if result.tempo else None
+                else:
+                    predicted = None
+                    bpm = None
+            except Exception as e:
+                if args.verbose:
+                    tqdm.write(f"  ERR  {fname}: {e}")
+                predicted = None
+                bpm = None
+
+            ok = predicted == expected_meter
             total += 1
-            completed += 1
-            total_by_class[r["expected"]] += 1
-            if r["ok"]:
+            total_by_class[expected_meter] += 1
+            if ok:
                 correct += 1
-                correct_by_class[r["expected"]] += 1
-            file_results.append(r)
+                correct_by_class[expected_meter] += 1
+
+            file_results.append({
+                "fname": fname,
+                "expected": expected_meter,
+                "predicted": predicted,
+                "bpm": bpm,
+                "ok": ok,
+            })
 
             if args.verbose:
-                status = "OK  " if r["ok"] else "FAIL"
-                pred_str = f"{r['predicted']}/x" if r["predicted"] else "None"
-                print(
-                    f"  {status} {pred_str:5s} exp={r['expected']}/x"
-                    f"  {r['fname']}",
-                    flush=True,
-                )
+                status = "OK  " if ok else "FAIL"
+                pred_str = f"{predicted}/x" if predicted else "None"
+                tqdm.write(f"  {status} {pred_str:5s} exp={expected_meter}/x  {fname}")
 
-            n = len(entries)
-            if completed % 10 == 0 or completed == n:
-                elapsed = time.time() - t0
-                rate = completed / elapsed if elapsed > 0 else 1
-                eta = (n - completed) / rate if rate > 0 else 0
-                pct = correct / total * 100 if total > 0 else 0
-                bar_w = 20
-                filled = int(completed / n * bar_w)
-                bar = "█" * filled + "░" * (bar_w - filled)
-                eta_str = f"~{eta:.0f}s left" if eta > 1 else ""
-                print(
-                    f"  {bar} {completed:>4}/{n}  {correct}/{total} ({pct:.0f}%)  {eta_str}",
-                    flush=True,
-                )
-
-    # Process all files through workers
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    actual_workers = min(max_workers, len(entries))
-    pool = WorkerPool(actual_workers)
-
-    try:
-        with ThreadPoolExecutor(max_workers=actual_workers) as executor:
-            future_to_idx = {}
-            for i, (audio_path, expected_meter) in enumerate(entries):
-                future = executor.submit(
-                    process_one_file,
-                    pool, audio_path, expected_meter,
-                )
-                future_to_idx[future] = i
-
-            for future in as_completed(future_to_idx):
-                try:
-                    result = future.result()
-                    on_result(result)
-                except Exception as e:
-                    idx = future_to_idx[future]
-                    fname = entries[idx][0].name
-                    expected = entries[idx][1]
-                    print(f"  ERROR processing {fname}: {e}", flush=True)
-                    on_result({
-                        "fname": fname,
-                        "expected": expected,
-                        "predicted": None,
-                        "bpm": None,
-                        "ok": False,
-                    })
-
-    except KeyboardInterrupt:
-        print(f"\n\nInterrupted after {completed} files!", flush=True)
-    finally:
-        pool.shutdown()
+            pct = f"{correct}/{total} ({correct/total*100:.0f}%)" if total > 0 else "0/0"
+            pbar.set_postfix_str(pct)
 
     # Summary
     elapsed = time.time() - t0

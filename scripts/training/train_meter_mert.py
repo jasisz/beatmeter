@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Train an MLP classifier on pre-extracted MERT embeddings for meter detection.
 
-Uses embeddings from extract_mert_embeddings.py (shape (12, 1536) per file).
+Uses embeddings from extract_mert_embeddings.py (shape (num_layers, pooled_dim) per file).
 Performs a layer sweep to find the best MERT layer, then trains a small MLP.
 
+With --multi-layer: uses a learnable weighted sum of ALL layers instead of
+picking a single one, with LayerDrop regularization and a deeper MLP head.
+
 Usage:
-    uv run python scripts/train_meter_mert.py
-    uv run python scripts/train_meter_mert.py --data-dir data/meter2800 --embeddings-dir data/mert_embeddings/meter2800
-    uv run python scripts/train_meter_mert.py --epochs 100 --hidden-dim 512
+    uv run python scripts/training/train_meter_mert.py
+    uv run python scripts/training/train_meter_mert.py --multi-layer
+    uv run python scripts/training/train_meter_mert.py --multi-layer --num-layers 24 --pooled-dim 2048 \
+        --embeddings-dir data/mert_embeddings/meter2800_330m
 """
 
 import argparse
@@ -29,8 +33,8 @@ from torch.utils.data import DataLoader, Dataset
 CLASS_METERS = [3, 4, 5, 7]
 METER_TO_IDX = {m: i for i, m in enumerate(CLASS_METERS)}
 IDX_TO_METER = {i: m for i, m in enumerate(CLASS_METERS)}
-NUM_LAYERS = 12
-POOLED_DIM = 1536  # 768 mean + 768 max
+DEFAULT_NUM_LAYERS = 12
+DEFAULT_POOLED_DIM = 1536  # 768 mean + 768 max
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +43,7 @@ POOLED_DIM = 1536  # 768 mean + 768 max
 
 
 class MERTEmbeddingDataset(Dataset):
-    """Dataset of pre-extracted MERT embeddings."""
+    """Dataset of pre-extracted MERT embeddings (single layer)."""
 
     def __init__(
         self,
@@ -58,8 +62,8 @@ class MERTEmbeddingDataset(Dataset):
                 skipped += 1
                 continue
             try:
-                emb = np.load(emb_path)  # (12, 1536)
-                vec = emb[layer_idx]     # (1536,)
+                emb = np.load(emb_path)  # (num_layers, pooled_dim)
+                vec = emb[layer_idx]     # (pooled_dim,)
                 self.features.append(torch.from_numpy(vec).float())
                 self.labels.append(METER_TO_IDX[meter])
             except Exception:
@@ -80,6 +84,50 @@ class MERTEmbeddingDataset(Dataset):
         return x, y
 
 
+class MultiLayerMERTDataset(Dataset):
+    """Dataset that loads ALL MERT layers per file for multi-layer fusion."""
+
+    def __init__(
+        self,
+        entries: list[tuple[Path, int]],
+        num_layers: int,
+        augment: bool = False,
+    ):
+        self.num_layers = num_layers
+        self.augment = augment
+        self.features: list[torch.Tensor] = []
+        self.labels: list[int] = []
+
+        skipped = 0
+        for emb_path, meter in entries:
+            if not emb_path.exists():
+                skipped += 1
+                continue
+            try:
+                emb = np.load(emb_path)  # (num_layers, pooled_dim)
+                if emb.shape[0] < num_layers:
+                    skipped += 1
+                    continue
+                self.features.append(torch.from_numpy(emb[:num_layers]).float())
+                self.labels.append(METER_TO_IDX[meter])
+            except Exception:
+                skipped += 1
+                continue
+
+        if skipped > 0:
+            print(f"  WARNING: skipped {skipped} files (missing or unreadable)")
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        x = self.features[idx].clone()  # (num_layers, pooled_dim)
+        y = self.labels[idx]
+        if self.augment:
+            x = x + 0.01 * torch.randn_like(x)
+        return x, y
+
+
 # ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
@@ -88,7 +136,7 @@ class MERTEmbeddingDataset(Dataset):
 class MeterMLP(nn.Module):
     """Simple MLP classifier: Linear -> ReLU -> Dropout -> Linear."""
 
-    def __init__(self, input_dim: int = POOLED_DIM, hidden_dim: int = 256,
+    def __init__(self, input_dim: int = DEFAULT_POOLED_DIM, hidden_dim: int = 256,
                  num_classes: int = 4, dropout: float = 0.3):
         super().__init__()
         self.net = nn.Sequential(
@@ -100,6 +148,68 @@ class MeterMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class MultiLayerMLP(nn.Module):
+    """Multi-layer MERT classifier with learnable layer attention.
+
+    Uses softmax-weighted sum of all MERT layers, with LayerDrop
+    regularization, followed by a deeper MLP head.
+    """
+
+    def __init__(
+        self,
+        num_layers: int = DEFAULT_NUM_LAYERS,
+        pooled_dim: int = DEFAULT_POOLED_DIM,
+        hidden_dim: int = 512,
+        num_classes: int = 4,
+        dropout: float = 0.3,
+        layer_drop: float = 0.1,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.layer_drop = layer_drop
+
+        # Learnable layer weights — initialized uniformly
+        self.layer_logits = nn.Parameter(torch.zeros(num_layers))
+
+        # Layer norm on the weighted-sum embedding
+        self.layer_norm = nn.LayerNorm(pooled_dim)
+
+        # Deeper MLP: pooled_dim -> hidden_dim -> hidden_dim//2 -> num_classes
+        self.classifier = nn.Sequential(
+            nn.Linear(pooled_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (batch, num_layers, pooled_dim) -> (batch, num_classes)"""
+        # LayerDrop: randomly zero-out some layers during training
+        mask = torch.ones(self.num_layers, device=x.device)
+        if self.training and self.layer_drop > 0:
+            drop_mask = torch.bernoulli(
+                torch.full((self.num_layers,), 1.0 - self.layer_drop, device=x.device)
+            )
+            # Always keep at least one layer
+            if drop_mask.sum() == 0:
+                drop_mask[torch.randint(self.num_layers, (1,))] = 1.0
+            mask = drop_mask
+
+        # Compute attention weights over layers
+        logits = self.layer_logits * mask + (1 - mask) * (-1e9)
+        weights = torch.softmax(logits, dim=0)  # (num_layers,)
+
+        # Weighted sum: (batch, num_layers, pooled_dim) -> (batch, pooled_dim)
+        weights = weights.view(1, self.num_layers, 1)
+        fused = (x * weights).sum(dim=1)  # (batch, pooled_dim)
+
+        fused = self.layer_norm(fused)
+        return self.classifier(fused)
 
 
 # ---------------------------------------------------------------------------
@@ -231,16 +341,18 @@ def quick_layer_sweep(
     train_entries: list[tuple[Path, int]],
     val_entries: list[tuple[Path, int]],
     device: torch.device,
+    num_layers: int = DEFAULT_NUM_LAYERS,
+    pooled_dim: int = DEFAULT_POOLED_DIM,
     hidden_dim: int = 256,
     epochs: int = 15,
     batch_size: int = 64,
 ) -> int:
-    """Try each of the 12 MERT layers, return the one with best val accuracy."""
-    print("\n=== Layer Sweep (quick 15-epoch training per layer) ===")
+    """Try each MERT layer, return the one with best val accuracy."""
+    print(f"\n=== Layer Sweep (quick {epochs}-epoch training per layer) ===")
     best_layer = -1
     best_acc = 0.0
 
-    for layer_idx in range(NUM_LAYERS):
+    for layer_idx in range(num_layers):
         train_ds = MERTEmbeddingDataset(train_entries, layer_idx, augment=True)
         val_ds = MERTEmbeddingDataset(val_entries, layer_idx, augment=False)
 
@@ -251,7 +363,7 @@ def quick_layer_sweep(
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-        model = MeterMLP(input_dim=POOLED_DIM, hidden_dim=hidden_dim).to(device)
+        model = MeterMLP(input_dim=pooled_dim, hidden_dim=hidden_dim).to(device)
         class_weights = compute_class_weights(train_ds.labels, len(CLASS_METERS)).to(device)
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -298,10 +410,19 @@ def main():
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--layer", type=int, default=-1,
-                        help="MERT layer index (0-11). -1 = auto-select via sweep")
+                        help="MERT layer index (0-based). -1 = auto-select via sweep")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--skip-layer-sweep", action="store_true")
+    # Multi-layer options
+    parser.add_argument("--multi-layer", action="store_true",
+                        help="Use learnable weighted sum of ALL layers instead of single layer")
+    parser.add_argument("--num-layers", type=int, default=DEFAULT_NUM_LAYERS,
+                        help="Number of MERT layers in embeddings (12 for 95M, 24 for 330M)")
+    parser.add_argument("--pooled-dim", type=int, default=DEFAULT_POOLED_DIM,
+                        help="Pooled dim per layer (1536 for 95M, 2048 for 330M)")
+    parser.add_argument("--layer-drop", type=float, default=0.1,
+                        help="LayerDrop probability for multi-layer mode")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -309,12 +430,16 @@ def main():
 
     device = select_device(args.device)
     print(f"Device: {device}")
+    print(f"Mode: {'multi-layer' if args.multi_layer else 'single-layer'}")
 
     data_dir = args.data_dir.resolve()
     embeddings_dir = args.embeddings_dir.resolve()
+    num_layers = args.num_layers
+    pooled_dim = args.pooled_dim
 
     print(f"\nLoading entries from {data_dir}")
     print(f"Embeddings from {embeddings_dir}")
+    print(f"Layers: {num_layers}, pooled dim: {pooled_dim}")
 
     train_entries = load_split_entries(data_dir, embeddings_dir, "train")
     val_entries = load_split_entries(data_dir, embeddings_dir, "val")
@@ -332,43 +457,82 @@ def main():
         print(f"  Meter {m}: {meter_counts.get(m, 0)}")
     print(f"\nSplit: {len(train_entries)} train, {len(val_entries)} val, {len(test_entries)} test")
 
-    # Layer selection
-    if args.layer >= 0:
-        best_layer = args.layer
-        print(f"\nUsing specified layer: {best_layer}")
-    elif args.skip_layer_sweep:
-        best_layer = 11  # default to last layer
-        print(f"\nSkipping layer sweep, using layer {best_layer}")
+    if args.multi_layer:
+        # --- Multi-layer path ---
+        hidden_dim = max(args.hidden_dim, 512)  # deeper head for multi-layer
+        print(f"\n=== Multi-Layer Training ({num_layers} layers, hidden={hidden_dim}) ===")
+        print("  Building datasets (all layers)...")
+        train_ds = MultiLayerMERTDataset(train_entries, num_layers, augment=True)
+        val_ds = MultiLayerMERTDataset(val_entries, num_layers, augment=False)
+        test_ds = MultiLayerMERTDataset(test_entries, num_layers, augment=False)
+        print(f"  Sizes: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test")
+
+        if len(train_ds) == 0:
+            print("ERROR: Training set is empty. Check embeddings.")
+            sys.exit(1)
+
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+        test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
+
+        model = MultiLayerMLP(
+            num_layers=num_layers,
+            pooled_dim=pooled_dim,
+            hidden_dim=hidden_dim,
+            num_classes=len(CLASS_METERS),
+            dropout=args.dropout,
+            layer_drop=args.layer_drop,
+        ).to(device)
+
+        best_layer = -1  # not applicable for multi-layer
+
     else:
-        best_layer = quick_layer_sweep(
-            train_entries, val_entries, device,
-            hidden_dim=args.hidden_dim, batch_size=args.batch_size,
-        )
+        # --- Single-layer path (original) ---
+        hidden_dim = args.hidden_dim
 
-    # Build datasets with best layer
-    print(f"\n=== Full Training with Layer {best_layer} ===")
-    print("  Building datasets...")
-    train_ds = MERTEmbeddingDataset(train_entries, best_layer, augment=True)
-    val_ds = MERTEmbeddingDataset(val_entries, best_layer, augment=False)
-    test_ds = MERTEmbeddingDataset(test_entries, best_layer, augment=False)
-    print(f"  Sizes: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test")
+        if args.layer >= 0:
+            best_layer = args.layer
+            print(f"\nUsing specified layer: {best_layer}")
+        elif args.skip_layer_sweep:
+            best_layer = num_layers - 1
+            print(f"\nSkipping layer sweep, using layer {best_layer}")
+        else:
+            best_layer = quick_layer_sweep(
+                train_entries, val_entries, device,
+                num_layers=num_layers, pooled_dim=pooled_dim,
+                hidden_dim=hidden_dim, batch_size=args.batch_size,
+            )
 
-    if len(train_ds) == 0:
-        print("ERROR: Training set is empty. Check embeddings.")
-        sys.exit(1)
+        print(f"\n=== Full Training with Layer {best_layer} ===")
+        print("  Building datasets...")
+        train_ds = MERTEmbeddingDataset(train_entries, best_layer, augment=True)
+        val_ds = MERTEmbeddingDataset(val_entries, best_layer, augment=False)
+        test_ds = MERTEmbeddingDataset(test_entries, best_layer, augment=False)
+        print(f"  Sizes: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test")
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
+        if len(train_ds) == 0:
+            print("ERROR: Training set is empty. Check embeddings.")
+            sys.exit(1)
 
-    # Model
-    model = MeterMLP(
-        input_dim=POOLED_DIM,
-        hidden_dim=args.hidden_dim,
-        num_classes=len(CLASS_METERS),
-        dropout=args.dropout,
-    ).to(device)
-    print(f"\nMLP parameters: {sum(p.numel() for p in model.parameters()):,}")
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+        test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False)
+
+        model = MeterMLP(
+            input_dim=pooled_dim,
+            hidden_dim=hidden_dim,
+            num_classes=len(CLASS_METERS),
+            dropout=args.dropout,
+        ).to(device)
+
+    print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
+    if args.multi_layer:
+        # Show initial layer weights
+        with torch.no_grad():
+            weights = torch.softmax(model.layer_logits, dim=0)
+            top3 = weights.topk(3)
+            print(f"Initial layer weights (uniform): top3 = "
+                  f"{', '.join(f'L{i}={w:.3f}' for i, w in zip(top3.indices.tolist(), top3.values.tolist()))}")
 
     # Loss with class weights
     class_weights = compute_class_weights(train_ds.labels, len(CLASS_METERS)).to(device)
@@ -415,6 +579,16 @@ def main():
                 print(f"\nEarly stopping at epoch {epoch}")
                 break
 
+    # Show learned layer weights for multi-layer
+    if args.multi_layer and best_model_state is not None:
+        layer_logits = best_model_state.get("layer_logits")
+        if layer_logits is not None:
+            weights = torch.softmax(layer_logits, dim=0)
+            print(f"\nLearned layer weights:")
+            for i, w in enumerate(weights.tolist()):
+                bar = "#" * int(w * 100)
+                print(f"  Layer {i:2d}: {w:.4f} {bar}")
+
     # Test evaluation
     print("\n" + "=" * 65)
     print("Test set evaluation (best model by val accuracy)")
@@ -438,18 +612,35 @@ def main():
     checkpoint = {
         "classifier_state_dict": best_model_state if best_model_state is not None else model.state_dict(),
         "class_map": IDX_TO_METER,
-        "layer_idx": best_layer,
-        "input_dim": POOLED_DIM,
-        "hidden_dim": args.hidden_dim,
+        "input_dim": pooled_dim,
+        "hidden_dim": hidden_dim,
         "num_classes": len(CLASS_METERS),
         "dropout": args.dropout,
         "val_accuracy": best_val_acc,
         "test_accuracy": test_acc,
-        "model_name": "m-a-p/MERT-v1-95M",
+        "multi_layer": args.multi_layer,
     }
+
+    if args.multi_layer:
+        checkpoint["num_layers"] = num_layers
+        checkpoint["pooled_dim"] = pooled_dim
+        checkpoint["layer_drop"] = args.layer_drop
+        checkpoint["model_type"] = "MultiLayerMLP"
+        # Infer model name from dims
+        if num_layers == 24:
+            checkpoint["model_name"] = "m-a-p/MERT-v1-330M"
+        else:
+            checkpoint["model_name"] = "m-a-p/MERT-v1-95M"
+    else:
+        checkpoint["layer_idx"] = best_layer
+        checkpoint["model_name"] = "m-a-p/MERT-v1-95M"
+
     torch.save(checkpoint, checkpoint_path)
     print(f"\nCheckpoint saved to {checkpoint_path}")
-    print(f"  Layer:         {best_layer}")
+    if args.multi_layer:
+        print(f"  Model type:    MultiLayerMLP ({num_layers} layers)")
+    else:
+        print(f"  Layer:         {best_layer}")
     print(f"  Val accuracy:  {best_val_acc:.1%}")
     print(f"  Test accuracy: {test_acc:.1%}")
 

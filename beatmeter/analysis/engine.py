@@ -50,7 +50,7 @@ class AnalysisEngine:
         self.cache = cache  # AnalysisCache | None
         self._audio_hash: str | None = None
 
-    def analyze_file(self, file_path: str) -> AnalysisResult:
+    def analyze_file(self, file_path: str, skip_sections: bool = False) -> AnalysisResult:
         """Analyze an audio file."""
         if self.cache:
             from beatmeter.analysis.cache import AnalysisCache
@@ -58,13 +58,14 @@ class AnalysisEngine:
 
         audio, sr = load_audio(file_path, sr=settings.sample_rate)
         audio = preprocess(audio, sr)
-        return self.analyze_audio(audio, sr)
+        return self.analyze_audio(audio, sr, skip_sections=skip_sections)
 
-    def analyze_audio(self, audio: np.ndarray, sr: int = 22050, audio_hash: str | None = None) -> AnalysisResult:
+    def analyze_audio(self, audio: np.ndarray, sr: int = 22050, audio_hash: str | None = None, skip_sections: bool = False) -> AnalysisResult:
         """Analyze pre-loaded audio data.
 
         If *audio_hash* is given it enables per-tracker / per-signal caching
         without requiring a file path (used by the benchmark runner).
+        If *skip_sections* is True, section detection is skipped (faster for eval).
         """
         if audio_hash is not None:
             self._audio_hash = audio_hash
@@ -98,7 +99,7 @@ class AnalysisEngine:
         # Step 2: Beat tracking (run all methods in parallel)
         logger.info("Step 2: Beat tracking")
 
-        beatnet_beats, beat_this_beats, madmom_results, librosa_beats = \
+        beatnet_beats, beat_this_beats, madmom_results, librosa_beats, tmp_wav_path = \
             self._run_beat_tracking(audio, sr, ah)
 
         logger.info(f"  BeatNet: {len(beatnet_beats)} beats, "
@@ -189,11 +190,29 @@ class AnalysisEngine:
             )
             candidates.append(ibi_est)
 
-        librosa_est = estimate_from_librosa(audio, sr)
+        # Librosa tempo (cached)
+        librosa_est = None
+        if self.cache and ah:
+            cached = self.cache.load_signal(ah, "tempo_librosa")
+            if cached is not None:
+                librosa_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
+        if librosa_est is None:
+            librosa_est = estimate_from_librosa(audio, sr)
+            if librosa_est and self.cache and ah:
+                self.cache.save_signal(ah, "tempo_librosa", {"bpm": librosa_est.bpm, "confidence": librosa_est.confidence, "method": librosa_est.method})
         if librosa_est:
             candidates.append(librosa_est)
 
-        tempogram_est = estimate_from_tempogram(audio, sr)
+        # Tempogram tempo (cached)
+        tempogram_est = None
+        if self.cache and ah:
+            cached = self.cache.load_signal(ah, "tempo_tempogram")
+            if cached is not None:
+                tempogram_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
+        if tempogram_est is None:
+            tempogram_est = estimate_from_tempogram(audio, sr)
+            if tempogram_est and self.cache and ah:
+                self.cache.save_signal(ah, "tempo_tempogram", {"bpm": tempogram_est.bpm, "confidence": tempogram_est.confidence, "method": tempogram_est.method})
         if tempogram_est:
             candidates.append(tempogram_est)
 
@@ -230,19 +249,30 @@ class AnalysisEngine:
             onset_event_times=onset_event_times,
             cache=self.cache,
             audio_hash=ah,
+            tmp_path=tmp_wav_path,
         )
         for h in meter_hypotheses:
             logger.info(f"  {h.label}: {h.confidence:.1%} - {h.description}")
 
+        # Clean up shared temp WAV file (created by beat tracking)
+        if tmp_wav_path:
+            try:
+                os.unlink(tmp_wav_path)
+            except OSError:
+                pass
+
         # Step 6: Section detection with per-section meter analysis
-        logger.info("Step 6: Section detection")
-        sections = self._detect_sections(
-            primary_beats, beatnet_beats, beat_this_beats, madmom_results, librosa_beats,
-            onset_times, onset_strengths, onset_event_times, audio, sr, tempo.bpm,
-        )
-        for s in sections:
-            if s.meter:
-                logger.info(f"  Section {s.start:.1f}-{s.end:.1f}s: {s.meter.label}")
+        if skip_sections:
+            sections = []
+        else:
+            logger.info("Step 6: Section detection")
+            sections = self._detect_sections(
+                primary_beats, beatnet_beats, beat_this_beats, madmom_results, librosa_beats,
+                onset_times, onset_strengths, onset_event_times, audio, sr, tempo.bpm,
+            )
+            for s in sections:
+                if s.meter:
+                    logger.info(f"  Section {s.start:.1f}-{s.end:.1f}s: {s.meter.label}")
 
         return AnalysisResult(
             tempo=tempo,
@@ -258,7 +288,7 @@ class AnalysisEngine:
         audio: np.ndarray,
         sr: int,
         ah: str | None,
-    ) -> tuple[list[Beat], list[Beat], dict[int, list[Beat]], list[Beat]]:
+    ) -> tuple[list[Beat], list[Beat], dict[int, list[Beat]], list[Beat], str | None]:
         """Run beat tracking with per-tracker caching."""
         # Try loading all from cache
         cached_beatnet = None
@@ -291,7 +321,12 @@ class AnalysisEngine:
 
         if all_cached:
             logger.info("  All beats loaded from cache")
-            return cached_beatnet, cached_beat_this, cached_madmom, cached_librosa
+            return cached_beatnet, cached_beat_this, cached_madmom, cached_librosa, None
+
+        # Pre-import madmom to avoid deadlock when threads import it concurrently
+        import madmom  # noqa: F401
+        import madmom.features.downbeats  # noqa: F401
+        import madmom.features.beats  # noqa: F401
 
         # Need to compute some/all trackers — write temp WAV
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -343,13 +378,14 @@ class AnalysisEngine:
                         if bpb not in cached_madmom:
                             self.cache.save_beats(ah, f"madmom_bpb{bpb}", _beats_to_dicts(beats))
 
-        finally:
+        except Exception:
             os.unlink(shared_tmp_path)
+            raise
 
         # Free cached madmom activations — only needed within a single file
         clear_activation_cache()
 
-        return beatnet_beats, beat_this_beats, madmom_results, librosa_beats
+        return beatnet_beats, beat_this_beats, madmom_results, librosa_beats, shared_tmp_path
 
     @staticmethod
     def _onset_alignment_score(

@@ -30,6 +30,7 @@ def signal_bar_tracking(
     sr: int,
     beat_times_array: np.ndarray,
     meters_to_test: list[int] | None = None,
+    tmp_path: str | None = None,
 ) -> dict[tuple[int, int], float]:
     """Signal 7: madmom DBNBarTrackingProcessor meter inference.
 
@@ -55,16 +56,19 @@ def signal_bar_tracking(
     try:
         from madmom.features.downbeats import DBNBarTrackingProcessor
 
-        # RNNBarProcessor needs a file path — write temp WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-            sf.write(tmp_path, audio, sr)
+        # RNNBarProcessor needs a file path — reuse shared temp WAV if available
+        owns_tmp = tmp_path is None
+        if owns_tmp:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+                sf.write(tmp_path, audio, sr)
 
         bar_proc = _get_bar_processor()
         act = bar_proc((tmp_path, beat_times_array))
 
-        # Clean up temp file
-        os.unlink(tmp_path)
+        # Clean up temp file only if we created it
+        if owns_tmp:
+            os.unlink(tmp_path)
 
         # Remove last row (often NaN) and take downbeat activation column
         activations = act[:-1, 1] if act.shape[0] > 1 else act[:, 1]

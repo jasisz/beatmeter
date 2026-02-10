@@ -117,6 +117,8 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 6 | 303 | 245/303 (81%) | resnet_meter (75.4%) disabled -- 18 regressions |
 | 7 | 303 | 253/303 (83%) | Folk GT fixes, compound transfer disabled, refactoring |
 | 8 | 303 | 253/303 (83%) | mert_meter (80.7%) -- gate FAIL, disabled |
+| 9 | 303 | 253/303 (83%) | Multi-layer 95M: 79.9% test (no improvement), LoRA scripts ready |
+| 12 | 303 | -- (in progress) | Multi-label sigmoid, 6 classes, ODDMETER-WIKI augmentation, LoRA 330M |
 
 ### 2.4 Confidence Calibration
 
@@ -326,6 +328,32 @@ Despite being 5.3pp more accurate than resnet_meter on METER2800, mert_meter ach
 3. **Larger MLP**: Two hidden layers (1536 --> 512 --> 128 --> 4) or attention pooling instead of mean+max.
 4. **Multi-layer concatenation**: Combine features from layers 3, 7, and 11 for a richer representation.
 
+### 4.9 Multi-Layer Classifier on MERT-95M Embeddings (Round 9)
+
+**Motivation**: The single-layer approach uses only layer 3 of 12 available MERT-95M layers. A learnable weighted sum of all layers might capture complementary information from different representation levels.
+
+**Architecture**: `MultiLayerMLP` -- softmax-weighted sum of all 12 layers with LayerDrop (p=0.1) regularization, followed by a deeper MLP (1536 -> 512 -> 256 -> 4) with GELU and LayerNorm.
+
+**Training**: 100 epochs, Adam lr=1e-3 with ReduceLROnPlateau, batch size 64, embedding noise augmentation (0.01). On existing pre-extracted 95M embeddings.
+
+**Results**:
+
+| Method | Val Acc | Test Acc | 3/x | 4/x | 5/x | 7/x |
+|--------|---------|----------|-----|-----|-----|-----|
+| Single-layer L3 (baseline) | 84.5% | 80.7% | 85.7% | 89.0% | 40.0% | 42.0% |
+| Single-layer L3 (re-run) | 85.0% | 81.7% | 87.7% | 85.7% | 52.0% | 52.0% |
+| **Multi-layer (12L)** | 81.0% | **79.9%** | 86.0% | 87.0% | 18.0% | 62.0% |
+
+**Learned layer weights** (top 5): L3=15.3%, L4=13.5%, L2=12.7%, L5=11.0%, L1=10.4%. Layers 8-11 received only 3-5% weight each, confirming that early layers are most informative for meter classification.
+
+**Analysis**: Multi-layer on MERT-95M did not improve over single-layer. The 12 layers of the 95M model don't provide enough representational diversity to benefit from fusion. The accuracy bottleneck is in the frozen encoder, not the classifier head. Interesting that multi-layer strongly favored 7/x (62%) while collapsing on 5/x (18%).
+
+**Conclusion**: To improve MERT accuracy beyond ~81%, we need either (a) a larger model (MERT-v1-330M with 24 layers, 1024 hidden), or (b) LoRA fine-tuning to adapt representations to meter classification. Scripts for both approaches (`extract_mert_embeddings.py --model m-a-p/MERT-v1-330M` and `finetune_mert.py`) are implemented and ready to run.
+
+### 4.10 MERT-330M LoRA Fine-tuning with Multi-label Architecture (Round 12)
+
+We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) classification to enable polyrhythm detection, expanded classes from 4 to 6 (adding 9/8, 11/8), and curated an external odd-meter dataset (ODDMETER-WIKI, 1028 segments from 82 songs via YouTube). Novel diagnostic metrics include Confidence Gap (ΔP), Normalized Shannon Entropy, inter-class correlation matrix for label leakage detection, and per-class noise floor for data-driven polyrhythm detection thresholds. Training in progress. Full details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+
 ## 5. Failure Analysis
 
 We analyzed incorrectly classified files and identified three recurring failure patterns.
@@ -409,7 +437,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **Fine-tune MERT** -- Unfreeze last 2-3 transformer layers and train on METER2800. Target >90% test accuracy. The frozen-encoder approach (mert_meter) achieved 80.7% but failed the gate check (31 gains/68 losses). Fine-tuning should significantly improve accuracy.
+1. **MERT-330M LoRA multi-label results** -- Training in progress with sigmoid + BCE, 6 classes [3,4,5,7,9,11], ODDMETER-WIKI augmentation (1028 segments). Key metrics to evaluate: mAP, confidence gap, entropy diagnostics, noise floor thresholds. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
 2. **MERT confidence gating** -- Only use mert_meter predictions when softmax confidence exceeds 0.8. Could eliminate many false 7/4 and 5/4 predictions while preserving gains on classical 3/4.
 

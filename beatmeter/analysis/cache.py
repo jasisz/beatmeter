@@ -78,6 +78,12 @@ SIGNAL_DEPS: dict[str, list[str]] = {
     "mert_meter": [
         "beatmeter/analysis/signals/mert_meter.py",
     ],
+    "tempo_librosa": [
+        "beatmeter/analysis/tempo.py",
+    ],
+    "tempo_tempogram": [
+        "beatmeter/analysis/tempo.py",
+    ],
 }
 
 # Per-tracker source file for beat cache invalidation.
@@ -119,7 +125,17 @@ class AnalysisCache:
 
     @staticmethod
     def audio_hash(file_path: str) -> str:
-        """SHA-256 of first 200 KB of the file -> 16 hex chars."""
+        """Derive a cache key from the file path.
+
+        Uses the filename stem (no extension) which is unique within the
+        METER2800 dataset and stable across runs.  Falls back to a short
+        content hash only when the stem is ambiguous (< 3 chars).
+        """
+        from pathlib import Path
+        stem = Path(file_path).stem
+        if len(stem) >= 3:
+            return stem
+        # Very short stem — hash a bit of content for safety
         with open(file_path, "rb") as f:
             return hashlib.sha256(f.read(200_000)).hexdigest()[:16]
 
