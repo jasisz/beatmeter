@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 7 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, and bar tracking via GRU-RNN with Viterbi decoding -- with trust-gated weighting and consensus bonuses. Trust gating disables unreliable neural signals based on onset alignment quality, while consensus bonuses reward cross-signal agreement. On our 303-test benchmark spanning 20 musical categories (drums, jazz, waltz, classical, folk, tango, and others), we achieve 81% meter accuracy and 96% tempo accuracy. We also evaluate on METER2800 (external dataset), achieving 84% on binary 3/4 vs 4/4 classification. We identify three root failure patterns and propose specific mitigations for each. We report a negative result on adding a ResNet18 spectrogram classifier as an 8th signal: at 75% standalone accuracy, its errors overlap substantially with the existing ensemble, providing no orthogonal information. Our benchmark dataset, drawn from public-domain Wikimedia Commons recordings, will be released alongside the system.
+We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 7 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, and bar tracking via GRU-RNN with Viterbi decoding -- with trust-gated weighting and consensus bonuses. Trust gating disables unreliable neural signals based on onset alignment quality, while consensus bonuses reward cross-signal agreement. On the METER2800 dataset (700-file hold-out test split), we achieve 76% overall meter accuracy and 88.2% on binary 3/4 vs 4/4 classification (comparable to the ResNet18 paper's 88%). We identify three root failure patterns and propose specific mitigations for each. We report two negative results on adding spectrogram/embedding classifiers: (1) a ResNet18 MFCC classifier at 75% standalone accuracy, and (2) a MERT-v1-95M foundation model with MLP at 80.7% accuracy. Neither provides sufficient orthogonal information for ensemble benefit, though MERT shows promise for classical 3/4 detection.
 
 ## 1. System Architecture
 
@@ -11,15 +11,15 @@ We present BeatMeter, a multi-signal ensemble system for automatic meter detecti
 The BeatMeter pipeline processes audio through a sequence of stages:
 
 1. **Preprocessing** -- Load audio, resample, normalize.
-2. **Onset detection** -- librosa onset envelope extraction.
-3. **Parallel beat tracking** -- Four independent beat trackers run concurrently:
-   - **BeatNet** -- Particle-filtering CRNN for joint beat/downbeat tracking.
-   - **Beat This!** -- Convolutional Transformer (SOTA, ISMIR 2024), no DBN postprocessing.
-   - **madmom** -- GRU-RNN with DBN beat tracking.
-   - **librosa** -- Dynamic programming beat tracker.
+2. **Onset detection** -- librosa onset envelope extraction (`beatmeter/analysis/onset.py`).
+3. **Parallel beat tracking** -- Four independent beat trackers run concurrently (`beatmeter/analysis/trackers/`):
+   - **BeatNet** (`trackers/beatnet.py`) -- Particle-filtering CRNN for joint beat/downbeat tracking.
+   - **Beat This!** (`trackers/beat_this.py`) -- Convolutional Transformer (SOTA, ISMIR 2024), no DBN postprocessing.
+   - **madmom** (`trackers/madmom_tracker.py`) -- GRU-RNN with DBN beat tracking.
+   - **librosa** (`trackers/librosa_tracker.py`) -- Dynamic programming beat tracker.
 4. **Primary beat selection** -- Trackers are ranked by onset alignment F1 score; the best-aligned tracker's beats are used as the primary beat grid.
-5. **Tempo estimation** -- Multi-method tempo consensus with octave error normalization.
-6. **Meter hypothesis generation** -- Eight signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 6/8, 7/4, 12/8). Scores are combined via weighted addition with consensus bonuses.
+5. **Tempo estimation** -- Multi-method tempo consensus with octave error normalization (`beatmeter/analysis/tempo.py`).
+6. **Meter hypothesis generation** -- Seven active signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 6/8, 7/4, 12/8). Scores are combined via weighted addition with consensus bonuses (`beatmeter/analysis/meter.py`).
 
 Trust gating controls the influence of neural-network-based signals. Each tracker receives a trust score derived from its onset alignment quality:
 
@@ -31,18 +31,21 @@ This mechanism ensures that when beat trackers fail on difficult audio (low alig
 
 ### 1.2 Signals
 
-| # | Signal | Weight | Source | Description |
-|---|--------|--------|--------|-------------|
-| 1a | BeatNet downbeat spacing | 0.13 x trust | BeatNet | Infers meter from the distribution of inter-downbeat intervals. Clusters downbeat spacings and maps dominant intervals to candidate meters. |
-| 1b | Beat This! downbeat spacing | 0.16 x trust | Beat This! | Same approach as 1a but using the SOTA conv-transformer downbeat tracker, which provides higher-quality downbeat estimates on most genres. |
-| 2 | madmom activation scoring | 0.10 x trust | madmom | Evaluates whether predicted downbeat positions align with louder onsets. Scores each candidate meter by checking if grouping beats into bars of that size places the loudest beat on position 1. |
-| 3 | Onset autocorrelation | 0.13 | onset envelope | Computes autocorrelation of the onset strength envelope at lags corresponding to expected bar durations for each candidate meter. Higher autocorrelation at a given lag indicates stronger periodicity at that bar length. |
-| 4 | Accent pattern (RMS) | 0.18 | raw audio RMS | Groups beats into bars of each candidate meter size and measures the consistency of the accent on beat 1 using RMS energy. A strong, consistent downbeat accent favors that meter. |
-| 5 | Beat strength periodicity | 0.20 (cap 0.16) | raw audio RMS | Computes autocorrelation of beat-level RMS energies to find the dominant accent period. The candidate meter whose beats-per-bar best matches the dominant period scores highest. Weight is capped at 0.16 when all NNs are untrusted. |
-| 7 | DBNBarTrackingProcessor | 0.12 | audio + beats | Uses madmom's GRU-RNN activation function with Viterbi decoding to track bar boundaries for each candidate meter. The candidate producing the most consistent bar tracking scores highest. Quality-gated: skipped on sparse/synthetic audio (non_silent < 0.15). |
-| 8 | ResNet18 MFCC classifier | **0.0 (disabled)** | MFCC spectrogram | Direct 4-class CNN classification of the audio spectrogram. Trained on the METER2800 dataset (75.4% test accuracy). **Disabled**: at 75% accuracy the model's predictions are not sufficiently orthogonal to existing signals, causing 18 regressions when integrated at any weight (see Section 4.6). Infrastructure is complete and ready for a better model. |
+All signal implementations live in `beatmeter/analysis/signals/`.
 
-**Note on signal numbering**: Signal 6 (HCDF -- Harmonic Change Detection Function) was evaluated but not integrated due to regression issues (see Section 4.4). The numbering gap is preserved for traceability.
+| Signal | Code key | Weight | Source | Description |
+|--------|----------|--------|--------|-------------|
+| **downbeat_spacing** (BeatNet) | `beatnet` | 0.13 × trust | BeatNet beats | Infers meter from the distribution of inter-downbeat intervals. Clusters downbeat spacings and maps dominant intervals to candidate meters. |
+| **downbeat_spacing** (Beat This!) | `beat_this` | 0.16 × trust | Beat This! beats | Same approach but using the SOTA conv-transformer downbeat tracker, which provides higher-quality downbeat estimates on most genres. |
+| **madmom_activation** | `madmom` | 0.10 × trust | madmom beats | Evaluates whether predicted downbeat positions align with louder onsets. Scores each candidate meter by checking if grouping beats into bars of that size places the loudest beat on position 1. |
+| **onset_autocorrelation** | `autocorr` | 0.13 | onset envelope | Computes autocorrelation of the onset strength envelope at lags corresponding to expected bar durations for each candidate meter. Higher autocorrelation at a given lag indicates stronger periodicity at that bar length. |
+| **accent_pattern** | `accent` | 0.18 | raw audio RMS | Groups beats into bars of each candidate meter size and measures the consistency of the accent on beat 1 using RMS energy. A strong, consistent downbeat accent favors that meter. |
+| **beat_periodicity** | `periodicity` | 0.20 (cap 0.16) | raw audio RMS | Computes autocorrelation of beat-level RMS energies to find the dominant accent period. The candidate meter whose beats-per-bar best matches the dominant period scores highest. Weight is capped at 0.16 when all NNs are untrusted. |
+| **bar_tracking** | `bar_tracking` | 0.12 | audio + beats | Uses madmom's GRU-RNN activation function with Viterbi decoding to track bar boundaries for each candidate meter. Quality-gated: skipped on sparse/synthetic audio (non_silent < 0.15). |
+| **resnet_meter** | `resnet` | **0.0 (disabled)** | MFCC spectrogram | Direct 4-class CNN classification. Trained on METER2800 (75.4% test). **Disabled**: not orthogonal to existing signals (see Section 4.6). |
+| **mert_meter** | `mert` | **0.0 (disabled)** | MERT embeddings | Music foundation model (95M params) as frozen feature extractor with MLP (80.7% test). **Disabled**: gate FAIL, 31 gains vs 68 losses (see Section 4.8). |
+
+**Note**: HCDF (Harmonic Change Detection Function) was evaluated but not integrated due to regression issues (see Section 4.4).
 
 ### 1.3 Combination Strategy
 
@@ -57,9 +60,9 @@ Candidate meter scores are combined through weighted additive fusion with severa
 3. **Prior probabilities**: Reflects the natural distribution of meters in music:
    - 4/4 = 1.15, 3/4 = 1.03, 6/8 = 1.05, 2/4 = 1.05, 12/8 = 1.02
 
-4. **NN 3/4 penalty**: When all neural network trackers (Signals 1a, 1b, 2) favor even meters, the 3/4 score is multiplied by 0.55. This corrects for the tendency of beat trackers to underestimate triple meter.
+4. **NN 3/4 penalty**: When all neural network trackers (downbeat_spacing BeatNet, Beat This!, madmom_activation) favor even meters, the 3/4 score is multiplied by 0.55. This corrects for the tendency of beat trackers to underestimate triple meter.
 
-5. **Compound meter (/8) detection**: Sub-beat division analysis checks for compound meter evidence:
+5. **Compound meter (/8) detection** (`signals/sub_beat_division.py`): Sub-beat division analysis checks for compound meter evidence:
    - Median onset count between beats in range 1.5--3.5
    - Evenness coefficient of variation (CV) < 0.4
    - Triplet position check (onsets near 1/3 and 2/3 positions)
@@ -69,57 +72,51 @@ Candidate meter scores are combined through weighted additive fusion with severa
 
 ## 2. Benchmark
 
-### 2.1 Dataset
+### 2.1 Evaluation Framework
 
-Our benchmark comprises 303 test cases:
+Evaluation uses a unified script (`scripts/eval.py`) with persistent worker subprocesses (`scripts/eval_worker.py`) to avoid BeatNet/madmom threading deadlocks. Beat tracking is cached per-tracker via `AnalysisCache` with smart invalidation (changing `meter.py` does not invalidate beat tracker caches). Run snapshots (`--save`) are stored in `data/runs/` with full per-file results for history tracking and regression detection.
 
-- **272 real audio files** sourced from Wikimedia Commons (public domain), collected in three rounds:
-  - Round 0: 55 original files across core categories
-  - Round 1: 99 additional files to improve coverage
-  - Round 2: 118 files targeting underrepresented categories
-- **17 synthetic files** generated with precise metronome patterns for edge case testing
-- **14 edge case files** including tempo changes, unusual meters, and ambiguous rhythms
+```bash
+uv run python scripts/eval.py --limit 3 --workers 1   # smoke test
+uv run python scripts/eval.py --quick                  # stratified 100 (~20 min)
+uv run python scripts/eval.py --split test --limit 0   # hold-out 700
+uv run python scripts/eval.py --save                   # save run snapshot
+uv run python scripts/dashboard.py                     # run history
+```
 
-The dataset spans **20 categories**: drums, middle_eastern, waltz, classical, barcarolle, march, polka, jig, tango, tarantella, blues, jazz, folk, mazurka, ragtime, reggae, samba, swing, synthetic, edge_case.
+### 2.2 Primary Benchmark: METER2800
 
-Ground truth was manually annotated and verified. 22 corrections were applied during the benchmark expansion process, including barcarolle BPM corrections, sarabande BPM corrections, folk meter reclassifications, Gardel tangos reclassified to 3/4, and Irish ballad meter corrections.
+**Dataset**: METER2800 (Abimbola et al., 2023) -- 2800 audio clips across 4 time signature classes (3, 4, 5, 7 beats per bar). Sources: FMA, MAG, OWN, GTZAN. Pre-defined splits: 1680 train, 420 val, 700 test.
 
-### 2.2 Results History
+**Current results** (7 active signals, resnet_meter/mert_meter disabled) on the full test split (700 files):
 
-| Round | Tests | Meter Accuracy | Tempo Accuracy | Key Change |
-|-------|-------|----------------|----------------|------------|
-| 1 | 72 | 53/72 (74%) | 69/72 (96%) | Baseline: additive combination of 6 signals |
-| 2 | 72 | 54/72 (75%) | 69/72 (96%) | NN 3/4 penalty + weight rebalance |
-| 3 | 72 | 55/72 (76%) | 69/72 (96%) | Signal 7 (DBNBarTrackingProcessor) added |
-| 4 | 303 | 241/303 (80%) | 291/303 (96%) | Benchmark expansion to 303 tests (272 real files) |
-| 5 | 303 | 245/303 (81%) | 291/303 (96%) | Weight tuning + ground truth corrections |
-| 6 | 303 | 245/303 (81%) | 291/303 (96%) | Signal 8 trained (75.4% METER2800) but disabled -- no net gain, 18 regressions |
+| Metric | Result |
+|--------|--------|
+| **Overall** | **532/700 (76.0%)** |
+| Meter 3 (300 files) | 256/300 (85.3%) |
+| Meter 4 (300 files) | 273/300 (91.0%) |
+| Meter 5 (50 files) | 1/50 (2.0%) |
+| Meter 7 (50 files) | 2/50 (4.0%) |
+| Binary 3 vs 4 only | 529/600 (88.2%) |
 
-Tempo accuracy has remained stable at 96% across all rounds, indicating that the multi-method tempo consensus approach is robust. Meter accuracy improved from 74% to 81% through signal additions and parameter tuning. The Signal 8 experiment (Round 6) showed that a ResNet18 classifier at 75% accuracy does not provide orthogonal information to the existing 7-signal ensemble.
+**Comparison to literature**: On the binary 3/4 vs 4/4 task, our 88.2% is comparable to the ResNet18 paper's 88% (Abimbola et al., EURASIP 2024). Our system is strong on 4/4 (91.0%) and 3/4 (85.3%).
 
-### 2.3 Per-Category Performance (Round 6, 245/303)
+**Critical finding**: Our system essentially does not work on odd meters (5/4: 2%, 7/4: 4%). This is a fundamental limitation of the current architecture, which is heavily biased toward common Western meters.
 
-| Category | Accuracy | Notes |
-|----------|----------|-------|
-| middle_eastern | 100% | Strong rhythmic patterns, clear downbeats |
-| jazz | 95% | Mostly 4/4, swing feel well-handled |
-| edge_case | 93% | Synthetic and boundary cases |
-| classical | 92% | Improved via weight tuning |
-| tango | 91% | Consistent 4/4 (and 3/4 for Gardel-era) |
-| drums | 90% | Clear beat patterns |
-| swing | 90% | 4/4 with swing subdivision |
-| blues | 88% | Mostly 4/4, occasional 12/8 shuffle |
-| polka | 86% | 2/4 generally detected well |
-| march | 86% | Mix of 2/4 and 4/4 |
-| ragtime | 83% | Improved from 72% via weight tuning |
-| jig | 82% | 6/8 compound meter detection |
-| mazurka | 80% | 3/4 with characteristic accent on beat 2 or 3 |
-| tarantella | 78% | 6/8, fast tempo can confuse trackers |
-| reggae | 75% | Off-beat emphasis challenges accent pattern signal |
-| waltz | 73% | Improved from 68%; fast Chopin waltzes still misclassified |
-| barcarolle | 62% | 6/8 often confused with 3/4 or 2/4 |
-| samba | 60% | 2/4 with heavy syncopation |
-| folk | 50% | Heterogeneous category, ground truth issues |
+### 2.3 Historical: Internal Benchmark (Rounds 1--8, retired)
+
+During development (Rounds 1--8), we used an internal benchmark of 303 test cases (272 real audio files from Wikimedia Commons + 17 synthetic + 14 edge cases) across 20 categories. This benchmark was retired in favor of METER2800 as the sole evaluation framework. Historical results are preserved for traceability:
+
+| Round | Tests | Meter Accuracy | Key Change |
+|-------|-------|----------------|------------|
+| 1 | 72 | 53/72 (74%) | Baseline: additive combination of 6 signals |
+| 2 | 72 | 54/72 (75%) | NN 3/4 penalty + weight rebalance |
+| 3 | 72 | 55/72 (76%) | bar_tracking signal added |
+| 4 | 303 | 241/303 (80%) | Benchmark expansion to 303 tests (272 real files) |
+| 5 | 303 | 245/303 (81%) | Weight tuning + ground truth corrections |
+| 6 | 303 | 245/303 (81%) | resnet_meter (75.4%) disabled -- 18 regressions |
+| 7 | 303 | 253/303 (83%) | Folk GT fixes, compound transfer disabled, refactoring |
+| 8 | 303 | 253/303 (83%) | mert_meter (80.7%) -- gate FAIL, disabled |
 
 ### 2.4 Confidence Calibration
 
@@ -135,23 +132,27 @@ The system reports confidence levels alongside meter predictions. Confidence is 
 
 - **BEAST** (Liang & Mysore, ICASSP 2024) -- A streaming beat tracking transformer achieving 50ms latency, designed for real-time applications. Relevant to our live analysis mode. [arXiv](https://arxiv.org/abs/2312.17156)
 
-### 3.2 Meter Classification
+### 3.2 Music Foundation Models
 
-- **ResNet18 MFCC classifier** (Abimbola et al., EURASIP 2024) -- Achieves 88% accuracy on binary meter classification (3 vs 4 beats per bar) using MFCC features with a ResNet18 backbone. This approach is notable for bypassing beat tracking entirely, making it orthogonal to traditional meter detection methods. We integrate this as Signal 8. [Springer](https://link.springer.com/article/10.1186/s13636-024-00346-6)
+- **MERT** (Li et al., ICLR 2024) -- A music understanding model with large-scale self-supervised training. 95M parameters, pre-trained on 160K hours of music using acoustic and musical self-supervised objectives (masked language modeling on discrete audio tokens and pitch prediction). Achieves strong results on multiple MIR tasks including beat tracking (88.3% F1), genre classification, and instrument recognition. We use MERT-v1-95M as a frozen feature extractor for meter classification. [arXiv](https://arxiv.org/abs/2306.00107) | [HuggingFace](https://huggingface.co/m-a-p/MERT-v1-95M)
 
-- **METER2800 dataset** (Abimbola et al., Data in Brief 2023) -- A curated dataset of 2800 audio clips across 4 time signature classes (3, 4, 5, 7 beats per bar), totaling 872 MB. Drawn from diverse genres. We use this dataset to train our Signal 8 classifier. [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/0CLXBQ) | [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC10700346/)
+### 3.3 Meter Classification
+
+- **ResNet18 MFCC classifier** (Abimbola et al., EURASIP 2024) -- Achieves 88% accuracy on binary meter classification (3 vs 4 beats per bar) using MFCC features with a ResNet18 backbone. This approach is notable for bypassing beat tracking entirely, making it orthogonal to traditional meter detection methods. [Springer](https://link.springer.com/article/10.1186/s13636-024-00346-6)
+
+- **METER2800 dataset** (Abimbola et al., Data in Brief 2023) -- A curated dataset of 2800 audio clips across 4 time signature classes (3, 4, 5, 7 beats per bar), totaling 872 MB. Drawn from diverse genres. Used as our primary evaluation benchmark and training data for classifier signals. [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/0CLXBQ) | [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC10700346/)
 
 - **TimeSignatureEstimator** -- Training notebooks and code from the METER2800 authors, providing a reference implementation for the ResNet18 classifier. [GitHub](https://github.com/pianistprogrammer/TimeSignatureEstimator)
 
-### 3.3 Data Augmentation
+### 3.4 Data Augmentation
 
 - **Skip That Beat** (Morais et al., LAMIR/ISMIR LBD 2024) -- A data augmentation technique that creates 2/4 and 3/4 training examples from 4/4 source audio by selectively removing beats. Addresses the severe class imbalance problem in meter detection (most datasets are overwhelmingly 4/4). [GitHub](https://github.com/giovana-morais/skip_that_beat) | [Demo](https://giovana-morais.github.io/skip_that_beat_demo/)
 
-### 3.4 Datasets and Surveys
+### 3.5 Datasets and Surveys
 
 - **Ballroom Extended** -- Approximately 4180 tracks of ballroom dance music. Waltz tracks are labeled 3/4; remaining genres are 4/4. Available via [mirdata](https://mirdata.readthedocs.io/). Useful as additional training data but limited in meter diversity.
 
-- **Time Signature Detection: A Survey** (Ramos et al., MDPI Sensors 2021) -- Comprehensive survey of time signature detection methods, covering signal processing approaches, machine learning methods, and evaluation protocols. Provides historical context for the field. [MDPI](https://www.mdpi.com/1424-8220/21/19/6494)
+- **Time Signature Detection: A Survey** (Ramos et al., MDPI Sensors 2021) -- Comprehensive survey of time signature detection methods, covering signal processing approaches, machine learning methods, and evaluation protocols. [MDPI](https://www.mdpi.com/1424-8220/21/19/6494)
 
 ## 4. Experiments
 
@@ -159,11 +160,11 @@ The system reports confidence levels alongside meter predictions. Confidence is 
 
 We evaluated two fusion strategies for combining signal scores:
 
-**Product-of-Experts (PoE)**: Each signal produces a probability distribution over candidate meters, and the ensemble output is the normalized product of all distributions. This approach is theoretically principled (equivalent to an expert committee where each expert has veto power) but proved brittle in practice:
+**Product-of-Experts (PoE)**: Each signal produces a probability distribution over candidate meters, and the ensemble output is the normalized product of all distributions. Proved brittle in practice:
 
 - **Result**: 50/72 (71%) -- significantly worse than baseline.
-- **Failure mode**: A single signal assigning near-zero probability to a meter effectively vetoes it, even if all other signals strongly favor it. This is catastrophic when one signal is miscalibrated or when a signal lacks information about a particular meter.
-- **Example**: Signal 3 (onset autocorrelation) occasionally assigns very low scores to 3/4 in waltz recordings with sparse onsets. Under PoE, this kills 3/4 even when Signals 1a, 1b, 4, and 5 all strongly favor it.
+- **Failure mode**: A single signal assigning near-zero probability to a meter effectively vetoes it, even if all other signals strongly favor it.
+- **Example**: onset_autocorrelation occasionally assigns very low scores to 3/4 in waltz recordings with sparse onsets. Under PoE, this kills 3/4 even when downbeat_spacing and accent_pattern strongly favor it.
 
 **Additive + Consensus**: Weighted sum of signal scores with a multiplicative bonus when multiple signals agree.
 
@@ -174,7 +175,7 @@ We evaluated two fusion strategies for combining signal scores:
 
 ### 4.2 Trust Threshold Sweep
 
-The trust threshold controls when neural network signals are enabled based on onset alignment quality. We swept the threshold to find the optimal value:
+The trust threshold controls when neural network signals are enabled based on onset alignment quality:
 
 | Threshold | Meter Accuracy | Notes |
 |-----------|----------------|-------|
@@ -184,26 +185,17 @@ The trust threshold controls when neural network signals are enabled based on on
 | 0.40 | 54/72 (75%) | Best balance between coverage and accuracy |
 | 0.50 | 52/72 (72%) | Too strict, disables NNs on too many files |
 
-**Key finding**: The trust threshold and compound meter detection are coupled. Lowering the threshold lets neural network signals (which are biased toward simple meters) override correct 6/8 detections with 2/4. At threshold 0.25, six compound meter files regressed because low-trust NN signals pushed scores toward 2/4.
+**Key finding**: The trust threshold and compound meter detection are coupled. Lowering the threshold lets NN signals (which are biased toward simple meters) override correct 6/8 detections with 2/4.
 
 ### 4.3 Compound /8 Detection
 
-Compound meters (6/8, 12/8) are characterized by triplet subdivisions within each beat. We detect compound meter evidence by analyzing onset density between consecutive beats:
+Compound meters (6/8, 12/8) are characterized by triplet subdivisions within each beat. The sub_beat_division signal detects compound meter evidence by analyzing onset density between consecutive beats:
 
-- **Onset count criterion**: Median onset count between beats in range 1.5--3.5 (indicating triplet subdivisions)
-- **Evenness criterion**: Coefficient of variation (CV) of inter-onset intervals < 0.4 (indicating regular subdivision)
+- **Onset count criterion**: Median onset count between beats in range 1.5--3.5
+- **Evenness criterion**: CV of inter-onset intervals < 0.4
 - **Triplet position check**: Onsets concentrated near 1/3 and 2/3 beat positions
 
 When compound evidence is found: transfer 50% of the corresponding simple meter's score to the compound meter, and apply a 1.3x boost.
-
-**Threshold sweep results**:
-
-| Onset Count Threshold | Transfer | Boost | Result | Notes |
-|-----------------------|----------|-------|--------|-------|
-| 1.5 | 50% | 1.3x | 54/72 | Current, best |
-| 1.7 | 50% | 1.3x | 54/72 | Same result |
-| 2.2 | 50% | 1.3x | 54/72 | Same result when combined with trust changes |
-| 1.5 | 25% | 1.15x | 51/72 | Weakens legitimate 6/8 detection |
 
 The evenness check (CV < 0.4) was critical: without it, accompaniment arpeggios and ornaments between beats falsely triggered compound detection in polkas, sarabandes, and waltzes.
 
@@ -213,227 +205,238 @@ The Harmonic Change Detection Function measures the rate of harmonic change in c
 
 - **Standalone evaluation**: Discriminates duple/triple meter well in isolation.
 - **Integrated at w=0.07**: Causes 6 regressions (net negative).
-- **Root cause analysis**: HCDF is correlated with existing signals (particularly Signal 4, accent pattern). Adding a correlated signal with even a small weight disrupts the calibrated balance of the ensemble. The information it provides is largely redundant with what accent pattern analysis already captures.
+- **Root cause**: HCDF is correlated with accent_pattern. Adding a correlated signal disrupts the calibrated ensemble balance.
 
 **Lesson learned**: A signal that works well in isolation may harm the ensemble if it is correlated with existing signals. Always evaluate integration impact, not just standalone performance.
 
-### 4.5 Signal 7: DBNBarTrackingProcessor
+### 4.5 bar_tracking Signal
 
-Signal 7 uses madmom's DBNBarTrackingProcessor, which combines a GRU-RNN activation function with Viterbi decoding to track bar boundaries.
+The bar_tracking signal uses madmom's DBNBarTrackingProcessor, which combines a GRU-RNN activation function with Viterbi decoding to track bar boundaries.
 
-- **Integration**: For each candidate meter, run bar tracking with the corresponding beats-per-bar parameter. Score based on the consistency and confidence of the tracked bar boundaries.
-- **Weight**: 0.12, taken from NN signal weights (not from periodicity/accent signals).
-- **Quality gate**: Skip on sparse or synthetic audio (non_silent frames < 0.15 of total). The GRU-RNN was trained on real music and produces unreliable results on click tracks and synthetic patterns.
+- **Integration**: For each candidate meter, run bar tracking with the corresponding beats-per-bar parameter. Score based on consistency and confidence of tracked bar boundaries.
+- **Weight**: 0.12, taken from NN signal weights (not from beat_periodicity/accent_pattern).
+- **Quality gate**: Skip on sparse or synthetic audio (non_silent frames < 0.15 of total). The GRU-RNN was trained on real music and produces unreliable results on click tracks.
 - **Result**: +2 net improvement over baseline (55/72 vs 53/72).
-- **Key insight**: Weight should be taken from NN signals (which are already partially correlated with bar tracking) rather than from periodicity/accent signals (which provide orthogonal information).
+- **Key insight**: Weight should be taken from NN signals (already partially correlated with bar tracking) rather than from beat_periodicity/accent_pattern (which provide orthogonal information).
 
-### 4.6 Signal 8: ResNet18 MFCC Classifier
+### 4.6 resnet_meter Signal (disabled)
 
-Signal 8 is a direct meter classification approach using a ResNet18 CNN trained on MFCC spectrograms from the METER2800 dataset. **Result: disabled (w=0) after thorough evaluation showed no ensemble benefit.**
+The resnet_meter signal is a direct meter classification approach using a ResNet18 CNN trained on MFCC spectrograms from the METER2800 dataset. **Result: disabled (W_RESNET=0.0) after thorough evaluation showed no ensemble benefit.**
 
 #### Training
 
-- **Dataset**: METER2800 (2800 files: FMA + MAG + OWN + GTZAN), balanced: 1200 class 3, 1200 class 4, 200 class 5, 200 class 7. Pre-defined splits: 1680 train, 420 val, 700 test.
-- **Architecture**: torchvision ResNet18, random initialization, 1-channel MFCC input (13 coefficients, n_mels=128, hop=512) resized to (1, 224, 224), 4-class output.
-- **Training**: CrossEntropyLoss with class weights, Adam (lr=1e-3), ReduceLROnPlateau. Early stopping at epoch 43 (patience 10).
+- **Dataset**: METER2800 (2800 files), balanced: 1200 class 3, 1200 class 4, 200 class 5, 200 class 7.
+- **Architecture**: torchvision ResNet18, random initialization, 1-channel MFCC input resized to (1, 224, 224), 4-class output.
+- **Training**: CrossEntropyLoss with class weights, Adam (lr=1e-3), ReduceLROnPlateau. Early stopping at epoch 43.
 - **Results**: 79.3% val, **75.4% test** (class 3: 83%, class 4: 80%, class 5: 46%, class 7: 34%).
-- **Note**: Initial training without GTZAN (only 1889 files, heavily skewed toward class 3) yielded only 71.2% test accuracy. GTZAN data from HuggingFace mirror was required for balanced training.
 
 #### Integration Attempts
 
-Three integration strategies were tested:
-
-| Strategy | w_resnet | Condition | Meter Accuracy | Regressions |
-|----------|----------|-----------|----------------|-------------|
+| Strategy | Weight | Condition | Meter Accuracy | Regressions |
+|----------|--------|-----------|----------------|-------------|
 | Global | 0.10 | Always active | 241/303 (80%) | 18 regressions |
 | Trust-gated | 0.10 | Only when avg NN trust < 0.5 | 235/303 (78%) | 21 regressions |
 | **Disabled** | **0.0** | Never active | **245/303 (81%)** | **0 regressions** |
 
-**Key finding**: Disabling Signal 8 and restoring original weights produced the **best result** of 245/303 (81%), +4 vs the saved baseline of 241/303.
-
-#### Root Cause Analysis
+#### Why It Failed: The Orthogonality Problem
 
 The model at 75% METER2800 accuracy is **not orthogonal** to the existing 7-signal ensemble:
-- Our full engine achieves 74% on METER2800 (see Section 4.7), nearly identical to the ResNet18 model.
-- The model's errors overlap substantially with the ensemble's errors -- it predicts similarly to what Signals 1--7 already produce.
-- Adding a correlated but noisier signal (75% vs 81%) can only shuffle correct/incorrect predictions, not systematically improve them.
-- Trust-gating made it worse because the model's accuracy drops further on the difficult low-trust files where it was supposed to help.
+- Our full engine achieves 74% on METER2800, nearly identical to the ResNet18 model.
+- The model's errors overlap substantially with the ensemble's errors.
+- Adding a correlated but noisier signal (75% vs 81%) can only shuffle correct/incorrect predictions.
+- Trust-gating paradox: the model's accuracy is *lower* on the difficult low-trust files where it was supposed to help.
 
-#### Conclusion
+#### Requirements for a Useful Classifier Signal
 
-For Signal 8 to be useful, the model needs to be either:
-1. **Substantially more accurate** (>90%) so it provides reliable corrections, or
-2. **Qualitatively different** in its error profile -- failing on different files than the existing signals.
+- **>90% standalone accuracy** -- corrections must outnumber errors at meaningful weight.
+- **Orthogonal error profile** -- failing on different files than the existing signals.
+- **Calibrated confidence** -- high-confidence predictions can be trusted, low-confidence ignored.
 
-Infrastructure (training pipeline, caching, graceful degradation) is complete and ready for a better model. Potential improvements: fine-tuning on our benchmark fixtures + METER2800 combined, mel spectrograms instead of MFCC, or domain adaptation techniques.
+### 4.7 METER2800 Evaluation
 
-### 4.7 METER2800 External Evaluation
+We evaluated our full engine (7 active signals, resnet_meter/mert_meter disabled) on the full METER2800 test split (700 files) using the unified evaluation script (`scripts/eval.py`) with subprocess isolation per file. Total runtime: approximately 2.5 hours. Results are reported in Section 2.2.
 
-We evaluated our full engine (7 active signals, Signal 8 disabled) on the METER2800 test split using subprocess isolation per file (to avoid BeatNet/madmom threading deadlocks).
+**Critical finding**: Our system essentially does not work on odd meters (5/4: 2%, 7/4: 4%). This is a fundamental limitation of the current architecture, which is heavily biased toward common Western meters. The rarity penalties applied to 5/4 and 7/4 actively suppress these meters.
 
-| Metric | Result |
-|--------|--------|
-| Overall (50 files) | 37/50 (74%) |
-| Meter 3 | 78% |
-| Meter 4 | 88% |
-| Meter 5 | 0% (4 files) |
-| Meter 7 | 33% (3 files) |
-| Binary 3 vs 4 only | 36/43 (84%) |
+### 4.8 mert_meter Signal (disabled)
 
-**Comparison to literature**: On the common 3/4 vs 4/4 binary task, our 84% is comparable to the ResNet18 paper's 88% (Abimbola et al., EURASIP 2024). Our system is particularly strong on 4/4 (88%) but weaker on 3/4 (78%), reflecting the NN 3/4 penalty that prevents false triple-meter predictions on our benchmark.
+The mert_meter signal uses MERT (Music undERstanding model with large-scale self-supervised Training), a 95M parameter music foundation model pre-trained on 160K hours of music, as a frozen feature extractor. Unlike resnet_meter (ResNet18 on MFCC), MERT captures high-level musical structure through 12 transformer layers.
 
-**Note**: Results are on 50 files (--limit 50 default). Full evaluation of all 700 test files (~2.5 hours) is planned but not yet completed.
+#### Architecture
+
+```
+Audio (22050 Hz) --> resample to 24 kHz --> center crop 30s
+    --> 5-second non-overlapping chunks
+    --> MERT-v1-95M (frozen, HuggingFace: m-a-p/MERT-v1-95M)
+    --> hidden states from layer 3 (best of 12), shape (T, 768)
+    --> mean + max pooling per chunk --> (1536,) per chunk
+    --> mean of means + max of maxes across chunks --> (1536,)
+MLP Classifier:
+    Linear(1536, 256) --> ReLU --> Dropout(0.3) --> Linear(256, 4)
+    --> softmax --> {3: prob, 4: prob, 5: prob, 7: prob}
+Score mapping --> dict[(num, den), float]
+```
+
+#### Training
+
+- **Dataset**: METER2800, pre-extracted embeddings (avoiding recomputing MERT features each epoch).
+- **Layer sweep**: All 12 MERT transformer layers evaluated independently (15 epochs each). **Best layer: 3** (an early layer), contrary to the expectation that higher layers capture more abstract musical features.
+- **Classifier**: MLP with 256 hidden units, 0.3 dropout, CrossEntropyLoss (inverse-frequency class weights), Adam (lr=1e-3), early stopping (patience=15).
+- **Results**: 84.5% val, **80.7% test** (+5.3pp over resnet_meter's 75.4%).
+  - Class 3: 85.7%, Class 4: 89.0%, Class 5: 40%, Class 7: 42%
+
+#### Orthogonality Evaluation
+
+Orthogonality was tested on 272 internal benchmark fixtures:
+
+| Metric | Engine | MERT |
+|--------|--------|------|
+| Accuracy | 81.2% (221/272) | 67.6% (184/272) |
+
+Agreement matrix:
+
+| Both correct | Both wrong | Engine only (LOSSES) | MERT only (GAINS) |
+|---|---|---|---|
+| 153 (56.2%) | 20 (7.4%) | 68 (25.0%) | 31 (11.4%) |
+
+- **Agreement rate**: 63.6% (within target 0.65-0.80 -- MERT has a different view)
+- **Complementarity ratio**: 0.46 (31 gains / 68 losses) -- **FAIL** (target: >1.5)
+
+#### Analysis of Gains and Losses
+
+**GAINS** (31 files where MERT correct, engine wrong):
+- MERT excels at detecting 3/4 in classical/romantic music: Chopin waltzes, mazurkas, Blue Danube, Bach sarabandes, Offenbach barcarolle
+- MERT correctly predicts 4/4 where engine falsely predicts 3/4: blues, jazz fox-trots, marches
+
+**LOSSES** (68 files where engine correct, MERT wrong):
+- MERT over-predicts 7/4 on percussion-heavy music: jazz ride patterns, shuffle beats, djembe
+- MERT over-predicts 5/4 on jigs and tarantellas (6/8 music)
+- MERT predicts 3/4 instead of 4/4 on many marches, polkas, tangos
+
+#### Why 80.7% Is Still Not Enough
+
+Despite being 5.3pp more accurate than resnet_meter on METER2800, mert_meter achieves only 67.6% on our benchmark fixtures (worse than engine's 81.2%). The loss ratio is 2.2:1, making integration harmful at any global weight.
+
+**Best layer 3 finding**: Layer 3 outperforming layer 11 suggests that low-level rhythmic features (closer to the audio surface) are more useful for meter classification than high-level semantic features. This is consistent with meter being a relatively low-level property compared to genre or key.
+
+#### Potential Improvements
+
+1. **Fine-tune MERT**: Unfreeze last 2-3 transformer layers and fine-tune on METER2800. Should adapt higher layers to capture meter-specific features.
+2. **Confidence gating**: Only use predictions when softmax confidence exceeds 0.8. Would eliminate many false 7/4 and 5/4 predictions.
+3. **Larger MLP**: Two hidden layers (1536 --> 512 --> 128 --> 4) or attention pooling instead of mean+max.
+4. **Multi-layer concatenation**: Combine features from layers 3, 7, and 11 for a richer representation.
 
 ## 5. Failure Analysis
 
-We analyzed the 58 incorrectly classified files from Round 5 and identified three recurring failure patterns.
+We analyzed incorrectly classified files and identified three recurring failure patterns.
 
-### 5.1 Pattern A: Periodicity Forces 3/4 on Duple Music
+### 5.1 Pattern A: beat_periodicity Forces 3/4 on Duple Music
 
-**Mechanism**: When all neural network trackers are untrusted (alignment < 0.4), their combined weight (0.39) is redistributed. Signal 5 (beat strength periodicity, w=0.24) becomes the dominant signal. In certain duple-meter music with strong beat-level accent patterns at period 3, Signal 5 scores 3/4 at up to 3.7x the 4/4 score.
+**Mechanism**: When all neural network trackers are untrusted (alignment < 0.4), their combined weight (0.39) is redistributed. beat_periodicity (w=0.20) becomes the dominant signal. In certain duple-meter music with strong beat-level accent patterns at period 3, beat_periodicity scores 3/4 at up to 3.7x the 4/4 score.
 
 **Affected genres**: Marches, ragtime, blues with walking bass.
-
-**Example files**: erika_march, march_grandioso, lost_train_blues, several ragtime files.
 
 **Root cause**: A strong rhythmic pattern repeating every 3 beats in the RMS energy does not necessarily indicate 3/4 meter -- it can arise from syncopation patterns in 4/4 music (e.g., ragtime left-hand patterns: bass-chord-chord, repeating).
 
 **Mitigations applied**:
-- NN 3/4 penalty: when all NNs favor even meters, 3/4 score x 0.55.
-- Periodicity weight cap: reduce Signal 5 effective weight when all NNs are untrusted.
-
-**Remaining gap**: Signal 8 (ResNet18) was expected to help as a trust-independent signal, but at 75% accuracy it proved too noisy to correct these cases (see Section 4.6). A higher-accuracy model or genre-specific handling may be needed.
+- NN 3/4 penalty: when all NNs favor even meters, 3/4 score × 0.55.
+- beat_periodicity weight cap: reduce to W_PERIODICITY_CAPPED (0.16) when all NNs are untrusted.
 
 ### 5.2 Pattern B: False Compound /8 Detection
 
-**Mechanism**: The compound meter detector counts onsets between consecutive beats. Certain non-compound music produces onset counts in the 1.5--3.5 range, falsely triggering compound detection.
+**Mechanism**: The sub_beat_division signal counts onsets between consecutive beats. Certain non-compound music produces onset counts in the 1.5--3.5 range, falsely triggering compound detection.
 
 **Sources of false positives**:
 - Accompaniment arpeggios (waltz Alberti bass: 3 notes per beat)
 - Ornamental passages (Bach sarabande trills)
 - Polka off-beat accompaniment patterns
 
-**Affected files**: polka_tritsch_tratsch, sarabande_bach, waltz_stefan, several classical pieces.
-
 **Mitigations applied**:
 - Evenness check: CV of inter-onset intervals > 0.4 indicates irregular subdivision, not compound meter.
-- Triplet position check: onsets must be near 1/3 and 2/3 positions, not arbitrary positions within the beat.
-
-**Remaining gap**: Some files with very regular arpeggios still pass both checks. Additional spectral analysis (checking if subdivisions have consistent timbral characteristics) may help.
+- Triplet position check: onsets must be near 1/3 and 2/3 positions.
 
 ### 5.3 Pattern C: Trust Gate Too Strict for Expressive Music
 
-**Mechanism**: Classical and folk music with rubato (tempo flexibility), ornamentation, and complex textures produces low onset alignment scores (0.25--0.37), below the trust threshold of 0.4. This disables all neural network signals, leaving only Signals 3--5 (onset autocorrelation, accent pattern, periodicity). These signals alone achieve approximately 65% accuracy compared to approximately 85% when NN signals are active.
-
-**Affected genres**: Classical (69%), folk (55%), waltz (68%), barcarolle (62%).
-
-**Scope**: 8 of the 10 worst-performing files fall into this pattern.
+**Mechanism**: Classical and folk music with rubato, ornamentation, and complex textures produces low onset alignment scores (0.25--0.37), below the trust threshold of 0.4. This disables all NN signals, leaving only onset_autocorrelation, accent_pattern, and beat_periodicity. These signals alone achieve approximately 65% accuracy compared to approximately 85% when NN signals are active.
 
 **Mitigations applied**:
-- Signal 7 (DBNBarTrackingProcessor): Independent of trust gating, provides some NN-derived information even when Signals 1a/1b/2 are disabled.
-- Signal 8 (ResNet18): Also independent of trust gating, but at 75% accuracy proved too noisy to help (see Section 4.6). Currently disabled.
+- bar_tracking: Independent of trust gating, provides NN-derived information even when downbeat_spacing/madmom_activation are disabled.
+- resnet_meter: Also independent of trust gating, but at 75% accuracy proved too noisy (see Section 4.6). Disabled.
 
-**Remaining gap**: Lowering the trust threshold (see Section 4.2) is not viable because it causes compound meter regressions. A better approach may be tracker-specific trust thresholds (Beat This! may warrant a lower threshold than BeatNet due to higher baseline quality). Alternatively, a substantially more accurate spectrogram classifier (>90%) could address this pattern.
+**Remaining gap**: Lowering the trust threshold causes compound meter regressions (see Section 4.2). Tracker-specific trust thresholds (lower for Beat This!, higher for BeatNet) or a substantially more accurate classifier (>90%) could address this.
 
-## 6. Signal 8: ResNet18 Classifier -- Lessons Learned
+## 6. Lessons Learned from Classifier Experiments
 
-### 6.1 Motivation and Hypothesis
+### 6.1 Motivation
 
-The fundamental limitation of Signals 1--7 is their shared dependency on beat detection. When the audio is challenging for beat trackers (rubato, complex polyphony, unusual timbres), most signals degrade simultaneously. A classifier that operates directly on the audio spectrogram, without any intermediate beat detection step, was hypothesized to provide a truly orthogonal source of information.
+The fundamental limitation of the active signals is their shared dependency on beat detection. When audio is challenging for beat trackers (rubato, complex polyphony, unusual timbres), most signals degrade simultaneously. A classifier operating directly on audio features was hypothesized to provide orthogonal information.
 
-The ResNet18 MFCC approach from Abimbola et al. (EURASIP 2024) reports 88% standalone accuracy on binary meter classification (3 vs 4). Our goal was to replicate this and integrate it as Signal 8.
+### 6.2 resnet_meter (75.4% test)
 
-### 6.2 Architecture and Training
+- ResNet18 on MFCC spectrograms. Training and integration details in Section 4.6.
+- **Key failure**: At 75%, model accuracy matches the ensemble's 74% on METER2800. Correlated errors → 18 regressions.
 
-- **Backbone**: torchvision.models.resnet18 with random initialization.
-- **Input**: MFCC features (13 coefficients, n_mels=128, hop_length=512), center 30s crop, resized to (1, 224, 224), replicated to 3 channels.
-- **Output**: 4-class softmax over meters 3, 4, 5, and 7 (matching METER2800 class labels).
-- **Training**: CrossEntropyLoss with inverse-frequency class weights, Adam (lr=1e-3, weight_decay=1e-4), ReduceLROnPlateau, early stopping.
-- **Data**: Full METER2800 dataset (2800 files), pre-defined train/val/test splits. GTZAN subset required separate download from HuggingFace mirror (not included in Harvard Dataverse).
-- **Result**: 79.3% val accuracy, **75.4% test accuracy** (class 3: 83%, class 4: 80%, class 5: 46%, class 7: 34%).
+### 6.3 mert_meter (80.7% test)
 
-### 6.3 Integration and Failure
+- MERT-v1-95M frozen encoder + MLP. Training and integration details in Section 4.8.
+- **Key failure**: Despite better accuracy (+5.3pp), only 67.6% on our benchmark fixtures vs engine's 81.2%. Loss ratio 2.2:1.
+- **Strength**: Genuine advantage on classical 3/4 (waltzes, mazurkas, sarabandes).
+- **Weakness**: Over-predicts odd meters (7/4, 5/4) on percussion/modern music.
 
-- **Score mapping**: Class probabilities mapped to candidate meters:
-  - Class 3 --> (3,4): 1.0, (6,8): 0.4
-  - Class 4 --> (4,4): 1.0, (2,4): 0.3, (12,8): 0.2
-  - Class 5 --> (5,4): 1.0, Class 7 --> (7,4): 1.0
-- **Graceful degradation**: If model file not found, returns empty dict, zero effective weight.
+### 6.4 Takeaways
 
-Three integration strategies were tested (see Section 4.6 for details). All active variants caused 18--21 regressions with zero net improvement. The disabled configuration (w=0.0) produced the best benchmark result of 245/303 (81%).
+For a classifier signal to genuinely help the ensemble, it must:
+1. Achieve **>90% standalone accuracy** on the evaluation dataset
+2. Have an **orthogonal error profile** -- failing on different files than existing signals
+3. Provide **calibrated confidence** -- so integration can be gated on certainty
+4. Pass the **gate check**: complementarity ratio >1.5 (gains/losses)
 
-### 6.4 Why It Failed: The Orthogonality Problem
-
-The a priori expectation was that Signal 8 errors would be independent of existing signal errors. This turned out to be wrong:
-
-1. **Similar overall accuracy**: The ResNet18 model achieves 75% on METER2800, while our full 7-signal engine achieves 74% on the same dataset. The model is not substantially better than the system it's trying to augment.
-
-2. **Correlated errors**: Both the model and the existing signals struggle on the same difficult files -- those with unusual timbres, complex textures, or ambiguous rhythmic structure. The model does not "fill in the gaps" where existing signals fail.
-
-3. **Noise injection**: At 75% accuracy, approximately 1 in 4 predictions is wrong. When these wrong predictions are added to the ensemble (even at low weight), they flip previously correct predictions -- hence the 18 regressions.
-
-4. **Trust-gating paradox**: Using the model only when NN trust is low (i.e., on difficult files) made things worse because the model's accuracy is *lower* on difficult files, precisely the opposite of what's needed.
-
-### 6.5 Requirements for a Useful Signal 8
-
-For a spectrogram classifier to genuinely help the ensemble, it would need:
-
-- **>90% standalone accuracy** -- high enough that its corrections outnumber its errors when added at meaningful weight.
-- **Orthogonal error profile** -- failing on different files than Signals 1--7. This may require training on different features (e.g., mel spectrograms, tempograms) or using architectures that capture different musical properties.
-- **Calibrated confidence** -- so that high-confidence predictions can be trusted and low-confidence predictions ignored.
-
-Potential improvements: fine-tuning on our benchmark fixtures + METER2800 combined, using mel spectrograms or tempograms instead of MFCC, domain adaptation, or ensemble of multiple classifiers (EfficientNet, Vision Transformer).
+Infrastructure for both approaches (training pipelines, embedding cache, graceful degradation) is complete and ready for improved models.
 
 ## 7. Potential Contributions
 
-1. **Multi-signal ensemble with trust gating** -- A novel approach to meter detection that combines 8 independent analysis signals with alignment-based trust weighting. Unlike prior work that typically uses a single pipeline (beat tracking followed by meter inference), our approach leverages multiple complementary signals and dynamically adjusts their influence based on quality indicators.
+1. **Multi-signal ensemble with trust gating** -- A novel approach combining 7 independent analysis signals with alignment-based trust weighting. Unlike single-pipeline approaches, this leverages complementary signals and dynamically adjusts their influence based on quality indicators.
 
-2. **Consensus bonus mechanism** -- A cross-signal agreement reward that amplifies predictions supported by multiple independent signals. We show this outperforms Product-of-Experts fusion (Section 4.1), which is brittle to individual signal failures.
+2. **Consensus bonus mechanism** -- Cross-signal agreement reward that outperforms Product-of-Experts fusion (Section 4.1), which is brittle to individual signal failures.
 
-3. **Trust-gated neural network weighting** -- Quality-aware signal fusion based on onset alignment F1 scores. This addresses the practical problem that neural beat trackers produce confident but incorrect outputs on out-of-distribution audio, and naively trusting them degrades ensemble performance.
+3. **Trust-gated neural network weighting** -- Quality-aware signal fusion based on onset alignment F1. Addresses the problem that neural beat trackers produce confident but incorrect outputs on out-of-distribution audio.
 
-4. **Comprehensive multi-genre benchmark** -- A 303-test benchmark spanning 20 musical categories, with manually verified ground truth and 272 real audio files from public-domain sources (Wikimedia Commons). This is more diverse than existing meter detection benchmarks, which typically focus on Western popular music or specific genres (e.g., Ballroom Extended).
+4. **Comprehensive evaluation on METER2800** -- 88.2% on binary 3/4 vs 4/4, comparable to the original ResNet18 paper. Unified evaluation framework (`scripts/eval.py`) with per-tracker caching, parallel workers, stratified sampling, run snapshots, and regression detection.
 
-5. **Failure taxonomy for meter detection** -- We identify and characterize three systematic failure patterns (periodicity-driven false triple meter, false compound meter detection, and trust gate strictness) with specific mitigations for each. This taxonomy may guide future meter detection research by highlighting the most impactful areas for improvement.
+5. **Failure taxonomy for meter detection** -- Three systematic failure patterns (beat_periodicity-driven false triple, false compound detection, trust gate strictness) with specific mitigations.
 
-6. **Negative result: orthogonality assumption** -- We demonstrate that a direct spectrogram classifier (ResNet18, 75% accuracy) does *not* provide orthogonal information to beat-tracking-based signals, contrary to the a priori assumption. The model's errors overlap substantially with the ensemble's errors, and integration at any weight causes regressions. This negative result provides a useful calibration for future work: ensemble signals must not only be individually accurate but must have genuinely different failure modes to provide ensemble benefit.
+6. **Negative results: two orthogonality experiments** -- resnet_meter (75%) and mert_meter (80.7%) both fail to improve the ensemble. Demonstrates that classifier signals must not only be individually accurate but must *outperform* the existing system on the files where it fails.
 
 ## 8. Future Work
 
-1. **Folk ground truth review** -- The worst-performing category (50% accuracy), likely has many incorrectly tagged files (valses, ballads, and other forms mixed in). Ground truth review is the highest-priority next step.
+1. **Fine-tune MERT** -- Unfreeze last 2-3 transformer layers and train on METER2800. Target >90% test accuracy. The frozen-encoder approach (mert_meter) achieved 80.7% but failed the gate check (31 gains/68 losses). Fine-tuning should significantly improve accuracy.
 
-2. **Improved spectrogram classifier** -- Signal 8 infrastructure is complete but the ResNet18 model at 75% METER2800 accuracy is insufficient. Potential paths:
-   - Fine-tune on our benchmark fixtures + METER2800 combined (domain adaptation)
-   - Use mel spectrograms or tempograms instead of MFCC
-   - Try larger architectures (EfficientNet, Vision Transformer)
-   - Target >90% accuracy with orthogonal error profile
+2. **MERT confidence gating** -- Only use mert_meter predictions when softmax confidence exceeds 0.8. Could eliminate many false 7/4 and 5/4 predictions while preserving gains on classical 3/4.
 
-3. **Full METER2800 evaluation** -- Run on all 700 test files (currently evaluated on 50). Requires ~2.5 hours of compute. Would provide a more reliable external accuracy estimate.
+3. **Odd meter improvement** -- 5/4 at 2% and 7/4 at 4% on METER2800 test split is essentially broken. Requires both model improvements and reduced rarity penalties.
 
-4. **Waltz/classical 3/4 detection** -- 73%/92% accuracy. Fast Chopin waltzes are misclassified as 4/4. Tracker-specific trust thresholds (lower for Beat This!, higher for BeatNet) may help.
+4. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
 
-5. **Benchmark expansion to non-Western music** -- Our current benchmark is predominantly Western music. Expanding to include Hindustani, Carnatic, Afro-Cuban, and other traditions with complex meter structures (e.g., tala systems with 7, 10, 16 beats) would test generalization.
+5. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters (3/4, 5/4, 7/4) from abundant 4/4 data.
 
-6. **Inference speed optimization** -- Full benchmark evaluation takes approximately 4 minutes with caching and approximately 45 minutes without. Multiprocessing could reduce cache-miss time significantly.
-
-7. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters (3/4, 5/4, 7/4) from the abundant 4/4 data available.
-
-8. **Real-time meter tracking** -- The current system analyzes complete audio files. Extending to real-time streaming analysis with adaptive meter tracking (potentially integrating BEAST-style streaming architectures) would enable live performance applications.
+6. **Real-time meter tracking** -- Extending to real-time streaming analysis with adaptive meter tracking (potentially integrating BEAST-style streaming architectures) for live performance applications.
 
 ## References
 
-1. Foscarin, F., Schluter, J., and Widmer, G. "Beat This! Accurate Beat Tracking Without DBN." Proc. of the International Society for Music Information Retrieval Conference (ISMIR), 2024. [arXiv:2407.21658](https://arxiv.org/abs/2407.21658)
+1. Foscarin, F., Schluter, J., and Widmer, G. "Beat This! Accurate Beat Tracking Without DBN." Proc. ISMIR, 2024. [arXiv:2407.21658](https://arxiv.org/abs/2407.21658)
 
-2. Abimbola, O., Akinola, S., and Adetunmbi, A. "Time signature classification using MFCC feature extraction and ResNet18." EURASIP Journal on Audio, Speech, and Music Processing, 2024. [DOI:10.1186/s13636-024-00346-6](https://link.springer.com/article/10.1186/s13636-024-00346-6)
+2. Abimbola, O., Akinola, S., and Adetunmbi, A. "Time signature classification using MFCC feature extraction and ResNet18." EURASIP J. Audio, Speech, Music Process., 2024. [DOI:10.1186/s13636-024-00346-6](https://link.springer.com/article/10.1186/s13636-024-00346-6)
 
-3. Abimbola, O., Akinola, S., and Adetunmbi, A. "METER2800: A dataset for time signature classification." Data in Brief, vol. 51, 2023. [DOI:10.7910/DVN/0CLXBQ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/0CLXBQ) | [PMC:10700346](https://pmc.ncbi.nlm.nih.gov/articles/PMC10700346/)
+3. Abimbola, O., Akinola, S., and Adetunmbi, A. "METER2800: A dataset for time signature classification." Data in Brief, vol. 51, 2023. [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/0CLXBQ) | [PMC:10700346](https://pmc.ncbi.nlm.nih.gov/articles/PMC10700346/)
 
-4. Morais, G., Fuentes, M., and McFee, B. "Skip That Beat: Augmenting Meter Tracking Models for Underrepresented Time Signatures." LAMIR / ISMIR Late-Breaking Demo, 2024. [GitHub](https://github.com/giovana-morais/skip_that_beat)
+4. Morais, G., Fuentes, M., and McFee, B. "Skip That Beat: Augmenting Meter Tracking Models for Underrepresented Time Signatures." LAMIR / ISMIR LBD, 2024. [GitHub](https://github.com/giovana-morais/skip_that_beat)
 
-5. Hydri, S., Bock, S., and Widmer, G. "BeatNet+: Auxiliary training for percussive-invariant beat tracking." Transactions of the International Society for Music Information Retrieval (TISMIR), 2024. [DOI:10.5334/tismir.198](https://transactions.ismir.net/articles/10.5334/tismir.198)
+5. Hydri, S., Bock, S., and Widmer, G. "BeatNet+: Auxiliary training for percussive-invariant beat tracking." TISMIR, 2024. [DOI:10.5334/tismir.198](https://transactions.ismir.net/articles/10.5334/tismir.198)
 
-6. Liang, J. and Mysore, G. "BEAST: Online Joint Beat and Downbeat Tracking Based on Streaming Transformer." Proc. IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), 2024. [arXiv:2312.17156](https://arxiv.org/abs/2312.17156)
+6. Liang, J. and Mysore, G. "BEAST: Online Joint Beat and Downbeat Tracking Based on Streaming Transformer." Proc. ICASSP, 2024. [arXiv:2312.17156](https://arxiv.org/abs/2312.17156)
 
-7. Ballroom Extended Dataset. Available via mirdata. [mirdata documentation](https://mirdata.readthedocs.io/)
+7. Ballroom Extended Dataset. Available via [mirdata](https://mirdata.readthedocs.io/).
 
 8. Ramos, D., Bittner, R., Bello, J. P., and Humphrey, E. "Time Signature Detection: A Survey." Sensors, vol. 21, no. 19, 2021. [DOI:10.3390/s21196494](https://www.mdpi.com/1424-8220/21/19/6494)
+
+9. Li, Y., Yuan, R., Zhang, G., et al. "MERT: Acoustic Music Understanding Model with Large-Scale Self-supervised Training." Proc. ICLR, 2024. [arXiv:2306.00107](https://arxiv.org/abs/2306.00107)

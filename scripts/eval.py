@@ -1,0 +1,562 @@
+#!/usr/bin/env python3
+"""Unified evaluation script for meter detection.
+
+Uses subprocess isolation per file to avoid BeatNet/madmom deadlocks.
+Beat tracking cached via AnalysisCache (per-tracker, smart invalidation).
+Parallel execution via persistent WorkerPool for ~4x speedup.
+
+Usage:
+    uv run python scripts/eval.py --limit 3 --workers 1   # smoke test
+    uv run python scripts/eval.py --quick                  # stratified 100 (~20 min)
+    uv run python scripts/eval.py --split test --limit 0   # hold-out 700
+    uv run python scripts/eval.py --save                   # save baseline
+    uv run python scripts/eval.py --verbose                # per-file details
+    uv run python scripts/eval.py --meter 5                # only meter 5
+"""
+
+import argparse
+import csv
+import json
+import os
+import random
+import subprocess
+import sys
+import threading
+import time
+import warnings
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.utils import resolve_audio_path
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+WORKER_SCRIPT = PROJECT_ROOT / "scripts" / "eval_worker.py"
+RUNS_DIR = PROJECT_ROOT / "data" / "runs"
+
+# ---------------------------------------------------------------------------
+# Dataset registry
+# ---------------------------------------------------------------------------
+
+
+def load_meter2800_entries(
+    data_dir: Path, split: str
+) -> list[tuple[Path, int]]:
+    """Load entries for a METER2800 split from .tab label files.
+
+    split='tuning' combines train+val (2100 files).
+    """
+    if split == "tuning":
+        entries = []
+        for sub in ("train", "val"):
+            entries.extend(load_meter2800_entries(data_dir, sub))
+        return entries
+
+    for ext in (".tab", ".csv", ".tsv"):
+        label_path = data_dir / f"data_{split}_4_classes{ext}"
+        if label_path.exists():
+            entries = []
+            with open(label_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    fname = row["filename"].strip('"')
+                    meter = int(row["meter"])
+                    audio_path = resolve_audio_path(fname, data_dir)
+                    if audio_path:
+                        entries.append((audio_path, meter))
+            return entries
+    return []
+
+
+DATASETS = {
+    "meter2800": {
+        "data_dir": Path("data/meter2800"),
+        "loader": load_meter2800_entries,
+        "splits": ["train", "val", "test", "tuning"],
+        "classes": [3, 4, 5, 7],
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Sampling
+# ---------------------------------------------------------------------------
+
+
+def stratified_sample(
+    entries: list[tuple[Path, int]], n: int = 100, seed: int = 42
+) -> list[tuple[Path, int]]:
+    """Stratified sample: proportional to class size, minimum 1 per class."""
+    by_class: dict[int, list[tuple[Path, int]]] = {}
+    for e in entries:
+        by_class.setdefault(e[1], []).append(e)
+
+    total = len(entries)
+    rng = random.Random(seed)
+    sampled: list[tuple[Path, int]] = []
+
+    remaining = n
+    allocations: dict[int, int] = {}
+    for meter, items in sorted(by_class.items()):
+        alloc = max(1, round(len(items) / total * n))
+        allocations[meter] = min(alloc, len(items))
+        remaining -= allocations[meter]
+
+    if remaining > 0:
+        for meter in sorted(by_class, key=lambda m: len(by_class[m]), reverse=True):
+            add = min(remaining, len(by_class[meter]) - allocations[meter])
+            if add > 0:
+                allocations[meter] += add
+                remaining -= add
+            if remaining <= 0:
+                break
+
+    for meter, items in sorted(by_class.items()):
+        sampled.extend(rng.sample(items, allocations.get(meter, 0)))
+
+    rng.shuffle(sampled)
+    return sampled
+
+
+# ---------------------------------------------------------------------------
+# Persistent worker pool
+# ---------------------------------------------------------------------------
+
+
+class WorkerPool:
+    """Pool of persistent subprocess workers. Each loads the engine once."""
+
+    def __init__(self, n_workers: int):
+        self.workers: list[subprocess.Popen] = []
+        self._lock = threading.Lock()
+        self._available: list[subprocess.Popen] = []
+        self._condition = threading.Condition(self._lock)
+
+        print(f"  Starting {n_workers} workers...", flush=True)
+        for _ in range(n_workers):
+            w = subprocess.Popen(
+                [sys.executable, str(WORKER_SCRIPT)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+            )
+            ready = w.stdout.readline().strip()
+            if ready != "READY":
+                raise RuntimeError(f"Worker failed to start: {ready}")
+            self.workers.append(w)
+            self._available.append(w)
+        print(f"  All {n_workers} workers ready.\n", flush=True)
+
+    def analyze(self, audio_path: Path) -> dict:
+        """Send file to an available worker, return result."""
+        with self._condition:
+            while not self._available:
+                self._condition.wait()
+            worker = self._available.pop()
+
+        try:
+            worker.stdin.write(str(audio_path) + "\n")
+            worker.stdin.flush()
+            line = worker.stdout.readline().strip()
+            if line:
+                result = json.loads(line)
+            else:
+                result = {"meter": None, "bpm": None}
+        except (json.JSONDecodeError, BrokenPipeError, OSError):
+            result = {"meter": None, "bpm": None}
+
+        with self._condition:
+            self._available.append(worker)
+            self._condition.notify()
+
+        return result
+
+    def shutdown(self):
+        for w in self.workers:
+            try:
+                w.stdin.close()
+                w.wait(timeout=5)
+            except Exception:
+                w.kill()
+
+
+def process_one_file(
+    pool: WorkerPool,
+    audio_path: Path,
+    expected_meter: int,
+) -> dict:
+    """Process a single file through the worker pool."""
+    fname = audio_path.name
+    result = pool.analyze(audio_path)
+    predicted = result.get("meter")
+    bpm = result.get("bpm")
+
+    return {
+        "fname": fname,
+        "expected": expected_meter,
+        "predicted": predicted,
+        "bpm": bpm,
+        "ok": predicted == expected_meter,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Run snapshots
+# ---------------------------------------------------------------------------
+
+
+def load_latest_run() -> dict | None:
+    """Load the most recent saved run snapshot."""
+    if not RUNS_DIR.exists():
+        return None
+    runs = sorted(RUNS_DIR.glob("*.json"))
+    if not runs:
+        return None
+    try:
+        return json.loads(runs[-1].read_text())
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def detect_regressions(
+    current_by_class: dict[int, tuple[int, int]],
+    previous: dict | None,
+) -> list[str]:
+    """Compare current per-class results to previous and list regressions."""
+    if previous is None:
+        return []
+
+    prev_by_class = previous.get("per_class", {})
+    regressions = []
+    for meter_str, prev_data in prev_by_class.items():
+        meter = int(meter_str)
+        prev_correct = prev_data["correct"]
+        prev_total = prev_data["total"]
+        if meter in current_by_class:
+            cur_correct, cur_total = current_by_class[meter]
+            if cur_correct < prev_correct and cur_total >= prev_total:
+                regressions.append(
+                    f"  REGRESSION meter {meter}: was {prev_correct}/{prev_total}, "
+                    f"now {cur_correct}/{cur_total}"
+                )
+    return regressions
+
+
+def save_run(
+    file_results: list[dict],
+    correct: int,
+    total: int,
+    correct_by_class: Counter,
+    total_by_class: Counter,
+    dataset: str,
+    split: str,
+    classes: list[int],
+    elapsed: float,
+):
+    """Save a full run snapshot to runs/ directory."""
+    per_class = {}
+    for m in classes:
+        t = total_by_class[m]
+        c = correct_by_class[m]
+        if t > 0:
+            per_class[str(m)] = {"correct": c, "total": t}
+
+    snapshot = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "dataset": dataset,
+        "split": split,
+        "total": total,
+        "correct": correct,
+        "accuracy": round(correct / total * 100, 1) if total > 0 else 0,
+        "elapsed_s": round(elapsed, 1),
+        "per_class": per_class,
+        "files": file_results,
+    }
+
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = RUNS_DIR / f"{ts}.json"
+    path.write_text(json.dumps(snapshot, indent=2))
+    print(f"\n  Saved to {path}")
+
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+
+def _pct(c: int, t: int) -> str:
+    if t == 0:
+        return "  -  "
+    return f"{c / t * 100:.1f}%"
+
+
+def print_summary(
+    correct: int,
+    total: int,
+    correct_by_class: Counter,
+    total_by_class: Counter,
+    classes: list[int],
+    elapsed: float,
+    dataset: str,
+    split_label: str,
+    n_entries: int,
+):
+    """Print formatted summary table."""
+    w = 50
+    print(flush=True)
+    print(f"  {'━' * w}", flush=True)
+    overall_pct = _pct(correct, total) if total > 0 else "–"
+    print(
+        f"  {dataset.upper()} {split_label}:  {correct}/{total} ({overall_pct})"
+        f"   [{elapsed:.0f}s]",
+        flush=True,
+    )
+    print(f"  {'━' * w}", flush=True)
+
+    for m in classes:
+        t = total_by_class[m]
+        c = correct_by_class[m]
+        if t > 0:
+            print(f"    {m}/x   {c:>4d}/{t:<4d}  {_pct(c, t):>6s}", flush=True)
+
+    # Binary 3+4 accuracy
+    binary_total = total_by_class[3] + total_by_class[4]
+    binary_correct = correct_by_class[3] + correct_by_class[4]
+    if binary_total > 0:
+        print(f"    {'─' * 26}", flush=True)
+        print(
+            f"    3+4  {binary_correct:>4d}/{binary_total:<4d}  {_pct(binary_correct, binary_total):>6s}",
+            flush=True,
+        )
+
+    print(f"  {'━' * w}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Unified evaluation for meter detection"
+    )
+    parser.add_argument(
+        "dataset",
+        nargs="?",
+        default="meter2800",
+        choices=list(DATASETS.keys()),
+        help="Dataset to evaluate on (default: meter2800)",
+    )
+    parser.add_argument("--data-dir", type=Path, default=None,
+                        help="Override dataset data directory")
+    parser.add_argument(
+        "--split",
+        default="tuning",
+        help="Data split (default: tuning). Use 'test' for hold-out.",
+    )
+    parser.add_argument("--limit", type=int, default=100,
+                        help="Max files (0=all, default=100)")
+    parser.add_argument("--quick", action="store_true",
+                        help="Stratified 100 from tuning split")
+    parser.add_argument("--meter", type=int, default=0,
+                        help="Filter by meter class (3, 4, 5, 7)")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="Parallel workers (default: cpu_count//2, 1=sequential)",
+    )
+    parser.add_argument("--save", action="store_true",
+                        help="Save run snapshot for history & regression tracking")
+    args = parser.parse_args()
+
+    ds_config = DATASETS[args.dataset]
+    data_dir = (args.data_dir or ds_config["data_dir"]).resolve()
+    classes = ds_config["classes"]
+    loader = ds_config["loader"]
+
+    # Validate split
+    valid_splits = ds_config["splits"]
+    if args.split not in valid_splits:
+        print(f"ERROR: Invalid split '{args.split}' for {args.dataset}. "
+              f"Valid: {valid_splits}")
+        sys.exit(1)
+
+    # --quick and --save imply tuning split, 100 stratified
+    if args.save and not args.quick and args.limit == 100 and args.split == "tuning":
+        args.quick = True
+    if args.quick:
+        args.split = "tuning"
+
+    entries = loader(data_dir, args.split)
+    if not entries:
+        print(f"ERROR: No entries found for split '{args.split}' in {data_dir}")
+        sys.exit(1)
+
+    # Filter by meter class
+    if args.meter > 0:
+        entries = [(p, m) for p, m in entries if m == args.meter]
+        if not entries:
+            print(f"ERROR: No files with meter={args.meter}")
+            sys.exit(1)
+
+    # Apply sampling/limit
+    if args.quick:
+        entries = stratified_sample(entries, n=100)
+    elif args.limit > 0:
+        entries = entries[: args.limit]
+
+    # Determine worker count
+    max_workers = args.workers
+    if max_workers <= 0:
+        max_workers = max(1, (os.cpu_count() or 4) // 2)
+    max_workers = min(max_workers, len(entries))
+
+    split_label = args.split
+    if args.quick:
+        split_label = "tuning (quick)"
+
+    class_dist = Counter(m for _, m in entries)
+    dist_str = ", ".join(f"{m}/x: {class_dist[m]}" for m in sorted(class_dist))
+
+    print(flush=True)
+    print(f"  {'─' * 56}", flush=True)
+    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {max_workers} workers", flush=True)
+    print(f"  {dist_str}", flush=True)
+    print(f"  {'─' * 56}", flush=True)
+    print(flush=True)
+
+    # Shared state
+    lock = threading.Lock()
+    correct = 0
+    total = 0
+    total_by_class: Counter = Counter()
+    correct_by_class: Counter = Counter()
+    file_results: list[dict] = []
+    completed = 0
+    t0 = time.time()
+
+    def on_result(r: dict):
+        nonlocal correct, total, completed
+
+        with lock:
+            total += 1
+            completed += 1
+            total_by_class[r["expected"]] += 1
+            if r["ok"]:
+                correct += 1
+                correct_by_class[r["expected"]] += 1
+            file_results.append(r)
+
+            if args.verbose:
+                status = "OK  " if r["ok"] else "FAIL"
+                pred_str = f"{r['predicted']}/x" if r["predicted"] else "None"
+                print(
+                    f"  {status} {pred_str:5s} exp={r['expected']}/x"
+                    f"  {r['fname']}",
+                    flush=True,
+                )
+
+            n = len(entries)
+            if completed % 10 == 0 or completed == n:
+                elapsed = time.time() - t0
+                rate = completed / elapsed if elapsed > 0 else 1
+                eta = (n - completed) / rate if rate > 0 else 0
+                pct = correct / total * 100 if total > 0 else 0
+                bar_w = 20
+                filled = int(completed / n * bar_w)
+                bar = "█" * filled + "░" * (bar_w - filled)
+                eta_str = f"~{eta:.0f}s left" if eta > 1 else ""
+                print(
+                    f"  {bar} {completed:>4}/{n}  {correct}/{total} ({pct:.0f}%)  {eta_str}",
+                    flush=True,
+                )
+
+    # Process all files through workers
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    actual_workers = min(max_workers, len(entries))
+    pool = WorkerPool(actual_workers)
+
+    try:
+        with ThreadPoolExecutor(max_workers=actual_workers) as executor:
+            future_to_idx = {}
+            for i, (audio_path, expected_meter) in enumerate(entries):
+                future = executor.submit(
+                    process_one_file,
+                    pool, audio_path, expected_meter,
+                )
+                future_to_idx[future] = i
+
+            for future in as_completed(future_to_idx):
+                try:
+                    result = future.result()
+                    on_result(result)
+                except Exception as e:
+                    idx = future_to_idx[future]
+                    fname = entries[idx][0].name
+                    expected = entries[idx][1]
+                    print(f"  ERROR processing {fname}: {e}", flush=True)
+                    on_result({
+                        "fname": fname,
+                        "expected": expected,
+                        "predicted": None,
+                        "bpm": None,
+                        "ok": False,
+                    })
+
+    except KeyboardInterrupt:
+        print(f"\n\nInterrupted after {completed} files!", flush=True)
+    finally:
+        pool.shutdown()
+
+    # Summary
+    elapsed = time.time() - t0
+
+    print_summary(
+        correct, total, correct_by_class, total_by_class,
+        classes, elapsed, args.dataset, split_label, len(entries),
+    )
+
+    # Regression detection vs last saved run
+    previous = load_latest_run()
+    current_by_class = {
+        m: (correct_by_class[m], total_by_class[m]) for m in classes if total_by_class[m] > 0
+    }
+    regressions = detect_regressions(current_by_class, previous)
+    if regressions:
+        print(f"\n  REGRESSIONS DETECTED ({len(regressions)}):")
+        for msg in regressions:
+            print(msg)
+    elif previous:
+        prev_correct = previous.get("correct", 0)
+        prev_total = previous.get("total", 0)
+        print(
+            f"\n  vs last saved: {prev_correct}/{prev_total}"
+            f" ({_pct(prev_correct, prev_total)})"
+        )
+
+    # Save snapshot
+    if args.save:
+        save_run(
+            file_results, correct, total, correct_by_class, total_by_class,
+            args.dataset, args.split, classes, elapsed,
+        )
+
+    # Exit code: non-zero if regressions
+    if regressions:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

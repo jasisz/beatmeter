@@ -1,4 +1,4 @@
-"""Signal 8: ResNet18 meter classification from MFCC spectrogram.
+"""Signal 8a: ResNet18 meter classification from MFCC spectrogram.
 
 Provides an orthogonal meter signal that works directly on audio spectrograms,
 bypassing beat tracking entirely. Useful when beat trackers have low alignment.
@@ -171,7 +171,7 @@ def _extract_mfcc(audio: np.ndarray, sr: int) -> np.ndarray | None:
 # ---------------------------------------------------------------------------
 
 def signal_resnet_meter(audio: np.ndarray, sr: int) -> dict[tuple[int, int], float]:
-    """Signal 8: ResNet18 meter classification from MFCC spectrogram.
+    """Signal 8a: ResNet18 meter classification from MFCC spectrogram.
 
     Returns a dict mapping ``(numerator, denominator)`` tuples to scores in
     [0, 1].  The highest-scoring hypothesis is normalised to 1.0.  Returns
@@ -213,11 +213,11 @@ def signal_resnet_meter(audio: np.ndarray, sr: int) -> dict[tuple[int, int], flo
             prob = float(prob)
 
             if beats_in_bar == 3:
-                # class 3 → (3,4) primary + (6,8) secondary
+                # class 3 -> (3,4) primary + (6,8) secondary
                 scores[(3, 4)] = scores.get((3, 4), 0.0) + prob
                 scores[(6, 8)] = scores.get((6, 8), 0.0) + prob * 0.4
             elif beats_in_bar == 4:
-                # class 4 → (4,4) primary + (2,4) + (12,8) secondary
+                # class 4 -> (4,4) primary + (2,4) + (12,8) secondary
                 scores[(4, 4)] = scores.get((4, 4), 0.0) + prob
                 scores[(2, 4)] = scores.get((2, 4), 0.0) + prob * 0.3
                 scores[(12, 8)] = scores.get((12, 8), 0.0) + prob * 0.2

@@ -3,10 +3,10 @@
 import numpy as np
 
 from beatmeter.analysis.models import Beat
-from beatmeter.analysis.meter import (
+from beatmeter.analysis.meter import generate_hypotheses
+from beatmeter.analysis.signals import (
     signal_downbeat_spacing,
     signal_accent_pattern,
-    generate_hypotheses,
 )
 
 

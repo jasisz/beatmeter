@@ -24,6 +24,7 @@ tests/fixtures/*.flac
 tests/fixtures/*.opus
 tests/fixtures/*.wav
 tests/fixtures/.cache/
+.cache/
 
 # Training data and model checkpoints
 data/

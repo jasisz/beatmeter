@@ -5,7 +5,7 @@ Audio tempo and time signature analyzer. Detects BPM, meter (time signature), an
 ## Features
 
 - **Multi-algorithm beat tracking** — combines BeatNet, Beat This! (ISMIR 2024), madmom, and librosa for robust beat detection
-- **Meter detection** — identifies time signatures (4/4, 3/4, 6/8, 7/8, etc.) with confidence scores and disambiguation hints
+- **Meter detection** — identifies time signatures (4/4, 3/4, 6/8, 7/8, etc.) using 7 independent signals with weighted voting
 - **Variable tempo detection** — tracks tempo changes over time, classifies stability (steady / rubato)
 - **Live analysis** — real-time rhythm analysis via microphone (WebSocket)
 - **Web UI** — drag-and-drop file upload, waveform visualization, metronome, i18n (PL/EN)
@@ -60,18 +60,101 @@ Environment variables (prefix `BEATMETER_`):
 | `BEATMETER_SAMPLE_RATE` | `22050` | Audio sample rate |
 | `BEATMETER_MAX_UPLOAD_MB` | `50` | Max upload size |
 
+## Architecture
+
+### Beat Tracking
+
+Four beat trackers run in parallel (`beatmeter/analysis/trackers/`):
+
+| Tracker | Source |
+|---|---|
+| BeatNet | Neural network beat/downbeat tracking |
+| Beat This! | ISMIR 2024 transformer model |
+| madmom | DBNBeatTrackingProcessor |
+| librosa | Onset-based beat tracking |
+
+### Meter Detection
+
+Seven active signals vote on meter hypotheses (`beatmeter/analysis/signals/`):
+
+| Signal | Weight | Description |
+|---|---|---|
+| `downbeat_spacing` | 0.13–0.16 | Downbeat interval patterns from BeatNet / Beat This! |
+| `madmom_activation` | 0.10 | Beat activation scoring from madmom |
+| `onset_autocorrelation` | 0.13 | Periodicity in onset envelope |
+| `accent_pattern` | 0.18 | RMS energy accent grouping |
+| `beat_periodicity` | 0.20 | Beat strength periodicity analysis |
+| `bar_tracking` | 0.12 | DBNBarTrackingProcessor bar-level inference |
+| `sub_beat_division` | — | Compound meter detection (6/8, 12/8) |
+
+Trust weighting adjusts neural network signals based on beat tracker agreement. Consensus bonuses reward convergence across multiple signals.
+
 ## Development
 
 ```bash
 # Install dev dependencies
 uv sync --group dev
 
-# Run tests (synthetic — no audio fixtures needed)
-uv run pytest tests/test_engine.py tests/test_meter.py -v
+# Run unit tests
+uv run pytest tests/test_meter.py -v
+```
 
-# Run full benchmark (requires fixture files)
-python scripts/download_new_fixtures.py
-uv run python tests/benchmark.py
+### Evaluation (METER2800)
+
+The primary benchmark uses the [METER2800](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/WQSKRO) dataset (2800 files, 4 meter classes: 3/4, 4/4, 5/4, 7/4).
+
+```bash
+# Download METER2800 dataset
+uv run python scripts/setup/download_meter2800.py
+
+# Smoke test (3 files)
+uv run python scripts/eval.py --limit 3 --workers 1
+
+# Stratified quick run (~100 files, ~20 min)
+uv run python scripts/eval.py --quick
+
+# Full test split (700 files, hold-out)
+uv run python scripts/eval.py --split test --limit 0
+
+# Save baseline for regression detection
+uv run python scripts/eval.py --save
+
+# Dashboard
+uv run python scripts/dashboard.py
+```
+
+Current accuracy on the METER2800 test split: **76% overall** (88% on binary 3/4 vs 4/4).
+
+## Project Structure
+
+```
+beatmeter/
+├── analysis/
+│   ├── engine.py              # Orchestrator (onset → beat → tempo → meter)
+│   ├── meter.py               # Hypothesis generation + weighted voting
+│   ├── tempo.py               # Multi-method tempo estimation
+│   ├── onset.py               # Onset detection
+│   ├── models.py              # Data models (Beat, MeterHypothesis, etc.)
+│   ├── cache.py               # Analysis cache
+│   ├── signals/               # Meter signal implementations
+│   └── trackers/              # Beat tracker wrappers
+├── api/                       # FastAPI endpoints
+├── audio/                     # Audio I/O utilities
+└── config.py                  # Settings
+frontend/
+├── index.html
+├── js/                        # Visualizer, i18n, audio capture
+└── css/
+scripts/
+├── eval.py                    # Unified evaluation (METER2800)
+├── dashboard.py               # Metrics dashboard
+├── utils.py                   # Shared utilities
+├── setup/                     # Dataset download scripts
+└── training/                  # Model training scripts
+tests/
+└── test_meter.py              # Unit tests for meter detection
+docs/
+└── RESEARCH.md                # Research documentation
 ```
 
 ## License

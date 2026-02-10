@@ -10,12 +10,13 @@ import soundfile as sf
 
 from beatmeter.analysis.models import AnalysisResult, Beat, BpmCandidate, MeterHypothesis, Section, TempoResult
 from beatmeter.analysis.onset import detect_onsets, onset_strength_envelope
-from beatmeter.analysis.beat_tracking import (
+from beatmeter.analysis.trackers import (
     track_beats_beatnet,
     track_beats_beat_this,
     track_beats_madmom,
     track_beats_librosa,
 )
+from beatmeter.analysis.trackers.madmom_tracker import clear_activation_cache
 from beatmeter.analysis.tempo import (
     estimate_from_ibi,
     estimate_from_librosa,
@@ -32,55 +33,73 @@ from beatmeter.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _beats_to_dicts(beats: list[Beat]) -> list[dict]:
+    return [{"time": b.time, "is_downbeat": b.is_downbeat, "strength": b.strength}
+            for b in beats]
+
+
+def _dicts_to_beats(data: list[dict]) -> list[Beat]:
+    return [Beat(time=d["time"], is_downbeat=d["is_downbeat"], strength=d["strength"])
+            for d in data]
+
+
 class AnalysisEngine:
     """Orchestrates the full analysis pipeline."""
 
+    def __init__(self, cache=None):
+        self.cache = cache  # AnalysisCache | None
+        self._audio_hash: str | None = None
+
     def analyze_file(self, file_path: str) -> AnalysisResult:
         """Analyze an audio file."""
+        if self.cache:
+            from beatmeter.analysis.cache import AnalysisCache
+            self._audio_hash = AnalysisCache.audio_hash(file_path)
+
         audio, sr = load_audio(file_path, sr=settings.sample_rate)
         audio = preprocess(audio, sr)
         return self.analyze_audio(audio, sr)
 
-    def analyze_audio(self, audio: np.ndarray, sr: int = 22050) -> AnalysisResult:
-        """Analyze pre-loaded audio data."""
+    def analyze_audio(self, audio: np.ndarray, sr: int = 22050, audio_hash: str | None = None) -> AnalysisResult:
+        """Analyze pre-loaded audio data.
+
+        If *audio_hash* is given it enables per-tracker / per-signal caching
+        without requiring a file path (used by the benchmark runner).
+        """
+        if audio_hash is not None:
+            self._audio_hash = audio_hash
         duration = len(audio) / sr
         logger.info(f"Analyzing {duration:.1f}s of audio at {sr}Hz")
 
+        ah = self._audio_hash  # may be None if called directly
+
         # Step 1: Onset detection
         logger.info("Step 1: Onset detection")
-        onsets = detect_onsets(audio, sr)
-        onset_times, onset_strengths = onset_strength_envelope(audio, sr)
-        onset_event_times = np.array([o.time for o in onsets])
+        cached_onsets = None
+        if self.cache and ah:
+            cached_onsets = self.cache.load_onsets(ah)
+
+        if cached_onsets is not None:
+            onset_times = np.array(cached_onsets["onset_times"])
+            onset_strengths = np.array(cached_onsets["onset_strengths"])
+            onset_event_times = np.array(cached_onsets["onset_events"])
+            logger.info("  Onsets loaded from cache")
+        else:
+            onsets = detect_onsets(audio, sr)
+            onset_times, onset_strengths = onset_strength_envelope(audio, sr)
+            onset_event_times = np.array([o.time for o in onsets])
+            if self.cache and ah:
+                self.cache.save_onsets(ah, {
+                    "onset_times": onset_times.tolist(),
+                    "onset_strengths": onset_strengths.tolist(),
+                    "onset_events": onset_event_times.tolist(),
+                })
 
         # Step 2: Beat tracking (run all methods in parallel)
         logger.info("Step 2: Beat tracking")
 
-        # Write shared temp WAV once for all trackers that need file paths
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sf.write(tmp.name, audio, sr)
-            shared_tmp_path = tmp.name
-
-        try:
-            def _run_all_madmom(audio, sr, tmp_path):
-                results = {}
-                for bpb in [3, 4, 5, 7]:
-                    beats = track_beats_madmom(audio, sr, beats_per_bar=bpb, tmp_path=tmp_path)
-                    if beats:
-                        results[bpb] = beats
-                return results
-
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                f_beatnet = pool.submit(track_beats_beatnet, audio, sr, shared_tmp_path)
-                f_beat_this = pool.submit(track_beats_beat_this, audio, sr, shared_tmp_path)
-                f_madmom = pool.submit(_run_all_madmom, audio, sr, shared_tmp_path)
-                f_librosa = pool.submit(track_beats_librosa, audio, sr)
-
-            beatnet_beats = f_beatnet.result()
-            beat_this_beats = f_beat_this.result()
-            madmom_results: dict[int, list[Beat]] = f_madmom.result()
-            librosa_beats = f_librosa.result()
-        finally:
-            os.unlink(shared_tmp_path)
+        beatnet_beats, beat_this_beats, madmom_results, librosa_beats = \
+            self._run_beat_tracking(audio, sr, ah)
 
         logger.info(f"  BeatNet: {len(beatnet_beats)} beats, "
                      f"{sum(1 for b in beatnet_beats if b.is_downbeat)} downbeats")
@@ -209,6 +228,8 @@ class AnalysisEngine:
             beat_this_beats=beat_this_beats,
             beat_this_alignment=beat_this_alignment,
             onset_event_times=onset_event_times,
+            cache=self.cache,
+            audio_hash=ah,
         )
         for h in meter_hypotheses:
             logger.info(f"  {h.label}: {h.confidence:.1%} - {h.description}")
@@ -231,6 +252,104 @@ class AnalysisEngine:
             sections=sections,
             duration=duration,
         )
+
+    def _run_beat_tracking(
+        self,
+        audio: np.ndarray,
+        sr: int,
+        ah: str | None,
+    ) -> tuple[list[Beat], list[Beat], dict[int, list[Beat]], list[Beat]]:
+        """Run beat tracking with per-tracker caching."""
+        # Try loading all from cache
+        cached_beatnet = None
+        cached_beat_this = None
+        cached_madmom: dict[int, list[Beat]] = {}
+        cached_librosa = None
+        need_audio_trackers = False
+
+        if self.cache and ah:
+            raw = self.cache.load_beats(ah, "beatnet")
+            if raw is not None:
+                cached_beatnet = _dicts_to_beats(raw)
+            raw = self.cache.load_beats(ah, "beat_this")
+            if raw is not None:
+                cached_beat_this = _dicts_to_beats(raw)
+            raw = self.cache.load_beats(ah, "librosa")
+            if raw is not None:
+                cached_librosa = _dicts_to_beats(raw)
+            for bpb in [3, 4, 5, 7]:
+                raw = self.cache.load_beats(ah, f"madmom_bpb{bpb}")
+                if raw is not None:
+                    cached_madmom[bpb] = _dicts_to_beats(raw)
+
+        all_cached = (
+            cached_beatnet is not None
+            and cached_beat_this is not None
+            and cached_librosa is not None
+            and len(cached_madmom) == 4
+        )
+
+        if all_cached:
+            logger.info("  All beats loaded from cache")
+            return cached_beatnet, cached_beat_this, cached_madmom, cached_librosa
+
+        # Need to compute some/all trackers — write temp WAV
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            sf.write(tmp.name, audio, sr)
+            shared_tmp_path = tmp.name
+
+        try:
+            futures = {}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                if cached_beatnet is None:
+                    futures["beatnet"] = pool.submit(track_beats_beatnet, audio, sr, shared_tmp_path)
+                if cached_beat_this is None:
+                    futures["beat_this"] = pool.submit(track_beats_beat_this, audio, sr, shared_tmp_path)
+                if cached_librosa is None:
+                    futures["librosa"] = pool.submit(track_beats_librosa, audio, sr)
+
+                # Run uncached madmom variants
+                uncached_bpbs = [bpb for bpb in [3, 4, 5, 7] if bpb not in cached_madmom]
+                if uncached_bpbs:
+                    def _run_uncached_madmom(audio, sr, tmp_path, bpbs):
+                        results = {}
+                        for bpb in bpbs:
+                            beats = track_beats_madmom(audio, sr, beats_per_bar=bpb, tmp_path=tmp_path)
+                            if beats:
+                                results[bpb] = beats
+                        return results
+                    futures["madmom"] = pool.submit(_run_uncached_madmom, audio, sr, shared_tmp_path, uncached_bpbs)
+
+            # Collect results
+            beatnet_beats = cached_beatnet if cached_beatnet is not None else futures.get("beatnet", _Resolved([])).result()
+            beat_this_beats = cached_beat_this if cached_beat_this is not None else futures.get("beat_this", _Resolved([])).result()
+            librosa_beats = cached_librosa if cached_librosa is not None else futures.get("librosa", _Resolved([])).result()
+
+            madmom_results = dict(cached_madmom)
+            if "madmom" in futures:
+                new_madmom = futures["madmom"].result()
+                madmom_results.update(new_madmom)
+
+            # Save newly computed results to cache
+            if self.cache and ah:
+                if cached_beatnet is None:
+                    self.cache.save_beats(ah, "beatnet", _beats_to_dicts(beatnet_beats))
+                if cached_beat_this is None:
+                    self.cache.save_beats(ah, "beat_this", _beats_to_dicts(beat_this_beats))
+                if cached_librosa is None:
+                    self.cache.save_beats(ah, "librosa", _beats_to_dicts(librosa_beats))
+                if uncached_bpbs:
+                    for bpb, beats in madmom_results.items():
+                        if bpb not in cached_madmom:
+                            self.cache.save_beats(ah, f"madmom_bpb{bpb}", _beats_to_dicts(beats))
+
+        finally:
+            os.unlink(shared_tmp_path)
+
+        # Free cached madmom activations — only needed within a single file
+        clear_activation_cache()
+
+        return beatnet_beats, beat_this_beats, madmom_results, librosa_beats
 
     @staticmethod
     def _onset_alignment_score(
@@ -355,6 +474,7 @@ class AnalysisEngine:
                     onset_event_times=onset_event_times,
                     skip_bar_tracking=True,
                     skip_resnet=True,
+                    skip_mert=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]
@@ -431,3 +551,11 @@ class AnalysisEngine:
 
         boundaries.append(round(duration, 2))
         return boundaries
+
+
+class _Resolved:
+    """Fake future that returns a default value."""
+    def __init__(self, value):
+        self._value = value
+    def result(self):
+        return self._value

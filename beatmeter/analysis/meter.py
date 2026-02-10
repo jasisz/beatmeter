@@ -10,17 +10,28 @@ with confidence scores by combining evidence from:
 Key design: we use the *detected tempo* (beat interval) to constrain
 all meter hypotheses. Each signal scores "how well does beat_interval*N
 match the observed bar-level periodicity?"
+
+Signal functions live in beatmeter.analysis.signals/ — this module handles
+scoring, weights, priors, and hypothesis generation.
 """
 
 import logging
-import os
-import tempfile
-from collections import Counter
 
 import numpy as np
-import soundfile as sf
 
 from beatmeter.analysis.models import Beat, MeterHypothesis
+from beatmeter.analysis.signals import (
+    signal_downbeat_spacing,
+    signal_madmom_activation,
+    signal_onset_autocorrelation,
+    signal_accent_pattern,
+    compute_beat_energies,
+    signal_beat_strength_periodicity,
+    signal_bar_tracking,
+    signal_sub_beat_division,
+)
+import beatmeter.analysis.signals.resnet_meter as _resnet_mod
+import beatmeter.analysis.signals.mert_meter as _mert_mod
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +82,7 @@ W_PERIODICITY = 0.20
 W_PERIODICITY_CAPPED = 0.16  # used when all NNs untrusted
 W_BAR_TRACKING = 0.12
 W_RESNET = 0.0           # disabled pending better model
+W_MERT = 0.0             # disabled until orthogonality verified
 
 # Consensus bonus: meters supported by multiple signals
 CONSENSUS_SUPPORT_THRESHOLD = 0.3   # min signal score to count as "supporting"
@@ -82,13 +94,9 @@ NN_PENALTY_STRONG = 0.55            # trusted NNs, no bar tracking conflict
 NN_PENALTY_WEAK = 0.65              # untrusted NNs, no bar tracking conflict
 NN_PENALTY_MILD = 0.80              # any NNs, but bar tracking supports 3/4
 
-# Compound meter detection (signal_sub_beat_division)
-COMPOUND_ONSET_MIN = 1.5
-COMPOUND_ONSET_MAX = 3.5
-COMPOUND_EVENNESS_CV_MAX = 0.4      # max CV for "evenly spaced" sub-beats
-COMPOUND_TRIPLET_POS_MIN = 0.4      # min fraction of beats at triplet positions
-COMPOUND_TRANSFER_RATIO = 0.0       # disabled: 0 benefit, 9 false 6/8 regressions
-COMPOUND_BOOST = 1.0                # disabled: compound detection not reliable enough
+# Compound meter transfer/boost (disabled: 0 benefit, 9 false 6/8 regressions)
+COMPOUND_TRANSFER_RATIO = 0.0
+COMPOUND_BOOST = 1.0
 
 # 2/4 sub-period suppression
 SUBPERIOD_4_4_THRESHOLD = 0.4       # min ratio of 4/4 to 2/4 score
@@ -97,7 +105,6 @@ SUBPERIOD_3_4_THRESHOLD = 0.7       # min ratio of 3/4 to 2/4 score
 SUBPERIOD_3_4_BOOST = 1.2
 
 # Quality gates
-BAR_TRACKING_SPARSE_THRESHOLD = 0.15  # min non-silent fraction for bar tracking
 FLAT_DYNAMICS_CV = 0.05               # max CV to consider dynamics "flat"
 NOISE_FLOOR_RATIO = 0.10              # min energy fraction to count beat as active
 ACTIVE_BEATS_MIN_FRAC = 0.7           # min fraction of active beats per tracker
@@ -127,520 +134,6 @@ def _get_grouping(num: int, den: int) -> str | None:
     return groupings[0] if groupings else None
 
 
-def signal_downbeat_spacing(beats: list[Beat]) -> dict[tuple[int, int], float]:
-    """Signal 1: Analyze downbeat spacing from any tracker with downbeat info."""
-    scores: dict[tuple[int, int], float] = {}
-
-    downbeat_indices = [i for i, b in enumerate(beats) if b.is_downbeat]
-    if len(downbeat_indices) < 2:
-        return scores
-
-    spacings = []
-    for i in range(len(downbeat_indices) - 1):
-        n_beats = downbeat_indices[i + 1] - downbeat_indices[i]
-        if n_beats > 0:
-            spacings.append(n_beats)
-
-    if not spacings:
-        return scores
-
-    counter = Counter(spacings)
-    total = len(spacings)
-
-    for spacing, count in counter.items():
-        ratio = count / total
-        if ratio < 0.15:
-            continue
-        if spacing in range(2, 13):
-            scores[(spacing, 4)] = ratio
-            # Octave ambiguity: if BeatNet says 2, also consider 4
-            if spacing * 2 <= 12:
-                double = (spacing * 2, 4)
-                scores[double] = scores.get(double, 0) + ratio * 0.4
-
-    return scores
-
-
-def signal_madmom_activation(
-    madmom_results: dict[int, list[Beat]],
-    onset_times: np.ndarray,
-    onset_strengths: np.ndarray,
-) -> dict[tuple[int, int], float]:
-    """Signal 2: Score madmom meters by checking if their downbeats land on accents.
-
-    For each madmom run, check whether the downbeat positions correspond
-    to actually louder onsets. The correct meter should have downbeats
-    on the strongest onsets.
-    """
-    scores: dict[tuple[int, int], float] = {}
-
-    if not madmom_results or len(onset_times) < 4:
-        return scores
-
-    for bpb, beats in madmom_results.items():
-        downbeats = [b for b in beats if b.is_downbeat]
-        non_downbeats = [b for b in beats if not b.is_downbeat]
-
-        if len(downbeats) < 2 or len(non_downbeats) < 2:
-            continue
-
-        # Get onset strength at downbeat positions (max in ±50ms window)
-        db_strengths = []
-        for db in downbeats:
-            window_mask = np.abs(onset_times - db.time) < 0.05
-            if np.any(window_mask):
-                db_strengths.append(float(np.max(onset_strengths[window_mask])))
-
-        # Get onset strength at non-downbeat positions (max in ±50ms window)
-        ndb_strengths = []
-        for ndb in non_downbeats:
-            window_mask = np.abs(onset_times - ndb.time) < 0.05
-            if np.any(window_mask):
-                ndb_strengths.append(float(np.max(onset_strengths[window_mask])))
-
-        if not db_strengths or not ndb_strengths:
-            continue
-
-        # Score: ratio of downbeat strength to non-downbeat strength
-        mean_db = float(np.mean(db_strengths))
-        mean_ndb = float(np.mean(ndb_strengths))
-
-        if mean_ndb > 0:
-            ratio = mean_db / mean_ndb
-            # Ratio > 1 means downbeats are louder (good!)
-            score = min(1.0, max(0.0, (ratio - 0.8) * 2.5))
-        else:
-            score = 0.5
-
-        scores[(bpb, 4)] = score
-
-    if scores:
-        max_score = max(scores.values())
-        if max_score > 0:
-            scores = {k: v / max_score for k, v in scores.items()}
-
-    return scores
-
-
-def signal_onset_autocorrelation(
-    onset_times: np.ndarray,
-    onset_strengths: np.ndarray,
-    beat_interval: float | None = None,
-    sr: int = 22050,
-) -> dict[tuple[int, int], float]:
-    """Signal 3: Onset autocorrelation to find bar-level periodicity.
-
-    Uses the detected tempo to check autocorrelation at expected bar lags.
-    """
-    scores: dict[tuple[int, int], float] = {}
-
-    if len(onset_times) < 10 or beat_interval is None or beat_interval <= 0:
-        return scores
-
-    duration = float(onset_times[-1])
-    if duration < 3:
-        return scores
-
-    # Regular-sampled onset strength signal (50 Hz)
-    analysis_sr = 50
-    n_samples = int(duration * analysis_sr)
-    if n_samples < 50:
-        return scores
-
-    signal = np.zeros(n_samples)
-    for t, s in zip(onset_times, onset_strengths):
-        idx = int(t * analysis_sr)
-        if 0 <= idx < n_samples:
-            signal[idx] = max(signal[idx], s)
-
-    signal = signal - np.mean(signal)
-    norm = np.sum(signal ** 2)
-    if norm < 1e-10:
-        return scores
-
-    autocorr = np.correlate(signal, signal, mode="full")
-    autocorr = autocorr[len(autocorr) // 2:]
-    autocorr = autocorr / autocorr[0]
-
-    for beats_per_bar in [2, 3, 4, 5, 6, 7, 9, 11, 12]:
-        # Quarter note based
-        bar_dur = beat_interval * beats_per_bar
-        lag = int(bar_dur * analysis_sr)
-
-        if 2 < lag < len(autocorr) - 2:
-            window = max(1, int(lag * 0.05))
-            start = max(0, lag - window)
-            end = min(len(autocorr), lag + window + 1)
-            peak = float(np.max(autocorr[start:end]))
-            if peak > 0.02:
-                scores[(beats_per_bar, 4)] = peak
-
-        # Eighth note based
-        if beats_per_bar in (3, 5, 6, 7, 9, 11, 12):
-            bar_dur_8 = (beat_interval / 2) * beats_per_bar
-            lag_8 = int(bar_dur_8 * analysis_sr)
-            if 2 < lag_8 < len(autocorr) - 2:
-                window = max(1, int(lag_8 * 0.05))
-                start = max(0, lag_8 - window)
-                end = min(len(autocorr), lag_8 + window + 1)
-                peak = float(np.max(autocorr[start:end]))
-                if peak > 0.02:
-                    scores[(beats_per_bar, 8)] = peak
-
-    if scores:
-        max_score = max(scores.values())
-        if max_score > 0:
-            scores = {k: v / max_score for k, v in scores.items()}
-
-    return scores
-
-
-def compute_beat_energies(
-    beats: list[Beat],
-    audio: np.ndarray,
-    sr: int,
-    window_ms: float = 30.0,
-) -> np.ndarray:
-    """Compute RMS energy in a window around each beat position.
-
-    Uses raw audio amplitude rather than spectral flux, giving more
-    reliable accent detection (especially for percussive sounds).
-    """
-    if not beats:
-        return np.array([])
-    beat_times = np.array([b.time for b in beats])
-    window_samples = int(window_ms / 1000.0 * sr)
-    energies = np.zeros(len(beat_times))
-    for i, bt in enumerate(beat_times):
-        center = int(bt * sr)
-        start = max(0, center - window_samples)
-        end = min(len(audio), center + window_samples)
-        if end > start:
-            energies[i] = float(np.sqrt(np.mean(audio[start:end] ** 2)))
-    return energies
-
-
-def signal_beat_strength_periodicity(
-    beat_energies: np.ndarray,
-    normalize: bool = True,
-) -> dict[tuple[int, int], float]:
-    """Signal 5: Beat-level accent autocorrelation.
-
-    Given energy (RMS) at each beat position, autocorrelates to find
-    how many beats form one bar (accent period).
-
-    For 3/4 with accented downbeats, the energy sequence is
-    [H, L, L, H, L, L, ...] and the autocorrelation peaks at lag=3.
-    """
-    scores: dict[tuple[int, int], float] = {}
-
-    if len(beat_energies) < 8:
-        return scores
-
-    be = beat_energies.copy()
-    be -= np.mean(be)
-    norm = np.sum(be ** 2)
-    if norm < 1e-10:
-        return scores
-
-    # Autocorrelation at beat-count lags
-    n = len(be)
-    autocorr = np.correlate(be, be, mode='full')
-    autocorr = autocorr[n - 1:]  # positive lags only
-    autocorr = autocorr / autocorr[0]
-
-    raw_peaks: dict[int, float] = {}
-    for beats_per_bar in [2, 3, 4, 5, 6, 7, 9, 11, 12]:
-        lag = beats_per_bar
-        if lag >= n:
-            continue
-        peak = float(autocorr[lag])
-        if peak > 0.02:
-            raw_peaks[beats_per_bar] = peak
-
-    if not raw_peaks:
-        return scores
-
-    # Handle the "multiples problem": if both lag=N and lag=2N have peaks,
-    # the shorter period N is the fundamental bar length. Boost N, penalize 2N.
-    fundamentals_found = set()
-    for bpb in sorted(raw_peaks.keys()):
-        if bpb in fundamentals_found:
-            continue
-        # Check if this is a multiple of an already-found fundamental
-        is_multiple = False
-        for fund in fundamentals_found:
-            if bpb % fund == 0:
-                is_multiple = True
-                break
-        if not is_multiple and raw_peaks[bpb] > 0.05:
-            # This is a potential fundamental period
-            fundamentals_found.add(bpb)
-            raw_peaks[bpb] *= 1.4
-            # Penalize its multiples
-            for mult in range(2, 5):
-                multiple = bpb * mult
-                if multiple in raw_peaks:
-                    raw_peaks[multiple] *= 0.5
-
-    for bpb, peak in raw_peaks.items():
-        if peak > 0.02:
-            scores[(bpb, 4)] = peak
-
-    if normalize and scores:
-        max_score = max(scores.values())
-        if max_score > 0:
-            scores = {k: v / max_score for k, v in scores.items()}
-
-    return scores
-
-
-def signal_accent_pattern(
-    beats: list[Beat],
-    beat_energies: np.ndarray,
-    normalize: bool = True,
-) -> dict[tuple[int, int], float]:
-    """Signal 4: Accent pattern analysis.
-
-    Groups beats into hypothetical bars and checks if beat 1 is consistently
-    the strongest beat (indicating it's a real downbeat).
-    Uses RMS energy at each beat position for reliable accent detection.
-    """
-    scores: dict[tuple[int, int], float] = {}
-
-    if len(beats) < 6 or len(beat_energies) < 6:
-        return scores
-
-    for beats_per_bar in [2, 3, 4, 5, 6, 7, 9, 11, 12]:
-        n_complete_bars = len(beat_energies) // beats_per_bar
-        if n_complete_bars < 3:
-            continue
-
-        trimmed = beat_energies[:n_complete_bars * beats_per_bar]
-        bars = trimmed.reshape(n_complete_bars, beats_per_bar)
-
-        # Average accent pattern across bars
-        avg_pattern = np.mean(bars, axis=0)
-        pattern_mean = np.mean(avg_pattern)
-        if pattern_mean <= 0:
-            continue
-
-        # Key metric: how much does the pattern vary within a bar?
-        # The correct meter should show clear accent structure.
-        # Wrong meters will have flat patterns (all beats equally strong).
-        pattern_cv = float(np.std(avg_pattern) / pattern_mean) if pattern_mean > 0 else 0
-
-        # Also check: is the strongest beat consistently in the same position?
-        max_positions = [int(np.argmax(bar)) for bar in bars]
-        mode_count = max(Counter(max_positions).values())
-        consistency = mode_count / n_complete_bars
-
-        # Combined score: pattern contrast * consistency
-        score = pattern_cv * consistency
-        if score > 0.01:
-            scores[(beats_per_bar, 4)] = score
-
-    if normalize and scores:
-        max_score = max(scores.values())
-        if max_score > 0:
-            scores = {k: v / max_score for k, v in scores.items()}
-
-    return scores
-
-
-def signal_sub_beat_division(
-    all_beats: list[Beat],
-    onset_event_times: np.ndarray,
-    sr: int = 22050,
-) -> int | None:
-    """Detect whether the music is simple (/4) or compound (/8) based on sub-beat onset density.
-
-    Counts onsets between consecutive beats. If the median onset count is ~3,
-    the music has a compound (triplet) feel -> /8 denominator. If ~2 or fewer,
-    it is simple -> /4 denominator.
-
-    Returns:
-        8 for compound meter, 4 for simple meter, None if inconclusive.
-    """
-    if len(all_beats) < 4 or len(onset_event_times) < 8:
-        return None
-
-    beat_times = np.array([b.time for b in all_beats])
-    onset_counts = []
-
-    for i in range(len(beat_times) - 1):
-        t_start = beat_times[i]
-        t_end = beat_times[i + 1]
-        interval = t_end - t_start
-
-        # Skip very short or very long intervals (likely errors)
-        if interval < 0.15 or interval > 2.0:
-            continue
-
-        # Count onsets strictly between beats (exclude beat positions themselves)
-        margin = 0.03  # 30ms margin to exclude the beat onset itself
-        mask = (onset_event_times > t_start + margin) & (onset_event_times < t_end - margin)
-        n_onsets = int(np.sum(mask))
-        onset_counts.append(n_onsets)
-
-    if len(onset_counts) < 4:
-        return None
-
-    median_count = float(np.median(onset_counts))
-    logger.debug(f"Sub-beat division: median onsets between beats = {median_count:.1f}")
-
-    # If median is ~2 (i.e., 2 onsets between beats = 3 sub-divisions = triplet feel)
-    # this indicates compound meter (/8)
-    if COMPOUND_ONSET_MIN <= median_count <= COMPOUND_ONSET_MAX:
-        # Evenness check: true compound meter has evenly-spaced sub-beats.
-        # Measure CV (std/mean) of inter-onset intervals within each beat.
-        # Ornaments and accompaniment arpeggios produce unevenly spaced onsets.
-        margin = 0.03
-        interval_cvs = []
-        for i in range(len(beat_times) - 1):
-            t_start, t_end = beat_times[i], beat_times[i + 1]
-            mask = (onset_event_times > t_start + margin) & (onset_event_times < t_end - margin)
-            sub_onsets = onset_event_times[mask]
-            if len(sub_onsets) >= 2:
-                intervals = np.diff(sub_onsets)
-                mean_interval = float(np.mean(intervals))
-                if mean_interval > 0:
-                    cv = float(np.std(intervals) / mean_interval)
-                    interval_cvs.append(cv)
-
-        if interval_cvs:
-            median_cv = float(np.median(interval_cvs))
-            logger.debug(f"Sub-beat evenness: median CV = {median_cv:.3f}")
-            # True triplets: CV < 0.3 (evenly spaced)
-            # Ornaments: CV > 0.5 (unevenly spaced)
-            if median_cv > COMPOUND_EVENNESS_CV_MAX:
-                logger.debug(f"Sub-beat intervals uneven (CV > {COMPOUND_EVENNESS_CV_MAX}): not compound")
-                return 4
-
-        # Positional consistency: true compound meter has sub-onsets at ~1/3
-        # and ~2/3 of the beat interval. Accompaniment patterns (waltz "oom-pah",
-        # polka chords) create onsets at different fractional positions.
-        margin = 0.03
-        triplet_beats = 0
-        checked_beats = 0
-        for i in range(len(beat_times) - 1):
-            t_start, t_end = beat_times[i], beat_times[i + 1]
-            interval = t_end - t_start
-            if interval < 0.15 or interval > 2.0:
-                continue
-            sub = onset_event_times[(onset_event_times > t_start + margin) & (onset_event_times < t_end - margin)]
-            if len(sub) == 2:
-                checked_beats += 1
-                pos1 = (sub[0] - t_start) / interval
-                pos2 = (sub[1] - t_start) / interval
-                # True triplets: onsets at ~0.33 and ~0.67 (tolerance 0.15)
-                if abs(pos1 - 1/3) < 0.15 and abs(pos2 - 2/3) < 0.15:
-                    triplet_beats += 1
-
-        if checked_beats >= 4:
-            triplet_frac = triplet_beats / checked_beats
-            logger.debug(f"Triplet position check: {triplet_beats}/{checked_beats} = {triplet_frac:.2f}")
-            if triplet_frac < COMPOUND_TRIPLET_POS_MIN:
-                logger.debug("Sub-onsets not at triplet positions: not compound")
-                return 4
-
-        return 8
-    # If median is ~1 or 0 (1 onset between = 2 sub-divisions = simple feel)
-    elif median_count < COMPOUND_ONSET_MIN:
-        return 4
-    # Very dense onsets (>3.5) - could be fast ornaments, inconclusive
-    return None
-
-
-# Module-level singleton for RNNBarProcessor (loads 12 models, ~2-3s startup)
-_bar_processor = None
-
-
-def _get_bar_processor():
-    global _bar_processor
-    if _bar_processor is None:
-        from madmom.features.downbeats import RNNBarProcessor
-        _bar_processor = RNNBarProcessor()
-    return _bar_processor
-
-
-def signal_bar_tracking(
-    audio: np.ndarray,
-    sr: int,
-    beat_times_array: np.ndarray,
-    meters_to_test: list[int] | None = None,
-) -> dict[tuple[int, int], float]:
-    """Signal 7: madmom DBNBarTrackingProcessor meter inference.
-
-    Uses beat-synchronous harmonic+percussive features via GRU-RNN
-    to estimate downbeat probability at each beat, then Viterbi decoding
-    per candidate meter to determine most likely beats-per-bar.
-    """
-    if meters_to_test is None:
-        meters_to_test = [3, 4, 5, 7]
-
-    scores: dict[tuple[int, int], float] = {}
-    if len(beat_times_array) < 6:
-        return scores
-
-    # Quality gate: skip on sparse/synthetic audio where RNNBarProcessor
-    # features (harmonic+percussive) are meaningless.
-    # Check that audio has enough non-silent content.
-    rms = float(np.sqrt(np.mean(audio[:min(len(audio), sr * 5)] ** 2)))
-    non_silent = float(np.mean(np.abs(audio) > rms * NOISE_FLOOR_RATIO))
-    if non_silent < BAR_TRACKING_SPARSE_THRESHOLD:
-        logger.debug(f"Bar tracking: sparse audio (non_silent={non_silent:.2f}), skipping")
-        return scores
-
-    try:
-        from madmom.features.downbeats import DBNBarTrackingProcessor
-
-        # RNNBarProcessor needs a file path — write temp WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-            sf.write(tmp_path, audio, sr)
-
-        bar_proc = _get_bar_processor()
-        act = bar_proc((tmp_path, beat_times_array))
-
-        # Clean up temp file
-        os.unlink(tmp_path)
-
-        # Remove last row (often NaN) and take downbeat activation column
-        activations = act[:-1, 1] if act.shape[0] > 1 else act[:, 1]
-
-        if len(activations) < 4:
-            return scores
-
-        # Run Viterbi for each meter and collect normalized log-probs
-        log_probs = {}
-        for bpb in meters_to_test:
-            tracker = DBNBarTrackingProcessor(beats_per_bar=[bpb])
-            _, log_prob = tracker.hmm.viterbi(activations)
-            log_probs[bpb] = log_prob / len(activations)
-
-        # Convert to probabilities via softmax
-        values = np.array(list(log_probs.values()))
-        exp_values = np.exp(values - np.max(values))
-        probs = exp_values / np.sum(exp_values)
-
-        for bpb, prob in zip(meters_to_test, probs):
-            if prob > 0.05:
-                scores[(bpb, 4)] = float(prob)
-
-        # Normalize to [0, 1]
-        if scores:
-            max_s = max(scores.values())
-            if max_s > 0:
-                scores = {k: v / max_s for k, v in scores.items()}
-
-        logger.debug(f"Bar tracking signal: {scores}")
-    except Exception as e:
-        logger.warning(f"Bar tracking signal failed: {e}")
-
-    return scores
-
-
 def _compute_weights(
     beatnet_beats: list[Beat],
     madmom_results: dict[int, list[Beat]],
@@ -668,6 +161,7 @@ def _compute_weights(
     w_accent = W_ACCENT
     w_bar_tracking = W_BAR_TRACKING
     w_resnet = W_RESNET
+    w_mert = W_MERT
 
     total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
     if total_nn_trust < 0.01:
@@ -677,7 +171,7 @@ def _compute_weights(
         w_periodicity = W_PERIODICITY
 
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
-               + w_accent + w_periodicity + w_bar_tracking + w_resnet)
+               + w_accent + w_periodicity + w_bar_tracking + w_resnet + w_mert)
     if total_w > 0:
         weights = {
             "beatnet": w_beatnet / total_w,
@@ -688,9 +182,10 @@ def _compute_weights(
             "periodicity": w_periodicity / total_w,
             "bar_tracking": w_bar_tracking / total_w,
             "resnet": w_resnet / total_w,
+            "mert": w_mert / total_w,
         }
     else:
-        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1}
+        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1, "mert": 0}
 
     logger.debug(f"Meter weights: {weights}")
     return weights, beatnet_trust, beat_this_trust, madmom_trust
@@ -709,58 +204,98 @@ def _collect_signal_scores(
     beat_this_beats: list[Beat] | None,
     skip_bar_tracking: bool,
     skip_resnet: bool,
+    skip_mert: bool = False,
+    cache=None,
+    audio_hash: str | None = None,
 ) -> dict[str, dict[tuple[int, int], float]]:
-    """Collect scores from signals 1a, 1b, 2, 3, 7, 8."""
+    """Collect scores from signals 1a, 1b, 2, 3, 7, 8a, 8b."""
+    from beatmeter.analysis.cache import str_to_meter_key
+
     signal_results: dict[str, dict[tuple[int, int], float]] = {}
+
+    def _try_cache(sig_name: str) -> dict[tuple[int, int], float] | None:
+        if cache and audio_hash:
+            raw = cache.load_signal(audio_hash, sig_name)
+            if raw is not None:
+                return {str_to_meter_key(k): v for k, v in raw.items()}
+        return None
+
+    def _save_cache(sig_name: str, scores: dict[tuple[int, int], float]) -> None:
+        if cache and audio_hash and scores:
+            cache.save_signal(audio_hash, sig_name, scores)
 
     # Signal 1a: BeatNet downbeat spacing
     if weights["beatnet"] > 0.01:
-        s1 = signal_downbeat_spacing(beatnet_beats)
+        s1 = _try_cache("beatnet_spacing")
+        if s1 is None:
+            s1 = signal_downbeat_spacing(beatnet_beats)
+            _save_cache("beatnet_spacing", s1)
         if s1:
             signal_results["beatnet"] = s1
         logger.debug(f"BeatNet signal: {s1}")
 
     # Signal 1b: Beat This! downbeat spacing
     if weights["beat_this"] > 0.01 and beat_this_beats:
-        s1b = signal_downbeat_spacing(beat_this_beats)
+        s1b = _try_cache("beat_this_spacing")
+        if s1b is None:
+            s1b = signal_downbeat_spacing(beat_this_beats)
+            _save_cache("beat_this_spacing", s1b)
         if s1b:
             signal_results["beat_this"] = s1b
         logger.debug(f"Beat This! signal: {s1b}")
 
     # Signal 2: madmom activation scoring
     if weights["madmom"] > 0.01:
-        s2 = signal_madmom_activation(madmom_results, onset_times, onset_strengths)
+        s2 = _try_cache("madmom_activation")
+        if s2 is None:
+            s2 = signal_madmom_activation(madmom_results, onset_times, onset_strengths)
+            _save_cache("madmom_activation", s2)
         if s2:
             signal_results["madmom"] = s2
         logger.debug(f"madmom signal: {s2}")
 
     # Signal 3: onset autocorrelation
     if weights["autocorr"] > 0 and len(onset_times) > 0:
-        s3 = signal_onset_autocorrelation(onset_times, onset_strengths, beat_interval, sr)
+        s3 = _try_cache("onset_autocorr")
+        if s3 is None:
+            s3 = signal_onset_autocorrelation(onset_times, onset_strengths, beat_interval, sr)
+            _save_cache("onset_autocorr", s3)
         if s3:
             signal_results["autocorr"] = s3
         logger.debug(f"Autocorr signal: {s3}")
 
     # Signal 7: Bar tracking (DBNBarTrackingProcessor)
     if not skip_bar_tracking and weights["bar_tracking"] > 0.01 and audio is not None and len(beat_times) >= 6:
-        if beat_this_beats and len(beat_this_beats) >= 6:
-            bar_beat_times = np.array([b.time for b in beat_this_beats])
-        else:
-            bar_beat_times = beat_times
-        s7 = signal_bar_tracking(audio, sr, bar_beat_times)
+        s7 = _try_cache("bar_tracking")
+        if s7 is None:
+            if beat_this_beats and len(beat_this_beats) >= 6:
+                bar_beat_times = np.array([b.time for b in beat_this_beats])
+            else:
+                bar_beat_times = beat_times
+            s7 = signal_bar_tracking(audio, sr, bar_beat_times)
+            _save_cache("bar_tracking", s7)
         if s7:
             signal_results["bar_tracking"] = s7
 
-    # Signal 8: ResNet18 MFCC classifier
+    # Signal 8a: ResNet18 MFCC classifier
     if not skip_resnet and weights["resnet"] > 0.01 and audio is not None:
-        try:
-            import beatmeter.analysis.resnet_signal as _resnet_mod
+        s8 = _try_cache("resnet_meter")
+        if s8 is None:
             s8 = _resnet_mod.signal_resnet_meter(audio, sr)
-            if s8:
-                signal_results["resnet"] = s8
-                logger.debug(f"ResNet signal: {s8}")
-        except ImportError:
-            pass
+            _save_cache("resnet_meter", s8)
+        if s8:
+            signal_results["resnet"] = s8
+            logger.debug(f"ResNet signal: {s8}")
+
+    # Signal 8b: MERT meter classifier
+    if not skip_mert and weights.get("mert", 0) > 0.01 and audio is not None:
+        s8b = _try_cache("mert_meter")
+        if s8b is None:
+            s8b = _mert_mod.signal_mert_meter(audio, sr)
+            _save_cache("mert_meter", s8b)
+        if s8b:
+            signal_results["mert"] = s8b
+            logger.debug(f"MERT signal: {s8b}")
 
     return signal_results
 
@@ -778,6 +313,8 @@ def _collect_accent_scores(
     audio: np.ndarray | None,
     sr: int,
     tempo_bpm: float | None,
+    cache=None,
+    audio_hash: str | None = None,
 ) -> None:
     """Collect accent (signal 4) and periodicity (signal 5) scores.
 
@@ -797,6 +334,18 @@ def _collect_accent_scores(
             accent_trackers.append((f'madmom_{bpb}', beats))
 
     if audio is not None and accent_trackers:
+        # Try loading cached accent/periodicity signals
+        from beatmeter.analysis.cache import str_to_meter_key as _s2mk
+        if cache and audio_hash:
+            cached_s4 = cache.load_signal(audio_hash, "accent_pattern")
+            cached_s5 = cache.load_signal(audio_hash, "beat_periodicity")
+            if cached_s4 is not None and cached_s5 is not None:
+                if cached_s4:
+                    signal_results["accent"] = {_s2mk(k): v for k, v in cached_s4.items()}
+                if cached_s5:
+                    signal_results["periodicity"] = {_s2mk(k): v for k, v in cached_s5.items()}
+                return
+
         merged_accent: dict[tuple[int, int], float] = {}
         merged_periodicity: dict[tuple[int, int], float] = {}
 
@@ -814,7 +363,7 @@ def _collect_accent_scores(
             logger.debug(f"Flat dynamics (max CV={_max_cv:.4f}): suppressing accent/periodicity signals")
             weights["accent"] = 0.0
             weights["periodicity"] = 0.0
-            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"]
+            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"] + weights.get("mert", 0)
             if remaining_w > 0:
                 scale = 1.0 / remaining_w
                 weights["beatnet"] *= scale
@@ -823,6 +372,8 @@ def _collect_accent_scores(
                 weights["autocorr"] *= scale
                 weights["bar_tracking"] *= scale
                 weights["resnet"] *= scale
+                if "mert" in weights:
+                    weights["mert"] *= scale
 
         for name, beats in accent_trackers:
             # Skip trackers whose tempo deviates >25% from consensus.
@@ -869,6 +420,11 @@ def _collect_accent_scores(
                 if max_s > 0:
                     for k in scores_dict:
                         scores_dict[k] /= max_s
+
+        # Save to cache
+        if cache and audio_hash:
+            cache.save_signal(audio_hash, "accent_pattern", merged_accent)
+            cache.save_signal(audio_hash, "beat_periodicity", merged_periodicity)
 
         if weights["accent"] > 0 and merged_accent:
             signal_results["accent"] = merged_accent
@@ -1060,6 +616,9 @@ def generate_hypotheses(
     onset_event_times: np.ndarray | None = None,
     skip_bar_tracking: bool = False,
     skip_resnet: bool = False,
+    skip_mert: bool = False,
+    cache=None,
+    audio_hash: str | None = None,
 ) -> list[MeterHypothesis]:
     """Generate meter hypotheses from all signals.
 
@@ -1083,11 +642,12 @@ def generate_hypotheses(
         beatnet_alignment, beat_this_alignment, madmom_alignment,
     )
 
-    # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8
+    # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8, 8b
     signal_results = _collect_signal_scores(
         weights, beatnet_beats, madmom_results,
         onset_times, onset_strengths, beat_interval, beat_times,
         sr, audio, beat_this_beats, skip_bar_tracking, skip_resnet,
+        skip_mert, cache=cache, audio_hash=audio_hash,
     )
 
     # Step 3: Collect accent and periodicity scores (signals 4 & 5)
@@ -1095,6 +655,7 @@ def generate_hypotheses(
         weights, signal_results,
         all_beats, beatnet_beats, beat_this_beats, librosa_beats,
         madmom_results, onset_times, onset_strengths, audio, sr, tempo_bpm,
+        cache=cache, audio_hash=audio_hash,
     )
 
     # Step 4: Weighted additive combination with consensus bonus
