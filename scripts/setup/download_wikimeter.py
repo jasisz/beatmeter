@@ -404,15 +404,24 @@ def segment_audio(
         usable_duration = duration
 
     # How many segments fit, capped by MAX_SEGMENTS
-    n_segments = min(MAX_SEGMENTS, max(1, int(usable_duration // segment_length)))
+    # Use stride = segment_length + 5s gap (minimal gap for independence)
+    MIN_GAP = 5.0
+    stride = segment_length + MIN_GAP
+    n_segments = min(MAX_SEGMENTS, max(1, int((usable_duration + MIN_GAP) // stride)))
 
     # Evenly space segment start positions across usable duration
     if n_segments == 1:
         # Single segment from the middle
-        starts = [(usable_duration - segment_length) / 2] if usable_duration >= segment_length else [0.0]
+        starts = [max(0.0, (usable_duration - segment_length) / 2)]
+    elif n_segments * segment_length > usable_duration:
+        # Not enough room even with minimal gaps — pack tightly from center
+        total_needed = n_segments * segment_length
+        center_start = max(0.0, (usable_duration - total_needed) / 2)
+        starts = [center_start + i * segment_length for i in range(n_segments)]
     else:
-        stride = usable_duration / n_segments
-        starts = [i * stride for i in range(n_segments)]
+        # Spread evenly across usable duration
+        actual_stride = (usable_duration - segment_length) / (n_segments - 1) if n_segments > 1 else 0
+        starts = [i * actual_stride for i in range(n_segments)]
 
     segments: list[str] = []
 
