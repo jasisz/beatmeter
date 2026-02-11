@@ -154,6 +154,8 @@ SONGS: list[Song] = [
     ("Mike Oldfield", "Tubular Bells Part 1", [5], "Mike Oldfield Tubular Bells opening 5/4", 600),
     ("Vulfpeck", "Dean Town", [5], None, 210),
     ("Jacob Collier", "In My Room", [5], "Jacob Collier In My Room", 300),
+    ("Tool", "The Grudge", [5], "Tool The Grudge Lateralus", 496),
+    ("Cream", "White Room", [5], "Cream White Room", 300),
     # Balkan / World
     ("Traditional", "Eleno Mome", [5], "Eleno Mome Bulgarian folk", 240),
     ("Traditional", "Paidushko Horo", [5], "Paidushko Horo Bulgarian folk", 240),
@@ -199,6 +201,9 @@ SONGS: list[Song] = [
     ("Led Zeppelin", "The Ocean", [7], "Led Zeppelin The Ocean", 266),
     ("Jeff Beck", "Led Boots", [7], None, 340),
     ("Porcupine Tree", "The Sound of Muzak", [7], None, 290),
+    ("Dave Brubeck", "Unsquare Dance", [7], "Dave Brubeck Unsquare Dance", 120),
+    ("Soundgarden", "Spoonman", [7], "Soundgarden Spoonman", 248),
+    ("Tool", "Ticks and Leeches", [7], "Tool Ticks and Leeches", 487),
 
     # =====================================================================
     #  9/8 (aksak / additive: 2+2+2+3 or 3+3+3)
@@ -215,6 +220,22 @@ SONGS: list[Song] = [
     ("Mahler", "Symphony No 9 Rondo Burleske", [9], "Mahler Symphony 9 Rondo Burleske", 780),
     ("Stravinsky", "The Rite of Spring Sacrificial Dance", [9], "Stravinsky Rite of Spring Sacrificial Dance", 300),
     ("Bartók", "Six Dances in Bulgarian Rhythm No 1", [9], "Bartok Bulgarian Rhythm No 1 Mikrokosmos", 90),
+    # Irish slip jigs (canonical 9/8)
+    ("Traditional", "The Butterfly", [9], "The Butterfly Irish slip jig", 120),
+    ("Traditional", "The Rocky Road to Dublin", [9], "Rocky Road to Dublin Dubliners", 180),
+    ("Traditional", "Kid on the Mountain", [9], "Kid on the Mountain Irish slip jig", 120),
+    # Rock / Alternative 9/8
+    ("Led Zeppelin", "The Crunge", [9], "Led Zeppelin The Crunge", 197),
+    ("Genesis", "Apocalypse in 9/8", [9], "Genesis Apocalypse in 9/8 Suppers Ready", 480),
+    ("System of a Down", "Question!", [9], "System of a Down Question", 200),
+    # Jazz 9/8
+    ("Don Ellis", "Turkish Bath", [9], "Don Ellis Orchestra Turkish Bath", 629),
+    ("Avishai Cohen", "Smash", [9], "Avishai Cohen Trio Smash", 360),
+    # Classical compound 9/8
+    ("Debussy", "Arabesque No 1", [9], "Debussy Arabesque No 1 piano", 300),
+    # Balkan / Turkish 9/8
+    ("Traditional", "Havasi Oyun Havasi", [9], "Havasi Oyun Havasi Turkish 9/8", 240),
+    ("Traditional", "Svornato Horo", [9], "Svornato Horo Bulgarian 9/8", 240),
 
     # =====================================================================
     #  11/8 (additive: 2+2+3+2+2 or similar)
@@ -227,6 +248,18 @@ SONGS: list[Song] = [
     ("Bartók", "Six Dances in Bulgarian Rhythm No 6", [11], "Bartok Mikrokosmos 153 Bulgarian Rhythm 6", 120),
     ("Aksak Maboul", "Saure Gurke", [11], "Aksak Maboul Saure Gurke", 300),
     ("Frank Zappa", "Outside Now", [11], "Frank Zappa Outside Now", 340),
+    # Rock / Alternative 11/8
+    ("Allman Brothers Band", "Whipping Post", [11], "Allman Brothers Whipping Post", 315),
+    ("King Gizzard & The Lizard Wizard", "Gamma Knife", [11], "King Gizzard Gamma Knife", 261),
+    ("Tool", "Rosetta Stoned", [11], "Tool Rosetta Stoned 10000 Days", 660),
+    # Jazz 11/8
+    ("Don Ellis", "Upstart", [11], "Don Ellis Upstart 11/4", 420),
+    ("Avishai Cohen", "Eleven Wives", [11], "Avishai Cohen Eleven Wives", 300),
+    # Balkan 11/8
+    ("Traditional", "Krivo Horo", [11], "Krivo Horo Bulgarian 11/8", 240),
+    ("Traditional", "Petrunino Horo", [11], "Petrunino Horo Bulgarian 11/16", 240),
+    ("Traditional", "Bistrishka Kopanitsa", [11], "Bistrishka Kopanitsa Bulgarian 11/8", 240),
+    ("Ivo Papazov", "Kopanitsa Wedding", [11], "Ivo Papazov Kopanitsa wedding music", 300),
 
     # =====================================================================
     #  POLYRHYTHMIC (simultaneous meters)
