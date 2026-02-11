@@ -558,10 +558,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-accum", type=int, default=8,
                         help="Gradient accumulation steps (effective batch = batch-size * grad-accum)")
-    parser.add_argument("--lr", type=float, default=1e-4,
-                        help="Learning rate for classification head")
-    parser.add_argument("--lora-lr", type=float, default=1e-5,
-                        help="Learning rate for LoRA parameters")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="Learning rate for classification head (auto-scaled per model if not set)")
+    parser.add_argument("--lora-lr", type=float, default=None,
+                        help="Learning rate for LoRA parameters (auto-scaled per model if not set)")
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--dropout", type=float, default=0.3)
@@ -576,6 +576,17 @@ def main():
                         help="Extra data directories with .tab files to append to train split "
                              "(e.g. data/oddmeter-wiki)")
     args = parser.parse_args()
+
+    # Auto-scale LR per model size if not explicitly set
+    lr_defaults = {
+        "m-a-p/MERT-v1-95M":  {"lr": 5e-4, "lora_lr": 1e-4},
+        "m-a-p/MERT-v1-330M": {"lr": 1e-4, "lora_lr": 2e-5},
+    }
+    defaults = lr_defaults.get(args.model, lr_defaults["m-a-p/MERT-v1-330M"])
+    if args.lr is None:
+        args.lr = defaults["lr"]
+    if args.lora_lr is None:
+        args.lora_lr = defaults["lora_lr"]
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
