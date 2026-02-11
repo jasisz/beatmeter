@@ -269,7 +269,7 @@ SONGS: list[Song] = [
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "wikimeter"
 METER_LABELS = {3: "three", 4: "four", 5: "five", 7: "seven", 9: "nine", 11: "eleven"}
-MAX_SEGMENTS = 25  # Cap per song: 25 × 30s = 12.5 min max
+MAX_SEGMENTS = 5  # Cap per song: 5 × 30s = 2.5 min max (fair use)
 DURATION_TOLERANCE = 2.0  # Accept videos between 0.5x and 2.0x expected duration
 MAX_VIDEO_DURATION_FALLBACK = 900  # Fallback for songs without expected_duration (15 min)
 
