@@ -383,7 +383,12 @@ def download_full_audio(
 def segment_audio(
     src: Path, stem: str, audio_dir: Path, segment_length: int = 30,
 ) -> list[str]:
-    """Split audio into segments. Returns list of segment filename stems."""
+    """Split audio into non-contiguous segments evenly spaced across the track.
+
+    Segments are spread across the usable portion (excluding 10s margins)
+    so they represent independent excerpts, not one continuous chunk.
+    Short songs naturally yield fewer segments.
+    """
     duration = get_duration(src)
     if duration is None or duration < 15:
         return []
@@ -398,12 +403,23 @@ def segment_audio(
         usable_start = 0
         usable_duration = duration
 
-    segments: list[str] = []
-    seg_idx = 0
-    offset = 0.0
+    # How many segments fit, capped by MAX_SEGMENTS
+    n_segments = min(MAX_SEGMENTS, max(1, int(usable_duration // segment_length)))
 
-    while offset + 15 <= usable_duration and seg_idx < MAX_SEGMENTS:
+    # Evenly space segment start positions across usable duration
+    if n_segments == 1:
+        # Single segment from the middle
+        starts = [(usable_duration - segment_length) / 2] if usable_duration >= segment_length else [0.0]
+    else:
+        stride = usable_duration / n_segments
+        starts = [i * stride for i in range(n_segments)]
+
+    segments: list[str] = []
+
+    for seg_idx, offset in enumerate(starts):
         seg_duration = min(segment_length, usable_duration - offset)
+        if seg_duration < 15:
+            continue
         start_time = usable_start + offset
         seg_stem = f"{stem}_seg{seg_idx:02d}"
         dest = audio_dir / f"{seg_stem}.mp3"
@@ -428,9 +444,6 @@ def segment_audio(
                 segments.append(seg_stem)
         except subprocess.TimeoutExpired:
             pass
-
-        offset += segment_length
-        seg_idx += 1
 
     return segments
 
