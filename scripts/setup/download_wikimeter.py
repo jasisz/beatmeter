@@ -297,17 +297,10 @@ def get_duration(path: Path) -> float | None:
         return None
 
 
-def download_full_audio(
-    query: str, dest_dir: Path, timeout: int = 120,
-    expected_duration: int | None = None,
-) -> Path | None:
-    """Download full audio from YouTube via yt-dlp. Returns path or None.
-
-    If expected_duration is set, only accepts videos within 0.5x–2.0x range.
-    Otherwise falls back to MAX_VIDEO_DURATION_FALLBACK.
-    """
-    tmp_path = dest_dir / "full.%(ext)s"
-
+def resolve_video_id(
+    query: str, expected_duration: int | None = None, timeout: int = 30,
+) -> str | None:
+    """Resolve a search query to a YouTube video ID without downloading."""
     if expected_duration:
         min_dur = int(expected_duration / DURATION_TOLERANCE)
         max_dur = int(expected_duration * DURATION_TOLERANCE)
@@ -319,32 +312,72 @@ def download_full_audio(
         "yt-dlp",
         "--default-search", "ytsearch1",
         query,
-        "-x", "--audio-format", "mp3",
-        "--audio-quality", "5",
-        "-o", str(tmp_path),
+        "--print", "id",
+        "--no-download",
         "--no-playlist",
         "--max-downloads", "1",
         "--match-filter", duration_filter,
         "--quiet",
         "--no-warnings",
     ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        vid_id = result.stdout.strip().split("\n")[0].strip()
+        return vid_id if vid_id else None
+    except Exception:
+        return None
+
+
+def download_full_audio(
+    query: str, dest_dir: Path, timeout: int = 120,
+    expected_duration: int | None = None,
+    video_id: str | None = None,
+) -> tuple[Path | None, str | None]:
+    """Download full audio from YouTube via yt-dlp.
+
+    If video_id is provided, downloads that specific video (reproducible).
+    Otherwise, searches YouTube with the query and captures the video ID.
+
+    Returns (path, video_id) or (None, None).
+    """
+    # Resolve video ID first if not known
+    if not video_id:
+        video_id = resolve_video_id(query, expected_duration)
+        if not video_id:
+            return None, None
+
+    tmp_path = dest_dir / "full.%(ext)s"
+    source = f"https://www.youtube.com/watch?v={video_id}"
+
+    cmd = [
+        "yt-dlp",
+        source,
+        "-x", "--audio-format", "mp3",
+        "--audio-quality", "5",
+        "-o", str(tmp_path),
+        "--no-playlist",
+        "--quiet",
+        "--no-warnings",
+    ]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if result.returncode not in (0, 101):
+        if result.returncode != 0:
             stderr = result.stderr.strip()
             if stderr:
                 print(f" yt-dlp error: {stderr[:100]}")
-            return None
+            return None, None
     except subprocess.TimeoutExpired:
         print(" timeout")
-        return None
+        return None, None
     except FileNotFoundError:
         print(" ERROR: yt-dlp not found. Install: pip install yt-dlp")
         sys.exit(1)
 
     downloaded = list(dest_dir.glob("full.*"))
-    return downloaded[0] if downloaded else None
+    if downloaded:
+        return downloaded[0], video_id
+    return None, None
 
 
 def segment_audio(
@@ -406,20 +439,26 @@ def download_and_segment(
     query: str, stem: str, audio_dir: Path,
     segment_length: int = 30, timeout: int = 120,
     expected_duration: int | None = None,
-) -> list[str]:
-    """Download audio from YouTube and split into segments."""
+    video_id: str | None = None,
+) -> tuple[list[str], str | None]:
+    """Download audio from YouTube and split into segments.
+
+    Returns (list of segment filename stems, video_id).
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
-        src = download_full_audio(query, Path(tmpdir), timeout, expected_duration)
+        src, vid_id = download_full_audio(
+            query, Path(tmpdir), timeout, expected_duration, video_id,
+        )
         if src is None:
             print(" no file downloaded")
-            return []
+            return [], None
 
         duration = get_duration(src)
         if duration is None or duration < 15:
             print(f" too short ({duration}s)")
-            return []
+            return [], None
 
-        return segment_audio(src, stem, audio_dir, segment_length)
+        return segment_audio(src, stem, audio_dir, segment_length), vid_id
 
 
 def write_tab_file(
@@ -532,6 +571,14 @@ def main():
         print(f"\n  Total: {len(songs)} songs")
         return
 
+    # Load known video IDs for reproducibility
+    video_ids_path = output_dir / "video_ids.json"
+    video_ids: dict[str, dict] = {}
+    if video_ids_path.exists():
+        with open(video_ids_path) as f:
+            video_ids = json.load(f)
+        print(f"  Loaded {len(video_ids)} known video IDs from {video_ids_path.name}\n")
+
     # Download
     audio_dir.mkdir(parents=True, exist_ok=True)
     successful: list[tuple[str, list[int]]] = []
@@ -557,11 +604,18 @@ def main():
             songs_skipped += 1
             continue
 
-        print(f"{status}", end="", flush=True)
-        segments = download_and_segment(
+        # Use known video ID if available (exact reproducibility)
+        known_vid = video_ids.get(stem, {}).get("video_id")
+        if known_vid:
+            print(f"{status} [ID: {known_vid}]", end="", flush=True)
+        else:
+            print(f"{status}", end="", flush=True)
+
+        segments, vid_id = download_and_segment(
             search_query, stem, audio_dir,
             segment_length=args.segment_length,
             expected_duration=exp_dur,
+            video_id=known_vid,
         )
 
         if segments:
@@ -569,6 +623,18 @@ def main():
             for seg_stem in segments:
                 successful.append((seg_stem, meters))
             songs_downloaded += 1
+
+            # Save video ID for reproducibility
+            if vid_id:
+                video_ids[stem] = {
+                    "video_id": vid_id,
+                    "artist": artist,
+                    "title": title,
+                    "meters": meters,
+                    "query": search_query,
+                }
+                with open(video_ids_path, "w") as f:
+                    json.dump(video_ids, f, indent=2, ensure_ascii=False)
         else:
             print(f" — FAILED")
             songs_failed += 1
@@ -591,6 +657,7 @@ def main():
     print(f"  Songs failed:     {songs_failed}")
     print(f"  Total segments:   {len(successful)} ({seg_summary})")
     print(f"  Tab file:         {tab_path}")
+    print(f"  Video IDs:        {video_ids_path} ({len(video_ids)} entries)")
     print(f"{'=' * 70}")
 
 
