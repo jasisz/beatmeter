@@ -74,7 +74,7 @@ Candidate meter scores are combined through weighted additive fusion with severa
 
 ### 2.1 Evaluation Framework
 
-Evaluation uses a unified script (`scripts/eval.py`) with persistent worker subprocesses (`scripts/eval_worker.py`) to avoid BeatNet/madmom threading deadlocks. Beat tracking is cached per-tracker via `AnalysisCache` with smart invalidation (changing `meter.py` does not invalidate beat tracker caches). Run snapshots (`--save`) are stored in `data/runs/` with full per-file results for history tracking and regression detection.
+Evaluation uses a unified script (`scripts/eval.py`) with subprocess isolation per file to avoid BeatNet/madmom threading deadlocks. Beat tracking is cached per-tracker via `AnalysisCache` with smart invalidation (changing `meter.py` does not invalidate beat tracker caches). Run snapshots (`--save`) are stored in `.cache/runs/` with full per-file results for history tracking and regression detection.
 
 ```bash
 uv run python scripts/eval.py --limit 3 --workers 1   # smoke test
@@ -118,7 +118,8 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 7 | 303 | 253/303 (83%) | Folk GT fixes, compound transfer disabled, refactoring |
 | 8 | 303 | 253/303 (83%) | mert_meter (80.7%) -- gate FAIL, disabled |
 | 9 | 303 | 253/303 (83%) | Multi-layer 95M: 79.9% test (no improvement), LoRA scripts ready |
-| 12 | 303 | -- (in progress) | Multi-label sigmoid, 6 classes, ODDMETER-WIKI augmentation, LoRA 330M |
+| 12a | 303 | -- (in progress) | Multi-label sigmoid, 6 classes, ODDMETER-WIKI, LoRA 330M (val 14.7% @ ep9, crashed) |
+| 12b | 303 | -- (pending) | WIKIMETER dataset (163 songs, all meters + poly), disk checkpointing, L4 GPU |
 
 ### 2.4 Confidence Calibration
 
@@ -352,7 +353,40 @@ Despite being 5.3pp more accurate than resnet_meter on METER2800, mert_meter ach
 
 ### 4.10 MERT-330M LoRA Fine-tuning with Multi-label Architecture (Round 12)
 
-We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) classification to enable polyrhythm detection, expanded classes from 4 to 6 (adding 9/8, 11/8), and curated an external odd-meter dataset (ODDMETER-WIKI, 1028 segments from 82 songs via YouTube). Novel diagnostic metrics include Confidence Gap (ΔP), Normalized Shannon Entropy, inter-class correlation matrix for label leakage detection, and per-class noise floor for data-driven polyrhythm detection thresholds. Training in progress. Full details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) classification to enable polyrhythm detection, expanded classes from 4 to 6 (adding 9/8, 11/8), and curated two external datasets from YouTube:
+
+1. **ODDMETER-WIKI** (Round 12a): 1028 segments from 82 odd-meter songs (5/x, 7/x, 9/x, 11/x only)
+2. **WIKIMETER** (Round 12b): Expanded to 163 songs across all meters (29×3/4, 29×4/4, 30×5/x, 32×7/x, 12×9/x, 8×11/x, 23×poly) with per-song expected duration filtering to reject album/compilation downloads
+
+Novel diagnostic metrics include Confidence Gap (ΔP), Normalized Shannon Entropy, inter-class correlation matrix for label leakage detection, and per-class noise floor for data-driven polyrhythm detection thresholds.
+
+#### First Training Run: MERT-330M + ODDMETER-WIKI on Colab Pro A100
+
+| Epoch | Train Loss | Train Acc | Val Loss | Val Acc | Time |
+|-------|-----------|-----------|----------|---------|------|
+| 1 | 1.6259 | 4.3% | 1.6024 | 0.0% | 1052s |
+| 2 | 1.5885 | 4.0% | 1.5994 | 0.0% | 1041s |
+| 3 | 1.5703 | 5.1% | 1.5852 | 0.0% | 1041s |
+| 4 | 1.5525 | 6.5% | 1.5628 | 0.0% | 1041s |
+| 5 | 1.5387 | 7.2% | 1.5421 | 0.0% | 1041s |
+| 6 | 1.5044 | 12.3% | 1.4596 | 9.8% | 1041s |
+| 7 | 1.4776 | 16.1% | 1.5044 | 4.6% | 1041s |
+| 8 | 1.4541 | 18.9% | 1.5302 | 2.5% | 1041s |
+| 9 | 1.4361 | 20.6% | 1.4170 | **14.7%** | 1041s |
+| 10 | 1.4271 | 22.7% | 1.3862 | 6.7% | 1041s |
+
+**Key observations**:
+- **Breakthrough at epoch 6**: val acc jumped from 0% to 9.8% after 5 epochs of zero val. This is characteristic of pos_weight with heavy class imbalance — the model initially learns to predict only rare classes, then suddenly "clicks" on common classes.
+- **Val oscillation**: 0→0→0→0→0→9.8→4.6→2.5→14.7→6.7%. Typical post-breakthrough behavior with aggressive pos_weight.
+- **LR discovery**: Training was accidentally run with 95M learning rates (HEAD_LR=5e-4, LORA_LR=1e-4) on the 330M model. Despite being "too high", it worked — the model showed clear learning. Subsequent runs use per-model LR auto-scaling.
+- **Session crashed at epoch 10**: Colab runtime disconnected, checkpoint was only in RAM → lost. This led to adding persistent disk checkpointing after each best-val epoch.
+
+**Infrastructure improvements** from this run:
+- Checkpoint saved to disk (`torch.save`) after each new best val — crash-safe
+- Default model changed to 330M (95M showed 0% val for all epochs on T4)
+- WIKIMETER replaces ODDMETER-WIKI — balanced across all meter classes, includes polyrhythmic songs
+
+Full architecture and diagnostic details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
 ## 5. Failure Analysis
 
@@ -437,7 +471,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **MERT-330M LoRA multi-label results** -- Training in progress with sigmoid + BCE, 6 classes [3,4,5,7,9,11], ODDMETER-WIKI augmentation (1028 segments). Key metrics to evaluate: mAP, confidence gap, entropy diagnostics, noise floor thresholds. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+1. **MERT-330M LoRA multi-label results** -- First run (ODDMETER-WIKI) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. Key metrics to evaluate: mAP, confidence gap, entropy diagnostics, noise floor thresholds. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
 2. **MERT confidence gating** -- Only use mert_meter predictions when softmax confidence exceeds 0.8. Could eliminate many false 7/4 and 5/4 predictions while preserving gains on classical 3/4.
 
