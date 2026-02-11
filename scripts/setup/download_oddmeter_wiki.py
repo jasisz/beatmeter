@@ -190,6 +190,8 @@ SONGS: list[Song] = [
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "oddmeter-wiki"
 METER_LABELS = {3: "three", 4: "four", 5: "five", 7: "seven", 9: "nine", 11: "eleven"}
+MAX_SEGMENTS = 25  # Cap per song: 25 × 30s = 12.5 min max
+MAX_VIDEO_DURATION = 600  # Skip YouTube videos longer than 10 min
 
 
 def sanitize_filename(artist: str, title: str) -> str:
@@ -228,6 +230,7 @@ def download_full_audio(query: str, dest_dir: Path, timeout: int = 120) -> Path 
         "-o", str(tmp_path),
         "--no-playlist",
         "--max-downloads", "1",
+        "--match-filter", f"duration < {MAX_VIDEO_DURATION}",
         "--quiet",
         "--no-warnings",
     ]
@@ -282,7 +285,7 @@ def segment_audio(
     seg_idx = 0
 
     offset = 0.0
-    while offset + 15 <= usable_duration:  # minimum 15s segment
+    while offset + 15 <= usable_duration and seg_idx < MAX_SEGMENTS:
         seg_duration = min(segment_length, usable_duration - offset)
         start_time = usable_start + offset
 
