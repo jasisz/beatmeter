@@ -45,6 +45,7 @@ class AnalysisResponse(BaseModel):
     tempo_curve: list[TempoCurvePointResponse] = []
     sections: list[SectionResponse] = []
     duration: float = 0.0
+    meter_ambiguity: float = 0.0  # normalized entropy (0=certain, 1=uniform)
     converged: bool = False
     source_type: str = "recorded"  # "recorded" or "live"
 

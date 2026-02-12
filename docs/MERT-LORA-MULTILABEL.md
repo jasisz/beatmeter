@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Round 12 of the BeatMeter project transitions MERT fine-tuning from single-label (softmax) to multi-label (sigmoid) architecture to enable polyrhythm detection. The class set is expanded from 4 classes [3, 4, 5, 7] to 6 classes [3, 4, 5, 7, 9, 11]. Two external datasets were curated from YouTube: ODDMETER-WIKI (Round 12a, odd meters only) and WIKIMETER (Round 12b, all meters including 3/4, 4/4, and polyrhythmic). A comprehensive diagnostic framework monitors label leakage, confidence selectivity, and polyrhythm detection thresholds. First training run (330M + ODDMETER-WIKI, A100) reached val 14.7% at epoch 9 before session crash; second run (WIKIMETER, L4 GPU) pending.
+Round 12 of the BeatMeter project transitions MERT fine-tuning from single-label (softmax) to multi-label (sigmoid) architecture to enable polyrhythm detection. The class set is expanded from 4 classes [3, 4, 5, 7] to 6 classes [3, 4, 5, 7, 9, 11]. Two external datasets were curated from YouTube: WIKIMETER (Round 12a, odd meters only) and WIKIMETER (Round 12b, all meters including 3/4, 4/4, and polyrhythmic). A comprehensive diagnostic framework monitors label leakage, confidence selectivity, and polyrhythm detection thresholds. First training run (330M + WIKIMETER, A100) reached val 14.7% at epoch 9 before session crash; second run (WIKIMETER, L4 GPU) pending.
 
 ## 1. Motivation
 
@@ -26,11 +26,11 @@ METER2800 covers only [3, 4, 5, 7], but real-world odd-meter music includes:
 
 Adding 9 and 11 to the class set makes the model useful for a broader range of non-Western and progressive music.
 
-### 1.3 Why External Data? (ODDMETER-WIKI → WIKIMETER)
+### 1.3 Why External Data? (WIKIMETER → WIKIMETER)
 
 METER2800 has approximately 150 training files per odd meter class (5/4, 7/4), and zero files for 9/x or 11/x. LoRA fine-tuning requires more data for underrepresented classes. Wikipedia maintains a curated [list of musical works in unusual time signatures](https://en.wikipedia.org/wiki/List_of_musical_works_in_unusual_time_signatures) -- a musicologically vetted resource covering diverse genres and cultures.
 
-The initial dataset (ODDMETER-WIKI, Round 12a) contained only odd meters (5/x, 7/x, 9/x, 11/x + poly), which created a training distribution mismatch — the model saw disproportionately more odd-meter data from YouTube vs METER2800. The expanded dataset (WIKIMETER, Round 12b) adds 29 curated 3/4 songs and 29 curated 4/4 songs to balance the distribution, plus per-song expected duration filtering to prevent downloading albums or compilations.
+The initial dataset (WIKIMETER, Round 12a) contained only odd meters (5/x, 7/x, 9/x, 11/x + poly), which created a training distribution mismatch — the model saw disproportionately more odd-meter data from YouTube vs METER2800. The expanded dataset (WIKIMETER, Round 12b) adds 29 curated 3/4 songs and 29 curated 4/4 songs to balance the distribution, plus per-song expected duration filtering to prevent downloading albums or compilations.
 
 ## 2. Architecture Changes
 
@@ -110,41 +110,31 @@ Negative classes get 0.1 instead of 0.0, preventing the model from pushing all n
 `MERTAudioDataset` accepts `list[tuple[Path, list[int]]]` -- each entry has a list of meter integers:
 
 - **METER2800 entries**: Wrapped as single-label: `[(path, [3])]`
-- **ODDMETER-WIKI entries**: Can be multi-label: `[(path, [3, 4])]` for polyrhythmic tracks
+- **WIKIMETER entries**: Can be multi-label: `[(path, [3, 4])]` for polyrhythmic tracks
 - **Extra data parser**: Handles comma-separated meters in .tab files: `"5,7"` is parsed into `[5, 7]`
 
 ## 3. External Datasets
 
-### 3.1 ODDMETER-WIKI (Round 12a — superseded by WIKIMETER)
+### 3.1 WIKIMETER
 
-Initial dataset with 105 songs (odd meters + poly only). Used in first training run. Superseded by WIKIMETER which adds balanced 3/4 and 4/4 data.
-
-| Metric | Value |
-|--------|-------|
-| Songs | 105 (5/x: 30, 7/x: 32, 9/x: 12, 11/x: 8, poly: 23) |
-| Segments | 1,028 |
-| Script | `scripts/setup/download_oddmeter_wiki.py` |
-
-### 3.2 WIKIMETER (Round 12b — current)
-
-Expanded and balanced dataset with all meter classes, sourced from Wikipedia + curated selections. Includes per-song expected duration filtering (0.5x–2.0x tolerance) to reject albums/compilations.
+Curated dataset with all meter classes, sourced from Wikipedia-verified time signatures. Song catalog lives in `scripts/setup/wikimeter.json` (single source of truth, committed to repo). Includes per-song expected duration filtering (0.5x–2.0x tolerance) to reject albums/compilations.
 
 | Meter | Songs | Example Artists/Works |
 |-------|-------|----------------------|
-| 3/4 | 29 | Strauss waltzes, Chopin, Tchaikovsky, Beatles ("Norwegian Wood"), folk |
-| 4/4 | 29 | Queen, AC/DC, Nirvana, Michael Jackson, Daft Punk, Kraftwerk |
-| 5/x | 30 | Dave Brubeck ("Take Five"), Radiohead, Gorillaz, Chopin, Tchaikovsky, Balkan folk |
-| 7/x | 32 | Pink Floyd ("Money"), Peter Gabriel ("Solsbury Hill"), Rush, King Crimson, Balkan folk |
-| 9/x | 12 | Blue Rondo a la Turk, Bartok Bulgarian Dances, Stravinsky |
-| 11/x | 8 | Bartok Bulgarian No. 6, Gankino Horo, Kopanitsa, Primus |
-| Polyrhythmic | 23 | African drumming [3,4], Meshuggah [5,4]/[7,4], gamelan, hemiola |
-| **Total** | **163** | |
+| 3/4 | 74 | Strauss waltzes, Chopin, Tchaikovsky, Beatles ("Norwegian Wood"), folk |
+| 4/4 | 87 | Queen, AC/DC, Nirvana, Michael Jackson, Daft Punk, Kraftwerk |
+| 5/x | 33 | Dave Brubeck ("Take Five"), Radiohead, Holst ("Mars"), Muse, Halloween theme |
+| 7/x | 26 | Pink Floyd ("Money"), Peter Gabriel ("Solsbury Hill"), King Crimson, Balkan folk |
+| 9/x | 30 | Blue Rondo a la Turk, Greek zeimbekiko, Irish slip jigs, Turkish karsilama |
+| 11/x | 24 | Gankino Horo, Kopanitsa variants, Brubeck ("Eleven Four"), Primus, Tool |
+| Polyrhythmic | 29 | African drumming [3,4], Meshuggah [5,4]/[7,4], gamelan, hemiola |
+| **Total** | **244** | |
 
-**Key improvement over ODDMETER-WIKI**: Balanced 3/4 and 4/4 representation prevents training distribution mismatch that caused val oscillation in the first run.
+**History**: Round 12a used an odd-meter-only subset (105 songs, 5/7/9/11 + poly). This caused training distribution mismatch. Round 12b added balanced 3/4 and 4/4 data. Current catalog (244 songs) includes all meters.
 
-### 3.3 Download and Segmentation Pipeline
+### 3.2 Download and Segmentation Pipeline
 
-Scripts: `scripts/setup/download_wikimeter.py` (local) and embedded in Colab notebook cell-7.
+Scripts: `scripts/setup/download_wikimeter.py` (reads `wikimeter.json`) and embedded in Colab notebook cell-7.
 
 1. **YouTube search and download** via `yt-dlp`: Each song searched by artist + title (or custom query override).
 2. **Duration filtering**: Per-song expected duration with 2x tolerance (e.g., 300s expected → accept 150s–600s). Prevents downloading compilations, live albums, or wrong videos.
@@ -275,7 +265,7 @@ n_poly = int((multi_active >= 2).sum())
 
 For polyrhythmic samples, the most common class pairs are reported (e.g., `3+4: 15 samples`, `5+4: 8 samples`).
 
-**Interpretation**: On single-label METER2800 data, co-occurrence should be low (only model noise). On ODDMETER-WIKI polyrhythmic data, co-occurrence should be high for the correct pair.
+**Interpretation**: On single-label METER2800 data, co-occurrence should be low (only model noise). On WIKIMETER polyrhythmic data, co-occurrence should be high for the correct pair.
 
 ### 5.3 Confidence Gap
 
@@ -373,9 +363,9 @@ The five metrics form a coherent diagnostic pipeline:
 
 ## 7. Training Results
 
-### 7.1 Run 1: MERT-330M + ODDMETER-WIKI on Colab Pro A100 (crashed)
+### 7.1 Run 1: MERT-330M + WIKIMETER on Colab Pro A100 (crashed)
 
-**Config**: MODEL_NAME=MERT-v1-330M, EPOCHS=30, BATCH_SIZE=4, GRAD_ACCUM=8, LORA_RANK=16, HEAD_LR=5e-4 (accidentally used 95M values), LORA_LR=1e-4, USE_EXTRA_DATA=True (ODDMETER-WIKI).
+**Config**: MODEL_NAME=MERT-v1-330M, EPOCHS=30, BATCH_SIZE=4, GRAD_ACCUM=8, LORA_RANK=16, HEAD_LR=5e-4 (accidentally used 95M values), LORA_LR=1e-4, USE_EXTRA_DATA=True (WIKIMETER).
 
 | Epoch | Train Acc | Val Acc | Notes |
 |-------|-----------|---------|-------|
@@ -395,7 +385,7 @@ The five metrics form a coherent diagnostic pipeline:
 ### 7.2 Run 2: MERT-330M + WIKIMETER on Colab Pro L4 (pending)
 
 **Changes from Run 1**:
-- WIKIMETER replaces ODDMETER-WIKI (balanced 3/4 + 4/4 added, polyrhythmic included)
+- WIKIMETER replaces WIKIMETER (balanced 3/4 + 4/4 added, polyrhythmic included)
 - Per-model LR auto-scaling: HEAD_LR=1e-4, LORA_LR=2e-5 for 330M
 - Checkpoint saved to disk after each best-val epoch
 - L4 GPU (~1.7 compute units/h vs A100's ~7.5) — ~3x cheaper but ~3x slower
@@ -405,11 +395,11 @@ The five metrics form a coherent diagnostic pipeline:
 | File | Action | Description |
 |------|--------|-------------|
 | `scripts/training/finetune_mert.py` | Major refactor | Sigmoid + BCE, multi-label data loading, 6 classes, phase augmentation, `--extra-data` flag, full diagnostic metrics suite |
-| `scripts/setup/download_wikimeter.py` | New | WIKIMETER download script (163 songs, per-song duration filtering) |
-| `scripts/setup/download_oddmeter_wiki.py` | Superseded | Original odd-meter-only download script (kept for reference) |
+| `scripts/setup/download_wikimeter.py` | Refactored | WIKIMETER download script (reads wikimeter.json, 244 songs) |
+| `scripts/setup/wikimeter.json` | New | Song catalog — single source of truth (244 songs, committed to repo) |
 | `notebooks/colab_mert_lora.ipynb` | Major update | Self-contained Colab notebook: METER2800 download, WIKIMETER download, training with disk checkpointing |
 | `data/wikimeter/data_wikimeter.tab` | Generated | Multi-label .tab file for WIKIMETER segments |
-| `data/wikimeter/audio/` | Generated | 30s segments from 163 songs |
+| `data/wikimeter/audio/` | Generated | 30s segments from 244 songs |
 
 ### 8.1 Key Constants in finetune_mert.py
 
@@ -427,9 +417,9 @@ LABEL_SMOOTH_NEG = 0.1                   # Label smoothing for negative classes
 # Basic LoRA fine-tuning on METER2800
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800
 
-# With ODDMETER-WIKI augmentation
+# With WIKIMETER augmentation
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --extra-data data/oddmeter-wiki
+    --extra-data data/wikimeter
 
 # Smoke test (3 files per split)
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
@@ -482,7 +472,7 @@ Before enabling in the ensemble:
 | Smoothing sweep | LABEL_SMOOTH_NEG in {0.0, 0.02, 0.05, 0.1, 0.2} | Find leakage threshold |
 | LoRA rank sweep | r in {4, 8, 16, 32} | Capacity vs. overfitting tradeoff |
 | Frozen vs. LoRA | --no-lora vs default | Quantify LoRA benefit |
-| Extra data impact | With/without --extra-data | Quantify ODDMETER-WIKI benefit |
+| Extra data impact | With/without --extra-data | Quantify WIKIMETER benefit |
 | Phase augmentation | With/without random crop | Quantify phase-invariance benefit |
 
 ## 10. Relationship to Prior Work
@@ -494,17 +484,17 @@ This experiment builds directly on the findings from Rounds 8--9 (documented in 
 | MERT frozen + MLP: 80.7% test, gate FAIL | 8 | LoRA fine-tuning to adapt MERT representations |
 | Multi-layer 95M: 79.9%, no improvement | 9 | Move to 330M (24 layers, richer representations) |
 | Best layer is 3 (early) | 8 | Learnable layer weights discover optimal combination |
-| Over-predicts 7/4 and 5/4 | 8 | More training data for these classes via ODDMETER-WIKI |
+| Over-predicts 7/4 and 5/4 | 8 | More training data for these classes via WIKIMETER |
 | Softmax forces single class | 8--9 | Sigmoid enables genuine polyrhythm detection |
-| 150 train files per odd meter | -- | ODDMETER-WIKI adds 304 (5/x), 262 (7/x), 106 (9/x), 73 (11/x) |
+| 150 train files per odd meter | -- | WIKIMETER adds 304 (5/x), 262 (7/x), 106 (9/x), 73 (11/x) |
 
 ## 11. Risk Analysis
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Label leakage from smoothing | Medium | Model loses selectivity | Correlation matrix monitoring; reduce LABEL_SMOOTH_NEG |
-| ODDMETER-WIKI label noise | Medium | Incorrect labels degrade training | Wikipedia source is musicologically vetted; manual review of ambiguous entries |
+| WIKIMETER label noise | Medium | Incorrect labels degrade training | Wikipedia source is musicologically vetted; manual review of ambiguous entries |
 | YouTube audio quality variance | Low | Inconsistent features | MERT is pre-trained on diverse audio quality; 30s segments average out local artifacts |
 | LoRA overfitting on small dataset | Medium | Good val, poor test | Early stopping, dropout, gradient clipping, cosine LR schedule |
-| New classes (9, 11) too sparse | High | Model never learns 9/x, 11/x reliably | pos_weight compensates class imbalance; ODDMETER-WIKI provides targeted data |
+| New classes (9, 11) too sparse | High | Model never learns 9/x, 11/x reliably | pos_weight compensates class imbalance; WIKIMETER provides targeted data |
 | Compute cost | -- | ~2--4 hours per training run on MPS | Smoke test with --limit 3 first; --no-lora baseline for quick iteration |

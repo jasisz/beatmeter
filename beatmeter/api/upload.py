@@ -96,6 +96,7 @@ async def analyze_file(file: UploadFile = File(...)):
                 for s in result.sections
             ],
             duration=result.duration,
+            meter_ambiguity=result.meter_ambiguity,
         )
     except Exception as e:
         raise HTTPException(500, f"Analysis failed: {str(e)}")

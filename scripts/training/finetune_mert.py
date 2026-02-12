@@ -58,24 +58,24 @@ MODEL_CONFIGS = {
 class MERTAudioDataset(Dataset):
     """Dataset that loads audio files and returns resampled+cropped waveforms.
 
-    Supports multi-label: each entry has a list of meter ints.
-    Returns multi-hot label vector for BCEWithLogitsLoss.
+    Supports multi-label with soft weights: each entry has a dict {meter: weight}.
+    Returns soft label vector for BCEWithLogitsLoss.
     """
 
     def __init__(
         self,
-        entries: list[tuple[Path, list[int]]],
+        entries: list[tuple[Path, dict[int, float]]],
         augment: bool = False,
     ):
-        self.entries: list[tuple[Path, list[int]]] = []
+        self.entries: list[tuple[Path, dict[int, float]]] = []
         self.augment = augment
 
         skipped = 0
-        for audio_path, meters in entries:
+        for audio_path, meter_weights in entries:
             if not audio_path.exists():
                 skipped += 1
                 continue
-            valid = [m for m in meters if m in METER_TO_IDX]
+            valid = {m: w for m, w in meter_weights.items() if m in METER_TO_IDX}
             if valid:
                 self.entries.append((audio_path, valid))
 
@@ -86,11 +86,11 @@ class MERTAudioDataset(Dataset):
         return len(self.entries)
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
-        path, meters = self.entries[idx]
-        # Multi-hot label with label smoothing on negatives
+        path, meter_weights = self.entries[idx]
+        # Soft label: per-meter weight from data, label smoothing on negatives
         label = np.full(len(CLASS_METERS), LABEL_SMOOTH_NEG, dtype=np.float32)
-        for m in meters:
-            label[METER_TO_IDX[m]] = 1.0
+        for m, w in meter_weights.items():
+            label[METER_TO_IDX[m]] = w
 
         try:
             audio, _ = librosa.load(str(path), sr=MERT_SR, mono=True)
@@ -227,8 +227,8 @@ def mert_forward_pool(
 # ---------------------------------------------------------------------------
 
 
-def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, list[int]]] | None:
-    """Load entries for a specific split. Returns (path, [meters]) tuples."""
+def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, dict[int, float]]] | None:
+    """Load entries for a specific split. Returns (path, {meter: weight}) tuples."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from scripts.utils import parse_label_file
 
@@ -237,19 +237,19 @@ def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, list[int]
         label_path = data_dir / f"data_{split}_4_classes{ext}"
         if label_path.exists():
             raw = parse_label_file(label_path, data_dir, valid_meters=valid_meters)
-            # Convert single-label to multi-label format
-            entries = [(p, [m]) for p, m in raw]
+            # Convert single-label to dict format: meter → 1.0
+            entries = [(p, {m: 1.0}) for p, m in raw]
             print(f"  Loaded {len(entries)} entries from {label_path.name}")
             return entries
     return None
 
 
-def compute_pos_weights(entries: list[tuple[Path, list[int]]], num_classes: int) -> torch.Tensor:
+def compute_pos_weights(entries: list[tuple[Path, dict[int, float]]], num_classes: int) -> torch.Tensor:
     """Compute pos_weight for BCEWithLogitsLoss: ratio of negatives/positives per class."""
     pos_counts = np.zeros(num_classes, dtype=np.float32)
-    for _, meters in entries:
-        for m in meters:
-            if m in METER_TO_IDX:
+    for _, meter_weights in entries:
+        for m, w in meter_weights.items():
+            if m in METER_TO_IDX and w > 0.5:
                 pos_counts[METER_TO_IDX[m]] += 1
     total = len(entries)
     neg_counts = total - pos_counts
@@ -574,7 +574,7 @@ def main():
                         help="Freeze MERT entirely, only train the head (cheaper baseline)")
     parser.add_argument("--extra-data", type=Path, nargs="+", default=[],
                         help="Extra data directories with .tab files to append to train split "
-                             "(e.g. data/oddmeter-wiki)")
+                             "(e.g. data/wikimeter)")
     args = parser.parse_args()
 
     # Auto-scale LR per model size if not explicitly set
@@ -616,7 +616,10 @@ def main():
         sys.exit(1)
 
     # Load extra data directories (appended to train split only)
-    # Supports multi-label meter column: "5,7" parsed into [5, 7]
+    # Supports three meter column formats:
+    #   "3"       → {3: 1.0}          (single label)
+    #   "3,4"     → {3: 1.0, 4: 1.0}  (multi-label, hard)
+    #   "3:0.9,4:0.8" → {3: 0.9, 4: 0.8}  (soft labels)
     if args.extra_data:
         from scripts.utils import resolve_audio_path as _resolve
         valid_meters = set(METER_TO_IDX.keys())
@@ -631,7 +634,7 @@ def main():
             )
             for tab_file in tab_files:
                 import csv as _csv
-                extra_entries: list[tuple[Path, list[int]]] = []
+                extra_entries: list[tuple[Path, dict[int, float]]] = []
                 with open(tab_file, newline="", encoding="utf-8") as fh:
                     reader = _csv.DictReader(fh, delimiter="\t")
                     for row in reader:
@@ -639,17 +642,25 @@ def main():
                         raw_meter = row.get("meter", "").strip().strip('"')
                         if not raw_fname or not raw_meter:
                             continue
-                        # Parse comma-separated meters: "5,7" → [5, 7]
+                        # Parse meter column: soft ("3:0.9,4:0.8") or hard ("3,4")
+                        meter_weights: dict[int, float] = {}
                         try:
-                            meters = [int(x) for x in raw_meter.split(",")]
+                            for part in raw_meter.split(","):
+                                part = part.strip()
+                                if ":" in part:
+                                    m_str, w_str = part.split(":", 1)
+                                    m, w = int(m_str), float(w_str)
+                                else:
+                                    m, w = int(part), 1.0
+                                if m in valid_meters:
+                                    meter_weights[m] = w
                         except ValueError:
                             continue
-                        meters = [m for m in meters if m in valid_meters]
-                        if not meters:
+                        if not meter_weights:
                             continue
                         audio_path = _resolve(raw_fname, extra_dir)
                         if audio_path is not None:
-                            extra_entries.append((audio_path, meters))
+                            extra_entries.append((audio_path, meter_weights))
                 if extra_entries:
                     print(f"  Extra data: +{len(extra_entries)} entries from {tab_file.name}")
                     train_entries.extend(extra_entries)
@@ -663,8 +674,8 @@ def main():
     # Show distribution
     all_entries = train_entries + val_entries + test_entries
     meter_counts: Counter = Counter()
-    for _, meters in all_entries:
-        for m in meters:
+    for _, meter_weights in all_entries:
+        for m in meter_weights:
             meter_counts[m] += 1
     print(f"\nTotal: {len(all_entries)} entries")
     for m in CLASS_METERS:

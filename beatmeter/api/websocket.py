@@ -79,6 +79,7 @@ def result_to_response(result, converged: bool = False, source_type: str = "reco
             for s in result.sections
         ],
         duration=result.duration,
+        meter_ambiguity=result.meter_ambiguity,
         converged=converged,
         source_type=source_type,
     ).model_dump()

@@ -67,7 +67,7 @@ def test_generate_hypotheses_returns_list():
     onset_times = np.array([b.time for b in beats])
     onset_strengths = np.array([1.0 if b.is_downbeat else 0.5 for b in beats])
 
-    hypotheses = generate_hypotheses(
+    hypotheses, ambiguity = generate_hypotheses(
         beatnet_beats=beats,
         madmom_results={},
         onset_times=onset_times,
@@ -79,6 +79,7 @@ def test_generate_hypotheses_returns_list():
     assert hypotheses[0].numerator > 0
     assert hypotheses[0].denominator > 0
     assert 0 <= hypotheses[0].confidence <= 1.0
+    assert 0.0 <= ambiguity <= 1.0
 
 
 def test_generate_hypotheses_4_4_dominant():
@@ -86,7 +87,7 @@ def test_generate_hypotheses_4_4_dominant():
     onset_times = np.array([b.time for b in beats])
     onset_strengths = np.array([1.0 if b.is_downbeat else 0.5 for b in beats])
 
-    hypotheses = generate_hypotheses(
+    hypotheses, ambiguity = generate_hypotheses(
         beatnet_beats=beats,
         madmom_results={},
         onset_times=onset_times,
@@ -98,6 +99,8 @@ def test_generate_hypotheses_4_4_dominant():
     top = hypotheses[0]
     assert top.numerator == 4
     assert top.denominator == 4
+    # Dominant 4/4 should have relatively low ambiguity
+    assert ambiguity < 1.0
 
 
 def test_generate_hypotheses_have_descriptions():
@@ -105,7 +108,7 @@ def test_generate_hypotheses_have_descriptions():
     onset_times = np.array([b.time for b in beats])
     onset_strengths = np.array([1.0 if b.is_downbeat else 0.5 for b in beats])
 
-    hypotheses = generate_hypotheses(
+    hypotheses, _ = generate_hypotheses(
         beatnet_beats=beats,
         madmom_results={},
         onset_times=onset_times,

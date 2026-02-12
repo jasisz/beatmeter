@@ -231,7 +231,7 @@ class AnalysisEngine:
         # Step 5: Meter hypothesis generation
         # Pass tempo_bpm so meter detection can use it to constrain search
         logger.info("Step 5: Meter hypothesis generation")
-        meter_hypotheses = generate_hypotheses(
+        meter_hypotheses, meter_ambiguity = generate_hypotheses(
             beatnet_beats=beatnet_beats,
             madmom_results=madmom_results,
             onset_times=onset_times,
@@ -281,6 +281,7 @@ class AnalysisEngine:
             tempo_curve=tempo_curve,
             sections=sections,
             duration=duration,
+            meter_ambiguity=meter_ambiguity,
         )
 
     def _run_beat_tracking(
@@ -495,7 +496,7 @@ class AnalysisEngine:
             sec_meter = None
             if len(sec_beats) >= 4 and len(sec_onset_times) >= 4:
                 sec_bpm_val = sec_tempo.bpm if sec_tempo else global_bpm
-                hyps = generate_hypotheses(
+                hyps, _ = generate_hypotheses(
                     beatnet_beats=sec_beatnet,
                     madmom_results=sec_madmom,
                     onset_times=sec_onset_times,

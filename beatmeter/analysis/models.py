@@ -78,3 +78,4 @@ class AnalysisResult:
     tempo_curve: list[TempoCurvePoint] = field(default_factory=list)
     sections: list[Section] = field(default_factory=list)
     duration: float = 0.0
+    meter_ambiguity: float = 0.0  # normalized entropy of meter distribution (0=certain, 1=uniform)

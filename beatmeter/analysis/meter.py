@@ -16,6 +16,7 @@ scoring, weights, priors, and hypothesis generation.
 """
 
 import logging
+import math
 
 import numpy as np
 
@@ -560,11 +561,34 @@ def _apply_score_adjustments(
     return sub_beat_den
 
 
+def _compute_ambiguity(scores: dict[tuple[int, int], float]) -> float:
+    """Compute normalized entropy of meter score distribution.
+
+    Returns 0.0 when one meter dominates (engine is certain),
+    1.0 when all meters are equally likely (maximum ambiguity).
+    """
+    total = sum(scores.values())
+    if total <= 0:
+        return 1.0
+    probs = [v / total for v in scores.values() if v > 0]
+    if len(probs) <= 1:
+        return 0.0
+    entropy = -sum(p * math.log2(p) for p in probs)
+    max_entropy = math.log2(len(probs))
+    return round(entropy / max_entropy, 3)
+
+
 def _format_hypotheses(
     all_scores: dict[tuple[int, int], float],
     max_hypotheses: int,
-) -> list[MeterHypothesis]:
-    """Filter, normalize, sort and format final hypotheses."""
+) -> tuple[list[MeterHypothesis], float]:
+    """Filter, normalize, sort and format final hypotheses.
+
+    Returns (hypotheses, meter_ambiguity).
+    """
+    # Compute ambiguity before filtering (on full distribution)
+    ambiguity = _compute_ambiguity(all_scores)
+
     # Filter noise
     max_raw = max(all_scores.values())
     if max_raw > 0:
@@ -596,7 +620,7 @@ def _format_hypotheses(
             disambiguation_hint=hint,
         ))
 
-    return hypotheses
+    return hypotheses, ambiguity
 
 
 def generate_hypotheses(
@@ -621,10 +645,10 @@ def generate_hypotheses(
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
-) -> list[MeterHypothesis]:
+) -> tuple[list[MeterHypothesis], float]:
     """Generate meter hypotheses from all signals.
 
-    Merges and normalizes scores, returns top N with confidence.
+    Merges and normalizes scores, returns (top N with confidence, meter_ambiguity).
     """
     # Beat interval from tempo
     beat_interval = None
@@ -684,10 +708,10 @@ def generate_hypotheses(
         all_scores[meter] = score
 
     if not all_scores:
-        return [MeterHypothesis(
+        return ([MeterHypothesis(
             numerator=4, denominator=4, confidence=0.3,
             description=_get_description(4, 4),
-        )]
+        )], 1.0)
 
     # Step 5: Apply adjustments (priors, rarity, compound, NN penalties)
     _apply_score_adjustments(
