@@ -15,6 +15,8 @@ Usage:
 """
 
 import argparse
+import csv
+import random
 import sys
 import warnings
 from collections import Counter
@@ -30,7 +32,7 @@ from torch.utils.data import DataLoader, Dataset
 # Constants
 # ---------------------------------------------------------------------------
 
-CLASS_METERS = [3, 4, 5, 7]
+CLASS_METERS = [3, 4, 5, 7, 9, 11]
 METER_TO_IDX = {m: i for i, m in enumerate(CLASS_METERS)}
 IDX_TO_METER = {i: m for i, m in enumerate(CLASS_METERS)}
 DEFAULT_NUM_LAYERS = 12
@@ -242,6 +244,68 @@ def load_split_entries(
     return None
 
 
+def parse_primary_meter(meter_str: str) -> int | None:
+    """Parse meter string, return primary (highest-weight) meter.
+
+    Examples: "3" → 3, "3:0.7,4:0.8" → 4, "4,5:0.4" → 4.
+    """
+    best_meter = None
+    best_weight = -1.0
+    for part in meter_str.split(","):
+        part = part.strip()
+        if ":" in part:
+            m_str, w_str = part.split(":", 1)
+            try:
+                m, w = int(m_str), float(w_str)
+            except ValueError:
+                continue
+        else:
+            try:
+                m, w = int(part), 1.0
+            except ValueError:
+                continue
+        if w > best_weight:
+            best_weight = w
+            best_meter = m
+    return best_meter
+
+
+def load_extra_entries(
+    data_dir: Path,
+    embeddings_dir: Path,
+    tab_name: str = "data_wikimeter.tab",
+) -> list[tuple[Path, int]]:
+    """Load extra dataset entries (e.g. WIKIMETER), handling soft labels."""
+    tab_path = data_dir / tab_name
+    if not tab_path.exists():
+        print(f"  WARNING: {tab_path} not found")
+        return []
+
+    entries = []
+    skipped = 0
+    with open(tab_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            raw_fname = row.get("filename", "").strip().strip('"')
+            raw_meter = row.get("meter", "").strip().strip('"')
+            if not raw_fname or not raw_meter:
+                continue
+
+            primary_meter = parse_primary_meter(raw_meter)
+            if primary_meter is None or primary_meter not in METER_TO_IDX:
+                skipped += 1
+                continue
+
+            stem = Path(raw_fname).stem
+            emb_path = embeddings_dir / f"{stem}.npy"
+            entries.append((emb_path, primary_meter))
+
+    if skipped > 0:
+        print(f"  ({skipped} entries skipped — meter not in {CLASS_METERS})")
+    print(f"  Loaded {len(entries)} extra entries from {tab_path.name}")
+    return entries
+
+
 # ---------------------------------------------------------------------------
 # Training utilities
 # ---------------------------------------------------------------------------
@@ -423,6 +487,13 @@ def main():
                         help="Pooled dim per layer (1536 for 95M, 2048 for 330M)")
     parser.add_argument("--layer-drop", type=float, default=0.1,
                         help="LayerDrop probability for multi-layer mode")
+    # Extra data (e.g. WIKIMETER)
+    parser.add_argument("--extra-data-dir", type=Path, default=None,
+                        help="Extra dataset dir with .tab file (e.g., data/wikimeter)")
+    parser.add_argument("--extra-embeddings-dir", type=Path, default=None,
+                        help="Embeddings dir for extra data (e.g., data/mert_embeddings/wikimeter)")
+    parser.add_argument("--extra-val-ratio", type=float, default=0.1,
+                        help="Fraction of extra data to hold out for validation")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -448,6 +519,42 @@ def main():
     if train_entries is None or val_entries is None or test_entries is None:
         print("ERROR: Could not find train/val/test split files")
         sys.exit(1)
+
+    # Load extra data (e.g. WIKIMETER)
+    if args.extra_data_dir is not None and args.extra_embeddings_dir is not None:
+        extra_dir = args.extra_data_dir.resolve()
+        extra_emb_dir = args.extra_embeddings_dir.resolve()
+        print(f"\nExtra data from {extra_dir}")
+        print(f"Extra embeddings from {extra_emb_dir}")
+        extra_entries = load_extra_entries(extra_dir, extra_emb_dir)
+
+        if extra_entries:
+            # Split extra by SONG (not segment) to prevent leakage
+            import re
+            from collections import defaultdict
+            random.seed(args.seed)
+
+            song_segments: dict[str, list[tuple[Path, int]]] = defaultdict(list)
+            for emb_path, meter in extra_entries:
+                song_stem = re.sub(r"_seg\d+$", "", emb_path.stem)
+                song_segments[song_stem].append((emb_path, meter))
+
+            song_list = list(song_segments.keys())
+            random.shuffle(song_list)
+            n_val_songs = max(1, int(len(song_list) * args.extra_val_ratio))
+            val_songs = set(song_list[:n_val_songs])
+
+            extra_train, extra_val = [], []
+            for song, segs in song_segments.items():
+                if song in val_songs:
+                    extra_val.extend(segs)
+                else:
+                    extra_train.extend(segs)
+
+            print(f"  Extra split: {len(extra_train)} train ({len(song_list) - n_val_songs} songs)"
+                  f" + {len(extra_val)} val ({n_val_songs} songs)")
+            train_entries.extend(extra_train)
+            val_entries.extend(extra_val)
 
     # Show distribution
     all_entries = train_entries + val_entries + test_entries

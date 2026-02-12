@@ -66,9 +66,11 @@ class MERTAudioDataset(Dataset):
         self,
         entries: list[tuple[Path, dict[int, float]]],
         augment: bool = False,
+        noise_std: float = 0.01,
     ):
         self.entries: list[tuple[Path, dict[int, float]]] = []
         self.augment = augment
+        self.noise_std = noise_std
 
         skipped = 0
         for audio_path, meter_weights in entries:
@@ -115,9 +117,9 @@ class MERTAudioDataset(Dataset):
 
         # Data augmentation
         if self.augment:
-            audio = audio + 0.005 * np.random.randn(len(audio)).astype(np.float32)
-            shift = np.random.randint(-MERT_SR // 2, MERT_SR // 2)
-            audio = np.roll(audio, shift)
+            if self.noise_std > 0:
+                audio = audio + self.noise_std * np.random.randn(len(audio)).astype(np.float32)
+            audio = np.roll(audio, np.random.randint(-MERT_SR // 2, MERT_SR // 2))
 
         return audio.astype(np.float32), label
 
@@ -140,7 +142,7 @@ class MERTClassificationHead(nn.Module):
     """
 
     def __init__(self, num_layers: int, pooled_dim: int, num_classes: int = 6,
-                 head_dim: int = 256, dropout: float = 0.3):
+                 head_dim: int = 256, dropout: float = 0.4):
         super().__init__()
         self.num_layers = num_layers
         self.layer_logits = nn.Parameter(torch.zeros(num_layers))
@@ -564,23 +566,30 @@ def main():
                         help="Learning rate for LoRA parameters (auto-scaled per model if not set)")
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--dropout", type=float, default=0.3)
+    parser.add_argument("--dropout", type=float, default=0.4)
     parser.add_argument("--head-dim", type=int, default=256)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=0,
                         help="Limit entries per split (0 = all). Useful for smoke tests.")
+    parser.add_argument("--noise-std", type=float, default=0.01,
+                        help="Noise augmentation std (0 to disable)")
+    parser.add_argument("--patience", type=int, default=15,
+                        help="Early stopping patience (epochs without val improvement)")
     parser.add_argument("--no-lora", action="store_true",
                         help="Freeze MERT entirely, only train the head (cheaper baseline)")
     parser.add_argument("--extra-data", type=Path, nargs="+", default=[],
-                        help="Extra data directories with .tab files to append to train split "
-                             "(e.g. data/wikimeter)")
+                        help="Extra data directories with .tab files (e.g. data/wikimeter)")
+    parser.add_argument("--extra-val-ratio", type=float, default=0.1,
+                        help="Fraction of extra data songs held out for val")
+    parser.add_argument("--resume", type=Path, default=None,
+                        help="Resume from checkpoint")
     args = parser.parse_args()
 
     # Auto-scale LR per model size if not explicitly set
     lr_defaults = {
-        "m-a-p/MERT-v1-95M":  {"lr": 5e-4, "lora_lr": 1e-4},
-        "m-a-p/MERT-v1-330M": {"lr": 1e-4, "lora_lr": 2e-5},
+        "m-a-p/MERT-v1-95M":  {"lr": 1e-3, "lora_lr": 5e-5},
+        "m-a-p/MERT-v1-330M": {"lr": 5e-4, "lora_lr": 5e-5},
     }
     defaults = lr_defaults.get(args.model, lr_defaults["m-a-p/MERT-v1-330M"])
     if args.lr is None:
@@ -615,14 +624,19 @@ def main():
         print("ERROR: Could not find train/val/test split files")
         sys.exit(1)
 
-    # Load extra data directories (appended to train split only)
+    # Load extra data directories with per-song stratified val split
     # Supports three meter column formats:
     #   "3"       → {3: 1.0}          (single label)
     #   "3,4"     → {3: 1.0, 4: 1.0}  (multi-label, hard)
     #   "3:0.9,4:0.8" → {3: 0.9, 4: 0.8}  (soft labels)
     if args.extra_data:
+        import random
+        import re
+        from collections import defaultdict
         from scripts.utils import resolve_audio_path as _resolve
+        random.seed(args.seed)
         valid_meters = set(METER_TO_IDX.keys())
+
         for extra_dir in args.extra_data:
             extra_dir = extra_dir.resolve()
             if not extra_dir.exists():
@@ -642,7 +656,6 @@ def main():
                         raw_meter = row.get("meter", "").strip().strip('"')
                         if not raw_fname or not raw_meter:
                             continue
-                        # Parse meter column: soft ("3:0.9,4:0.8") or hard ("3,4")
                         meter_weights: dict[int, float] = {}
                         try:
                             for part in raw_meter.split(","):
@@ -661,9 +674,40 @@ def main():
                         audio_path = _resolve(raw_fname, extra_dir)
                         if audio_path is not None:
                             extra_entries.append((audio_path, meter_weights))
-                if extra_entries:
-                    print(f"  Extra data: +{len(extra_entries)} entries from {tab_file.name}")
-                    train_entries.extend(extra_entries)
+
+                if not extra_entries:
+                    continue
+
+                # Per-song stratified split (no segment leakage)
+                song_segments: dict[str, list[tuple[Path, dict[int, float]]]] = defaultdict(list)
+                for path, meters in extra_entries:
+                    song_stem = re.sub(r"_seg\d+$", "", path.stem)
+                    song_segments[song_stem].append((path, meters))
+
+                # Group songs by primary meter for stratified split
+                meter_songs: dict[int, list[str]] = defaultdict(list)
+                for song_stem, segs in song_segments.items():
+                    primary = max(segs[0][1], key=segs[0][1].get)
+                    meter_songs[primary].append(song_stem)
+
+                # Pick ~val_ratio songs per meter for val
+                val_songs: set[str] = set()
+                for meter, songs in sorted(meter_songs.items()):
+                    random.shuffle(songs)
+                    n_val = max(1, int(len(songs) * args.extra_val_ratio))
+                    val_songs.update(songs[:n_val])
+
+                extra_train, extra_val = [], []
+                for song_stem, segs in song_segments.items():
+                    if song_stem in val_songs:
+                        extra_val.extend(segs)
+                    else:
+                        extra_train.extend(segs)
+
+                print(f"  Extra: +{len(extra_train)} train ({len(song_segments) - len(val_songs)} songs)"
+                      f" +{len(extra_val)} val ({len(val_songs)} songs) from {tab_file.name}")
+                train_entries.extend(extra_train)
+                val_entries.extend(extra_val)
 
     if args.limit > 0:
         train_entries = train_entries[:args.limit]
@@ -730,7 +774,7 @@ def main():
     print(f"  Head parameters: {head_params:,}")
 
     # Datasets + DataLoaders
-    train_ds = MERTAudioDataset(train_entries, augment=True)
+    train_ds = MERTAudioDataset(train_entries, augment=True, noise_std=args.noise_std)
     val_ds = MERTAudioDataset(val_entries, augment=False)
     test_ds = MERTAudioDataset(test_entries, augment=False)
     print(f"\nDatasets: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test", flush=True)
@@ -764,21 +808,45 @@ def main():
         print(f"\nOptimizer: head lr={args.lr}")
 
     optimizer = torch.optim.AdamW(param_groups, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", patience=5, factor=0.5,
+    )
 
-    # Training loop
+    # Resume from checkpoint
+    start_epoch = 1
     best_val_acc = 0.0
     best_val_loss = float("inf")
     best_head_state = None
     best_lora_state = None
+
+    if args.resume and args.resume.exists():
+        print(f"\nResuming from {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        head.load_state_dict(ckpt["head_state_dict"])
+        if use_lora and ckpt.get("lora_state_dict"):
+            for name, param_data in ckpt["lora_state_dict"].items():
+                parts = name.split(".")
+                obj = mert_model
+                for part in parts[:-1]:
+                    obj = getattr(obj, part)
+                getattr(obj, parts[-1]).data.copy_(param_data.to(device))
+        if "optimizer_state_dict" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        start_epoch = ckpt.get("epoch", 0) + 1
+        best_val_acc = ckpt.get("val_accuracy", 0.0)
+        best_val_loss = ckpt.get("val_loss", float("inf"))
+        print(f"  Resuming from epoch {start_epoch}, best val acc: {best_val_acc:.1%}")
+
+    # Training loop
     patience_counter = 0
-    early_stop_patience = 10
 
     print(f"\n{'Epoch':>5s}  {'TrainLoss':>10s}  {'TrainAcc':>9s}  "
-          f"{'ValLoss':>10s}  {'ValAcc':>9s}  {'Time':>6s}", flush=True)
-    print("-" * 60, flush=True)
+          f"{'ValLoss':>10s}  {'ValAcc':>9s}  {'LR':>10s}  {'Time':>6s}", flush=True)
+    print("-" * 65, flush=True)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         t0 = time.time()
 
         train_loss, train_acc = train_one_epoch(
@@ -790,14 +858,19 @@ def main():
             device, num_layers, hidden_dim,
         )
 
-        scheduler.step()
+        scheduler.step(val_acc)
         elapsed = time.time() - t0
+        current_lr = optimizer.param_groups[0]["lr"]
 
+        improved = val_acc > best_val_acc
+        marker = " *" if improved else ""
         print(f"{epoch:5d}  {train_loss:10.4f}  {train_acc:8.1%}  "
-              f"{val_loss:10.4f}  {val_acc:8.1%}  {elapsed:5.0f}s", flush=True)
+              f"{val_loss:10.4f}  {val_acc:8.1%}  {current_lr:10.1e}  {elapsed:5.0f}s{marker}", flush=True)
 
-        if val_acc > best_val_acc:
+        if improved:
             best_val_acc = val_acc
+            best_val_loss = val_loss
+            patience_counter = 0
             best_head_state = {k: v.cpu().clone() for k, v in head.state_dict().items()}
             if use_lora:
                 lora_sd = {}
@@ -805,15 +878,34 @@ def main():
                     if param.requires_grad:
                         lora_sd[name] = param.cpu().clone()
                 best_lora_state = lora_sd
-
-        if val_loss < best_val_loss - 1e-4:
-            best_val_loss = val_loss
-            patience_counter = 0
         else:
             patience_counter += 1
-            if patience_counter >= early_stop_patience:
+            if patience_counter >= args.patience:
                 print(f"\nEarly stopping at epoch {epoch}")
                 break
+
+        # Save checkpoint every epoch (for resume)
+        ckpt_data = {
+            "head_state_dict": {k: v.cpu().clone() for k, v in head.state_dict().items()},
+            "lora_state_dict": {n: p.cpu().clone() for n, p in mert_model.named_parameters() if p.requires_grad} if use_lora else None,
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "class_map": IDX_TO_METER,
+            "model_name": model_name,
+            "num_layers": num_layers,
+            "hidden_dim": hidden_dim,
+            "pooled_dim": pooled_dim,
+            "head_dim": args.head_dim,
+            "num_classes": len(CLASS_METERS),
+            "dropout": args.dropout,
+            "val_accuracy": best_val_acc,
+            "val_loss": best_val_loss,
+            "epoch": epoch,
+            "lora_rank": args.lora_rank if use_lora else 0,
+            "lora_alpha": args.lora_alpha if use_lora else 0,
+            "model_type": "MERTFineTuned",
+        }
+        torch.save(ckpt_data, args.checkpoint.resolve())
 
     # Show learned layer weights
     if best_head_state is not None:
@@ -852,12 +944,13 @@ def main():
 
     print_eval_metrics(test_labels, test_preds, test_probs, test_labels_mh)
 
-    # Save checkpoint
+    # Save final best checkpoint with test results
     checkpoint_path = args.checkpoint.resolve()
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     checkpoint = {
         "head_state_dict": best_head_state if best_head_state else head.state_dict(),
+        "lora_state_dict": best_lora_state,
         "class_map": IDX_TO_METER,
         "model_name": model_name,
         "num_layers": num_layers,
@@ -873,11 +966,8 @@ def main():
         "model_type": "MERTFineTuned",
     }
 
-    if best_lora_state is not None:
-        checkpoint["lora_state_dict"] = best_lora_state
-
     torch.save(checkpoint, checkpoint_path)
-    print(f"\nCheckpoint saved to {checkpoint_path}")
+    print(f"\nBest checkpoint saved to {checkpoint_path}")
     print(f"  Model: {model_name}")
     print(f"  LoRA: {'rank=' + str(args.lora_rank) if use_lora else 'none'}")
     print(f"  Val accuracy:  {best_val_acc:.1%}")

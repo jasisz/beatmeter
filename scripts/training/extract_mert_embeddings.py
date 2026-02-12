@@ -235,6 +235,10 @@ def main():
                         help="METER2800 dataset directory (e.g., data/meter2800)")
     parser.add_argument("--fixtures-dir", type=Path, default=None,
                         help="Local fixtures directory (e.g., tests/fixtures)")
+    parser.add_argument("--audio-dir", type=Path, default=None,
+                        help="Any directory with audio files (e.g., data/wikimeter/audio)")
+    parser.add_argument("--name", type=str, default=None,
+                        help="Output subdirectory name (e.g., wikimeter). Required with --audio-dir")
     parser.add_argument("--output-dir", type=Path, default=Path("data/mert_embeddings"),
                         help="Output directory for .npy embeddings")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL,
@@ -246,8 +250,10 @@ def main():
                         help="Device: auto, mps, cuda, cpu")
     args = parser.parse_args()
 
-    if args.data_dir is None and args.fixtures_dir is None:
-        parser.error("Specify at least one of --data-dir or --fixtures-dir")
+    if args.data_dir is None and args.fixtures_dir is None and args.audio_dir is None:
+        parser.error("Specify at least one of --data-dir, --fixtures-dir, or --audio-dir")
+    if args.audio_dir is not None and args.name is None:
+        parser.error("--name is required with --audio-dir (e.g., --name wikimeter)")
 
     # Model config
     model_name = args.model
@@ -297,6 +303,16 @@ def main():
         files = collect_fixture_files(fixtures_dir)
         print(f"Found {len(files)} audio files")
         out_dir = args.output_dir / f"fixtures{model_suffix}"
+        process_files(files, out_dir, model, processor, device,
+                      num_layers, hidden_dim, resume=not args.no_resume)
+
+    # Process custom audio directory
+    if args.audio_dir is not None:
+        audio_dir = args.audio_dir.resolve()
+        print(f"\n--- {args.name} ({audio_dir}) ---")
+        files = collect_fixture_files(audio_dir)
+        print(f"Found {len(files)} audio files")
+        out_dir = args.output_dir / f"{args.name}{model_suffix}"
         process_files(files, out_dir, model, processor, device,
                       num_layers, hidden_dim, resume=not args.no_resume)
 
