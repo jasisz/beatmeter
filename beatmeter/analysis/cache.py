@@ -125,19 +125,25 @@ class AnalysisCache:
 
     @staticmethod
     def audio_hash(file_path: str) -> str:
-        """Derive a cache key from the file path.
+        """Derive a stable cache key from file metadata and content prefix.
 
-        Uses the filename stem (no extension) which is unique within the
-        METER2800 dataset and stable across runs.  Falls back to a short
-        content hash only when the stem is ambiguous (< 3 chars).
+        Includes the filename stem, file size, and the first 200 KB of bytes.
+        This keeps cache keys deterministic while avoiding collisions for files
+        that share the same basename.
         """
-        from pathlib import Path
-        stem = Path(file_path).stem
-        if len(stem) >= 3:
-            return stem
-        # Very short stem — hash a bit of content for safety
-        with open(file_path, "rb") as f:
-            return hashlib.sha256(f.read(200_000)).hexdigest()[:16]
+        p = Path(file_path)
+        h = hashlib.sha256()
+        h.update(p.stem.encode("utf-8", errors="ignore"))
+        try:
+            h.update(str(p.stat().st_size).encode("ascii"))
+        except OSError:
+            pass
+        try:
+            with open(file_path, "rb") as f:
+                h.update(f.read(200_000))
+        except OSError:
+            pass
+        return h.hexdigest()[:16]
 
     @staticmethod
     def audio_hash_from_array(audio) -> str:

@@ -96,193 +96,195 @@ class AnalysisEngine:
                     "onset_events": onset_event_times.tolist(),
                 })
 
-        # Step 2: Beat tracking (run all methods in parallel)
-        logger.info("Step 2: Beat tracking")
+        tmp_wav_path: str | None = None
+        try:
+            # Step 2: Beat tracking (run all methods in parallel)
+            logger.info("Step 2: Beat tracking")
 
-        beatnet_beats, beat_this_beats, madmom_results, librosa_beats, tmp_wav_path = \
-            self._run_beat_tracking(audio, sr, ah)
+            beatnet_beats, beat_this_beats, madmom_results, librosa_beats, tmp_wav_path = \
+                self._run_beat_tracking(audio, sr, ah)
 
-        logger.info(f"  BeatNet: {len(beatnet_beats)} beats, "
-                     f"{sum(1 for b in beatnet_beats if b.is_downbeat)} downbeats")
-        logger.info(f"  Beat This!: {len(beat_this_beats)} beats, "
-                     f"{sum(1 for b in beat_this_beats if b.is_downbeat)} downbeats")
-        for bpb, madmom_beats in madmom_results.items():
-            logger.info(f"  madmom ({bpb}/4): {len(madmom_beats)} beats, "
-                         f"{sum(1 for b in madmom_beats if b.is_downbeat)} downbeats")
+            logger.info(f"  BeatNet: {len(beatnet_beats)} beats, "
+                         f"{sum(1 for b in beatnet_beats if b.is_downbeat)} downbeats")
+            logger.info(f"  Beat This!: {len(beat_this_beats)} beats, "
+                         f"{sum(1 for b in beat_this_beats if b.is_downbeat)} downbeats")
+            for bpb, madmom_beats in madmom_results.items():
+                logger.info(f"  madmom ({bpb}/4): {len(madmom_beats)} beats, "
+                             f"{sum(1 for b in madmom_beats if b.is_downbeat)} downbeats")
 
-        # Validate madmom: if all variants return ~same beat count with IBI ~0.5s
-        # (120 BPM), madmom's DBN has fallen back to its default prior and the
-        # results are meaningless. Discard them entirely.
-        if len(madmom_results) >= 2:
-            _counts = [len(b) for b in madmom_results.values()]
-            _counts_similar = (max(_counts) - min(_counts)) <= 2
-            _all_120 = True
-            for _bpb, _mb in madmom_results.items():
-                if len(_mb) >= 3:
-                    _t = np.array([b.time for b in _mb])
-                    _ibi = float(np.median(np.diff(_t)))
-                    if abs(_ibi - 0.5) > 0.03:  # not close to 120 BPM
+            # Validate madmom: if all variants return ~same beat count with IBI ~0.5s
+            # (120 BPM), madmom's DBN has fallen back to its default prior and the
+            # results are meaningless. Discard them entirely.
+            if len(madmom_results) >= 2:
+                _counts = [len(b) for b in madmom_results.values()]
+                _counts_similar = (max(_counts) - min(_counts)) <= 2
+                _all_120 = True
+                for _bpb, _mb in madmom_results.items():
+                    if len(_mb) >= 3:
+                        _t = np.array([b.time for b in _mb])
+                        _ibi = float(np.median(np.diff(_t)))
+                        if abs(_ibi - 0.5) > 0.03:  # not close to 120 BPM
+                            _all_120 = False
+                            break
+                    else:
                         _all_120 = False
                         break
-                else:
-                    _all_120 = False
-                    break
-            if _counts_similar and _all_120:
-                logger.info("  madmom returned ~120 BPM for all variants (default prior); discarding")
-                madmom_results = {}
+                if _counts_similar and _all_120:
+                    logger.info("  madmom returned ~120 BPM for all variants (default prior); discarding")
+                    madmom_results = {}
 
-        logger.info(f"  librosa: {len(librosa_beats)} beats")
+            logger.info(f"  librosa: {len(librosa_beats)} beats")
 
-        # Step 2.5: Select best primary beats by onset alignment
-        # Beat trackers can hallucinate beats at wrong positions.
-        # We validate by checking which tracker's beats land on actual audio events.
-        logger.info("Step 2.5: Beat selection by onset alignment")
-        tracker_candidates = []
-        if beatnet_beats:
-            tracker_candidates.append(('BeatNet', beatnet_beats))
-        if beat_this_beats:
-            tracker_candidates.append(('Beat This!', beat_this_beats))
-        for bpb, beats in madmom_results.items():
-            tracker_candidates.append((f'madmom {bpb}/4', beats))
-        if librosa_beats:
-            tracker_candidates.append(('librosa', librosa_beats))
+            # Step 2.5: Select best primary beats by onset alignment
+            # Beat trackers can hallucinate beats at wrong positions.
+            # We validate by checking which tracker's beats land on actual audio events.
+            logger.info("Step 2.5: Beat selection by onset alignment")
+            tracker_candidates = []
+            if beatnet_beats:
+                tracker_candidates.append(('BeatNet', beatnet_beats))
+            if beat_this_beats:
+                tracker_candidates.append(('Beat This!', beat_this_beats))
+            for bpb, beats in madmom_results.items():
+                tracker_candidates.append((f'madmom {bpb}/4', beats))
+            if librosa_beats:
+                tracker_candidates.append(('librosa', librosa_beats))
 
-        primary_beats = librosa_beats  # default fallback
-        best_name = 'librosa'
-        best_alignment = 0.0
-        beatnet_alignment = 0.0
-        beat_this_alignment = 0.0
-        madmom_best_alignment = 0.0
+            primary_beats = librosa_beats  # default fallback
+            best_name = 'librosa'
+            best_alignment = 0.0
+            beatnet_alignment = 0.0
+            beat_this_alignment = 0.0
+            madmom_best_alignment = 0.0
 
-        for name, beats in tracker_candidates:
-            if not beats:
-                continue
-            score = self._onset_alignment_score(beats, onset_event_times)
-            logger.info(f"  {name}: alignment={score:.3f} ({len(beats)} beats)")
+            for name, beats in tracker_candidates:
+                if not beats:
+                    continue
+                score = self._onset_alignment_score(beats, onset_event_times)
+                logger.info(f"  {name}: alignment={score:.3f} ({len(beats)} beats)")
 
-            # Track per-tracker alignment for meter signal weighting
-            if name == 'BeatNet':
-                beatnet_alignment = score
-            elif name == 'Beat This!':
-                beat_this_alignment = score
-            elif name.startswith('madmom'):
-                madmom_best_alignment = max(madmom_best_alignment, score)
+                # Track per-tracker alignment for meter signal weighting
+                if name == 'BeatNet':
+                    beatnet_alignment = score
+                elif name == 'Beat This!':
+                    beat_this_alignment = score
+                elif name.startswith('madmom'):
+                    madmom_best_alignment = max(madmom_best_alignment, score)
 
-            if score > best_alignment:
-                best_alignment = score
-                primary_beats = beats
-                best_name = name
+                if score > best_alignment:
+                    best_alignment = score
+                    primary_beats = beats
+                    best_name = name
 
-        logger.info(f"  Primary: {best_name} (alignment={best_alignment:.3f}, "
-                     f"{len(primary_beats)} beats)")
+            logger.info(f"  Primary: {best_name} (alignment={best_alignment:.3f}, "
+                         f"{len(primary_beats)} beats)")
 
-        # Step 3: Tempo estimation
-        logger.info("Step 3: Tempo estimation")
-        candidates = []
+            # Step 3: Tempo estimation
+            logger.info("Step 3: Tempo estimation")
+            candidates = []
 
-        ibi_est = estimate_from_ibi(primary_beats, settings.min_bpm, settings.max_bpm)
-        if ibi_est:
-            # Scale IBI confidence by beat-onset alignment quality.
-            # Poorly aligned trackers produce unreliable IBI estimates.
-            scaled_conf = round(ibi_est.confidence * max(best_alignment, 0.1), 2)
-            ibi_est = BpmCandidate(
-                bpm=ibi_est.bpm, confidence=scaled_conf, method=ibi_est.method,
+            ibi_est = estimate_from_ibi(primary_beats, settings.min_bpm, settings.max_bpm)
+            if ibi_est:
+                # Scale IBI confidence by beat-onset alignment quality.
+                # Poorly aligned trackers produce unreliable IBI estimates.
+                scaled_conf = round(ibi_est.confidence * max(best_alignment, 0.1), 2)
+                ibi_est = BpmCandidate(
+                    bpm=ibi_est.bpm, confidence=scaled_conf, method=ibi_est.method,
+                )
+                candidates.append(ibi_est)
+
+            # Librosa tempo (cached)
+            librosa_est = None
+            if self.cache and ah:
+                cached = self.cache.load_signal(ah, "tempo_librosa")
+                if cached is not None:
+                    librosa_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
+            if librosa_est is None:
+                librosa_est = estimate_from_librosa(audio, sr)
+                if librosa_est and self.cache and ah:
+                    self.cache.save_signal(ah, "tempo_librosa", {"bpm": librosa_est.bpm, "confidence": librosa_est.confidence, "method": librosa_est.method})
+            if librosa_est:
+                candidates.append(librosa_est)
+
+            # Tempogram tempo (cached)
+            tempogram_est = None
+            if self.cache and ah:
+                cached = self.cache.load_signal(ah, "tempo_tempogram")
+                if cached is not None:
+                    tempogram_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
+            if tempogram_est is None:
+                tempogram_est = estimate_from_tempogram(audio, sr)
+                if tempogram_est and self.cache and ah:
+                    self.cache.save_signal(ah, "tempo_tempogram", {"bpm": tempogram_est.bpm, "confidence": tempogram_est.confidence, "method": tempogram_est.method})
+            if tempogram_est:
+                candidates.append(tempogram_est)
+
+            tempo = consensus_tempo(candidates, settings.min_bpm, settings.max_bpm)
+            logger.info(f"  Tempo: {tempo.bpm} BPM (confidence: {tempo.confidence})")
+
+            # Step 4: Tempo curve (variable tempo detection)
+            logger.info("Step 4: Tempo curve")
+            tempo_curve, is_variable, bpm_range, tempo_category = compute_tempo_curve(primary_beats)
+            tempo.is_variable = is_variable
+            tempo.bpm_range = bpm_range
+            tempo.tempo_category = tempo_category
+            if is_variable and bpm_range:
+                logger.info(f"  Variable tempo: {bpm_range[0]}-{bpm_range[1]} BPM ({tempo_category})")
+
+            # Step 5: Meter hypothesis generation
+            # Pass tempo_bpm so meter detection can use it to constrain search
+            logger.info("Step 5: Meter hypothesis generation")
+            meter_hypotheses, meter_ambiguity = generate_hypotheses(
+                beatnet_beats=beatnet_beats,
+                madmom_results=madmom_results,
+                onset_times=onset_times,
+                onset_strengths=onset_strengths,
+                all_beats=primary_beats,
+                sr=sr,
+                max_hypotheses=settings.max_meter_hypotheses,
+                tempo_bpm=tempo.bpm,
+                beatnet_alignment=beatnet_alignment,
+                madmom_alignment=madmom_best_alignment,
+                audio=audio,
+                librosa_beats=librosa_beats,
+                beat_this_beats=beat_this_beats,
+                beat_this_alignment=beat_this_alignment,
+                onset_event_times=onset_event_times,
+                cache=self.cache,
+                audio_hash=ah,
+                tmp_path=tmp_wav_path,
             )
-            candidates.append(ibi_est)
+            for h in meter_hypotheses:
+                logger.info(f"  {h.label}: {h.confidence:.1%} - {h.description}")
 
-        # Librosa tempo (cached)
-        librosa_est = None
-        if self.cache and ah:
-            cached = self.cache.load_signal(ah, "tempo_librosa")
-            if cached is not None:
-                librosa_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
-        if librosa_est is None:
-            librosa_est = estimate_from_librosa(audio, sr)
-            if librosa_est and self.cache and ah:
-                self.cache.save_signal(ah, "tempo_librosa", {"bpm": librosa_est.bpm, "confidence": librosa_est.confidence, "method": librosa_est.method})
-        if librosa_est:
-            candidates.append(librosa_est)
+            # Step 6: Section detection with per-section meter analysis
+            if skip_sections:
+                sections = []
+            else:
+                logger.info("Step 6: Section detection")
+                sections = self._detect_sections(
+                    primary_beats, beatnet_beats, beat_this_beats, madmom_results, librosa_beats,
+                    onset_times, onset_strengths, onset_event_times, audio, sr, tempo.bpm,
+                )
+                for s in sections:
+                    if s.meter:
+                        logger.info(f"  Section {s.start:.1f}-{s.end:.1f}s: {s.meter.label}")
 
-        # Tempogram tempo (cached)
-        tempogram_est = None
-        if self.cache and ah:
-            cached = self.cache.load_signal(ah, "tempo_tempogram")
-            if cached is not None:
-                tempogram_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
-        if tempogram_est is None:
-            tempogram_est = estimate_from_tempogram(audio, sr)
-            if tempogram_est and self.cache and ah:
-                self.cache.save_signal(ah, "tempo_tempogram", {"bpm": tempogram_est.bpm, "confidence": tempogram_est.confidence, "method": tempogram_est.method})
-        if tempogram_est:
-            candidates.append(tempogram_est)
-
-        tempo = consensus_tempo(candidates, settings.min_bpm, settings.max_bpm)
-        logger.info(f"  Tempo: {tempo.bpm} BPM (confidence: {tempo.confidence})")
-
-        # Step 4: Tempo curve (variable tempo detection)
-        logger.info("Step 4: Tempo curve")
-        tempo_curve, is_variable, bpm_range, tempo_category = compute_tempo_curve(primary_beats)
-        tempo.is_variable = is_variable
-        tempo.bpm_range = bpm_range
-        tempo.tempo_category = tempo_category
-        if is_variable and bpm_range:
-            logger.info(f"  Variable tempo: {bpm_range[0]}-{bpm_range[1]} BPM ({tempo_category})")
-
-        # Step 5: Meter hypothesis generation
-        # Pass tempo_bpm so meter detection can use it to constrain search
-        logger.info("Step 5: Meter hypothesis generation")
-        meter_hypotheses, meter_ambiguity = generate_hypotheses(
-            beatnet_beats=beatnet_beats,
-            madmom_results=madmom_results,
-            onset_times=onset_times,
-            onset_strengths=onset_strengths,
-            all_beats=primary_beats,
-            sr=sr,
-            max_hypotheses=settings.max_meter_hypotheses,
-            tempo_bpm=tempo.bpm,
-            beatnet_alignment=beatnet_alignment,
-            madmom_alignment=madmom_best_alignment,
-            audio=audio,
-            librosa_beats=librosa_beats,
-            beat_this_beats=beat_this_beats,
-            beat_this_alignment=beat_this_alignment,
-            onset_event_times=onset_event_times,
-            cache=self.cache,
-            audio_hash=ah,
-            tmp_path=tmp_wav_path,
-        )
-        for h in meter_hypotheses:
-            logger.info(f"  {h.label}: {h.confidence:.1%} - {h.description}")
-
-        # Clean up shared temp WAV file (created by beat tracking)
-        if tmp_wav_path:
-            try:
-                os.unlink(tmp_wav_path)
-            except OSError:
-                pass
-
-        # Step 6: Section detection with per-section meter analysis
-        if skip_sections:
-            sections = []
-        else:
-            logger.info("Step 6: Section detection")
-            sections = self._detect_sections(
-                primary_beats, beatnet_beats, beat_this_beats, madmom_results, librosa_beats,
-                onset_times, onset_strengths, onset_event_times, audio, sr, tempo.bpm,
+            return AnalysisResult(
+                tempo=tempo,
+                meter_hypotheses=meter_hypotheses,
+                beats=primary_beats,
+                tempo_curve=tempo_curve,
+                sections=sections,
+                duration=duration,
+                meter_ambiguity=meter_ambiguity,
             )
-            for s in sections:
-                if s.meter:
-                    logger.info(f"  Section {s.start:.1f}-{s.end:.1f}s: {s.meter.label}")
-
-        return AnalysisResult(
-            tempo=tempo,
-            meter_hypotheses=meter_hypotheses,
-            beats=primary_beats,
-            tempo_curve=tempo_curve,
-            sections=sections,
-            duration=duration,
-            meter_ambiguity=meter_ambiguity,
-        )
+        finally:
+            # Shared temp WAV from beat tracking must always be cleaned up.
+            if tmp_wav_path:
+                try:
+                    os.unlink(tmp_wav_path)
+                except OSError:
+                    pass
 
     def _run_beat_tracking(
         self,
@@ -296,7 +298,6 @@ class AnalysisEngine:
         cached_beat_this = None
         cached_madmom: dict[int, list[Beat]] = {}
         cached_librosa = None
-        need_audio_trackers = False
 
         if self.cache and ah:
             raw = self.cache.load_beats(ah, "beatnet")
@@ -380,11 +381,14 @@ class AnalysisEngine:
                             self.cache.save_beats(ah, f"madmom_bpb{bpb}", _beats_to_dicts(beats))
 
         except Exception:
-            os.unlink(shared_tmp_path)
+            try:
+                os.unlink(shared_tmp_path)
+            except OSError:
+                pass
             raise
-
-        # Free cached madmom activations — only needed within a single file
-        clear_activation_cache()
+        finally:
+            # Free cached madmom activations — only needed within a single file.
+            clear_activation_cache()
 
         return beatnet_beats, beat_this_beats, madmom_results, librosa_beats, shared_tmp_path
 

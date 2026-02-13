@@ -1,6 +1,5 @@
 """FastAPI application - serves API and frontend."""
 
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -32,9 +31,18 @@ async def health():
 
 # Serve frontend
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+FRONTEND_ROOT = FRONTEND_DIR.resolve() if FRONTEND_DIR.exists() else None
 
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+    def _safe_frontend_file(path: str) -> Path | None:
+        if FRONTEND_ROOT is None:
+            return None
+        candidate = (FRONTEND_ROOT / path.lstrip("/")).resolve()
+        if candidate != FRONTEND_ROOT and FRONTEND_ROOT not in candidate.parents:
+            return None
+        return candidate if candidate.is_file() else None
 
     @app.get("/")
     async def index():
@@ -42,8 +50,8 @@ if FRONTEND_DIR.exists():
 
     @app.get("/{path:path}")
     async def catch_all(path: str):
-        file_path = FRONTEND_DIR / path
-        if file_path.exists() and file_path.is_file():
+        file_path = _safe_frontend_file(path)
+        if file_path is not None:
             return FileResponse(str(file_path))
         return FileResponse(str(FRONTEND_DIR / "index.html"))
 

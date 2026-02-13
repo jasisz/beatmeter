@@ -1,6 +1,6 @@
 """Pydantic response models for API."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BeatResponse(BaseModel):
@@ -42,8 +42,8 @@ class AnalysisResponse(BaseModel):
     tempo: TempoResponse
     meter_hypotheses: list[MeterHypothesisResponse]
     beats: list[BeatResponse]
-    tempo_curve: list[TempoCurvePointResponse] = []
-    sections: list[SectionResponse] = []
+    tempo_curve: list[TempoCurvePointResponse] = Field(default_factory=list)
+    sections: list[SectionResponse] = Field(default_factory=list)
     duration: float = 0.0
     meter_ambiguity: float = 0.0  # normalized entropy (0=certain, 1=uniform)
     converged: bool = False

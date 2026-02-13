@@ -1,12 +1,12 @@
 """Integration tests for the analysis engine."""
 
-import io
 import numpy as np
 import soundfile as sf
 import pytest
 
 from beatmeter.analysis.engine import AnalysisEngine
 from beatmeter.analysis.models import AnalysisResult
+from beatmeter.analysis.cache import AnalysisCache
 from tests.conftest import generate_click_track
 
 
@@ -96,3 +96,99 @@ def test_health_endpoint(client):
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_catch_all_blocks_path_traversal(client, monkeypatch, tmp_path):
+    """Catch-all route should not serve files outside frontend root."""
+    import beatmeter.main as main_module
+
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir()
+    (frontend_dir / "index.html").write_text("<html>INDEX</html>")
+    (tmp_path / "secret.txt").write_text("TOP_SECRET")
+
+    monkeypatch.setattr(main_module, "FRONTEND_DIR", frontend_dir)
+    monkeypatch.setattr(main_module, "FRONTEND_ROOT", frontend_dir.resolve())
+
+    response = client.get("/..%2Fsecret.txt")
+
+    assert response.status_code == 200
+    assert "TOP_SECRET" not in response.text
+    assert "INDEX" in response.text
+
+
+def test_api_analyze_rejects_oversized_file(client, monkeypatch):
+    """Upload endpoint should reject files larger than configured limit."""
+    from beatmeter.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 1)
+    payload = b"x" * (1024 * 1024 + 1)
+
+    response = client.post(
+        "/api/analyze",
+        files={"file": ("big.wav", payload, "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert "File too large" in response.json()["detail"]
+
+
+def test_api_analyze_tempfile_failure_returns_generic_error(client, monkeypatch):
+    """Upload endpoint should not leak internal exception details."""
+    import beatmeter.api.upload as upload_module
+
+    def _raise_tempfile_error(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(upload_module.tempfile, "NamedTemporaryFile", _raise_tempfile_error)
+
+    response = client.post(
+        "/api/analyze",
+        files={"file": ("test.wav", b"audio", "audio/wav")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Analysis failed"
+
+
+def test_analyze_audio_cleans_tmp_wav_on_exception(monkeypatch, tmp_path):
+    """Shared tracker temp WAV should be removed even if later stages fail."""
+    import beatmeter.analysis.engine as engine_module
+
+    tmp_wav = tmp_path / "shared.wav"
+    tmp_wav.write_bytes(b"tmp")
+
+    def _fake_run_beat_tracking(self, audio, sr, ah):
+        return [], [], {}, [], str(tmp_wav)
+
+    def _raise_meter_error(*args, **kwargs):
+        raise RuntimeError("forced meter failure")
+
+    monkeypatch.setattr(AnalysisEngine, "_run_beat_tracking", _fake_run_beat_tracking)
+    monkeypatch.setattr(engine_module, "generate_hypotheses", _raise_meter_error)
+
+    engine = AnalysisEngine()
+    audio = np.zeros(22050, dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="forced meter failure"):
+        engine.analyze_audio(audio, sr=22050)
+
+    assert not tmp_wav.exists()
+
+
+def test_audio_hash_differs_for_same_name_different_content(tmp_path):
+    """Cache key should include content, not only the filename stem."""
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    file_a = dir_a / "song.wav"
+    file_b = dir_b / "song.wav"
+    file_a.write_bytes(b"A" * 1024)
+    file_b.write_bytes(b"B" * 1024)
+
+    hash_a = AnalysisCache.audio_hash(str(file_a))
+    hash_b = AnalysisCache.audio_hash(str(file_b))
+
+    assert hash_a != hash_b

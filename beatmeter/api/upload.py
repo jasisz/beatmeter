@@ -1,6 +1,7 @@
 """File upload endpoint for audio analysis."""
 
-import io
+import logging
+import os
 import tempfile
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
@@ -17,8 +18,10 @@ from beatmeter.analysis.engine import AnalysisEngine
 from beatmeter.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wma"}
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -30,19 +33,25 @@ async def analyze_file(file: UploadFile = File(...)):
         if ext and ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(400, f"Unsupported format. Use: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    # Read file content
-    content = await file.read()
-    if len(content) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File too large (max {settings.max_upload_mb} MB)")
-
     # Write to temp file (librosa needs file path for some formats)
     suffix = ""
     if file.filename and "." in file.filename:
         suffix = "." + file.filename.rsplit(".", 1)[-1].lower()
 
+    tmp_path: str | None = None
+    max_upload_bytes = settings.max_upload_mb * 1024 * 1024
+    bytes_read = 0
+
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(content)
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                bytes_read += len(chunk)
+                if bytes_read > max_upload_bytes:
+                    raise HTTPException(400, f"File too large (max {settings.max_upload_mb} MB)")
+                tmp.write(chunk)
             tmp_path = tmp.name
 
         engine = AnalysisEngine()
@@ -98,11 +107,15 @@ async def analyze_file(file: UploadFile = File(...)):
             duration=result.duration,
             meter_ambiguity=result.meter_ambiguity,
         )
-    except Exception as e:
-        raise HTTPException(500, f"Analysis failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Analysis failed")
+        raise HTTPException(500, "Analysis failed")
     finally:
-        import os
+        await file.close()
         try:
-            os.unlink(tmp_path)
+            if tmp_path:
+                os.unlink(tmp_path)
         except OSError:
             pass

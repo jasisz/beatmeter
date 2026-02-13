@@ -53,6 +53,7 @@ def signal_bar_tracking(
         logger.debug(f"Bar tracking: sparse audio (non_silent={non_silent:.2f}), skipping")
         return scores
 
+    owns_tmp = False
     try:
         from madmom.features.downbeats import DBNBarTrackingProcessor
 
@@ -65,10 +66,6 @@ def signal_bar_tracking(
 
         bar_proc = _get_bar_processor()
         act = bar_proc((tmp_path, beat_times_array))
-
-        # Clean up temp file only if we created it
-        if owns_tmp:
-            os.unlink(tmp_path)
 
         # Remove last row (often NaN) and take downbeat activation column
         activations = act[:-1, 1] if act.shape[0] > 1 else act[:, 1]
@@ -101,5 +98,11 @@ def signal_bar_tracking(
         logger.debug(f"Bar tracking signal: {scores}")
     except Exception as e:
         logger.warning(f"Bar tracking signal failed: {e}")
+    finally:
+        if owns_tmp and tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return scores
