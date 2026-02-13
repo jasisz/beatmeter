@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "updated_at": "2026-02-13T00:00:00Z",
+  "description": "Seed song+meter pairs blocked from merge due to confirmed wrong/questionable meter labels.",
+  "items": [
+    {
+      "artist": "Animals as Leaders",
+      "title": "CAFO",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Django Reinhardt",
+      "title": "Nuages",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Dream Theater",
+      "title": "Answering the Call",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Dream Theater",
+      "title": "Metropolis Part I",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Dream Theater",
+      "title": "The Dance of Eternity",
+      "meters": "7",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "King Crimson",
+      "title": "21st Century Schizoid Man",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "King Crimson",
+      "title": "Discipline",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Leprous",
+      "title": "The Sky Is Red",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Mastodon",
+      "title": "The Last Baron",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Meshuggah",
+      "title": "Future Breed Machine",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Nina Simone",
+      "title": "Take Care of Business",
+      "meters": "5",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Phish",
+      "title": "The Divided Sky",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Porcupine Tree",
+      "title": "Sound of Muzak",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Radiohead",
+      "title": "Paranoid Android",
+      "meters": "11",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Rush",
+      "title": "Tom Sawyer",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Soundgarden",
+      "title": "Rusty Cage",
+      "meters": "7",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "The Beatles",
+      "title": "Happiness Is a Warm Gun",
+      "meters": "5",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "The Beatles",
+      "title": "Here Comes The Sun",
+      "meters": "9",
+      "reason": "wrong meter in second-agent audit"
+    },
+    {
+      "artist": "Tigran Hamasyan",
+      "title": "Vardavar",
+      "meters": "5",
+      "reason": "questionable meter in second-agent audit"
+    },
+    {
+      "artist": "Tool",
+      "title": "Forty Six and 2",
+      "meters": "7",
+      "reason": "wrong meter in second-agent audit"
+    }
+  ]
+}

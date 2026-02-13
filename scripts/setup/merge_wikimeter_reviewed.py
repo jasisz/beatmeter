@@ -14,6 +14,7 @@ from wikimeter_tools import (
     PROJECT_ROOT,
     load_catalog,
     load_json,
+    meters_to_tag,
     merge_sources,
     now_iso,
     parse_meters,
@@ -28,13 +29,15 @@ from wikimeter_tools import (
     normalize_sources,
 )
 
-DEFAULT_REVIEW_QUEUE = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "review_queue.json"
+DEFAULT_REVIEW_QUEUE = PROJECT_ROOT / "data" / "wikimeter" / "review_queue.json"
+DEFAULT_BLACKLIST = PROJECT_ROOT / "data" / "wikimeter" / "blacklist.json"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Merge reviewed candidates into wikimeter.json")
     parser.add_argument("--review-queue", type=Path, default=DEFAULT_REVIEW_QUEUE)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
+    parser.add_argument("--blacklist", type=Path, default=DEFAULT_BLACKLIST)
     parser.add_argument(
         "--status",
         type=str,
@@ -110,6 +113,55 @@ def parse_review_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def parse_blacklist_item(entry: dict[str, Any]) -> tuple[str, str]:
+    artist = str(entry.get("artist", "")).strip()
+    title = str(entry.get("title", "")).strip()
+    meters_raw = entry.get("meters")
+    if not artist or not title or meters_raw is None:
+        raise ValueError("missing artist/title/meters")
+
+    if isinstance(meters_raw, dict):
+        meters = {int(k): float(v) for k, v in meters_raw.items()}
+    elif isinstance(meters_raw, str):
+        meters = parse_meters(meters_raw)
+    elif isinstance(meters_raw, list):
+        meters = {int(x): 1.0 for x in meters_raw}
+    else:
+        raise ValueError("invalid meters format")
+
+    return (song_key(artist, title), meters_to_tag(meters))
+
+
+def load_blacklist(path: Path) -> set[tuple[str, str]]:
+    if not path.exists():
+        print(f"WARNING: blacklist file not found: {path} (continuing without blacklist gate)")
+        return set()
+
+    payload = load_json(path)
+    if isinstance(payload, list):
+        entries = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        entries = payload["items"]
+    else:
+        raise ValueError("blacklist file must be list[] or {'items': list[]}")
+
+    out: set[tuple[str, str]] = set()
+    malformed = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            malformed += 1
+            continue
+        try:
+            out.add(parse_blacklist_item(entry))
+        except Exception:
+            malformed += 1
+
+    print(f"Blacklist entries loaded: {len(out)}")
+    if malformed:
+        print(f"  malformed blacklist entries ignored: {malformed}")
+    return out
+
+
 def sort_catalog(songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         songs,
@@ -124,6 +176,7 @@ def main() -> None:
     args = parse_args()
     review_path = args.review_queue.resolve()
     catalog_path = args.catalog.resolve()
+    blacklist_path = args.blacklist.resolve()
     do_backup = args.backup and not args.no_backup
 
     if not review_path.exists():
@@ -135,6 +188,7 @@ def main() -> None:
 
     catalog = load_catalog(catalog_path)
     review_items = load_review_items(review_path)
+    blacklist = load_blacklist(blacklist_path)
 
     accepted: list[dict[str, Any]] = []
     parse_errors = 0
@@ -169,13 +223,19 @@ def main() -> None:
     skipped_existing_song = 0
     skipped_existing_video = 0
     skipped_existing_source = 0
+    skipped_blacklist = 0
     duplicate_in_batch = 0
     seen_batch_sources: set[str] = set()
 
     for item in accepted:
         skey = song_key(item["artist"], item["title"])
+        meter_tag = meters_to_tag(item["meters"])
         item_source_keys = {source_key(src) for src in item["sources"]}
         item_video_ids = song_video_ids(item)
+
+        if (skey, meter_tag) in blacklist:
+            skipped_blacklist += 1
+            continue
 
         if any(src_key in seen_batch_sources for src_key in item_source_keys):
             duplicate_in_batch += 1
@@ -237,6 +297,7 @@ def main() -> None:
     print(f"  skipped existing songs: {skipped_existing_song}")
     print(f"  skipped existing videos: {skipped_existing_video}")
     print(f"  skipped existing sources: {skipped_existing_source}")
+    print(f"  skipped by blacklist: {skipped_blacklist}")
     print(f"  duplicates in accepted batch: {duplicate_in_batch}")
     if parse_errors:
         print(f"  malformed accepted entries: {parse_errors}")

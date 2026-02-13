@@ -149,6 +149,9 @@ Review queue entries should include:
 - `status` (`approved` to merge)
 - source info in `candidate` (`source`, `sources`, `video_id`/`video_url` legacy)
 
+Blacklist gate:
+- `data/wikimeter/blacklist.json` blocks known bad song+meter pairs during merge.
+
 ## Project Structure
 
 ```
