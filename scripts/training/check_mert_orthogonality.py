@@ -8,7 +8,7 @@ Reports agreement rate, complementarity ratio, gains/losses, and gate check.
 
 Usage:
     # Using saved eval run (fast, no recomputation):
-    uv run python scripts/training/check_mert_orthogonality.py --run data/runs/latest.json
+    uv run python scripts/training/check_mert_orthogonality.py --run data/runs/20260213_120000.json
 
     # Live engine eval + notebook-aligned finetuned checkpoint:
     uv run python scripts/training/check_mert_orthogonality.py
@@ -40,6 +40,11 @@ from scripts.training.finetune_mert import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_RUN_DIRS = [
+    PROJECT_ROOT / "data" / "runs",
+    PROJECT_ROOT / ".cache" / "meter2800" / "runs",  # legacy layout
+    PROJECT_ROOT / ".cache" / "runs",                 # older docs/reference layout
+]
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +281,15 @@ def load_engine_predictions_from_run(run_path: Path) -> dict[str, int | None]:
     return preds
 
 
-def find_latest_run(runs_dir: Path) -> Path | None:
-    """Find the most recent run snapshot."""
-    if not runs_dir.exists():
+def find_latest_run(run_dirs: list[Path]) -> Path | None:
+    """Find the most recent run snapshot across known run directories."""
+    candidates: list[Path] = []
+    for run_dir in run_dirs:
+        if run_dir.exists():
+            candidates.extend(run_dir.glob("*.json"))
+    if not candidates:
         return None
-    runs = sorted(runs_dir.glob("*.json"))
-    return runs[-1] if runs else None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +308,7 @@ def main():
                         default=Path("data/meter_mert_finetuned.pt"),
                         help="MERT checkpoint (finetuned audio or legacy embedding classifier)")
     parser.add_argument("--run", type=Path, default=None,
-                        help="Engine run snapshot JSON (default: latest from data/runs/)")
+                        help="Engine run snapshot JSON (default: latest from known run dirs)")
     parser.add_argument("--split", default="test",
                         help="METER2800 split to evaluate (default: test)")
     parser.add_argument("--meter", type=int, default=0,
@@ -359,7 +367,7 @@ def main():
     # Get engine predictions
     run_path = args.run
     if run_path is None:
-        run_path = find_latest_run(PROJECT_ROOT / "data" / "runs")
+        run_path = find_latest_run(DEFAULT_RUN_DIRS)
 
     engine_preds: dict[str, int | None] = {}
     if run_path and run_path.exists():
@@ -369,6 +377,9 @@ def main():
     else:
         print("\nWARNING: No engine run snapshot found.")
         print("  Run: uv run python scripts/eval.py --split test --limit 0 --save")
+        print("  Searched:")
+        for run_dir in DEFAULT_RUN_DIRS:
+            print(f"    - {run_dir}")
         print("  Using ground truth as 'engine' to show MERT standalone accuracy.")
         # Fall back: treat ground truth as engine (just shows MERT accuracy)
         for audio_path, meter in entries:

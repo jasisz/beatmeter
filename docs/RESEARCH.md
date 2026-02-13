@@ -74,7 +74,7 @@ Candidate meter scores are combined through weighted additive fusion with severa
 
 ### 2.1 Evaluation Framework
 
-Evaluation uses a unified script (`scripts/eval.py`) with subprocess isolation per file to avoid BeatNet/madmom threading deadlocks. Beat tracking is cached per-tracker via `AnalysisCache` with smart invalidation (changing `meter.py` does not invalidate beat tracker caches). Run snapshots (`--save`) are stored in `.cache/runs/` with full per-file results for history tracking and regression detection.
+Evaluation uses a unified script (`scripts/eval.py`) with subprocess isolation per file to avoid BeatNet/madmom threading deadlocks. Beat tracking is cached per-tracker via `AnalysisCache` with smart invalidation (changing `meter.py` does not invalidate beat tracker caches). Run snapshots (`--save`) are stored in `data/runs/` with full per-file results for history tracking and regression detection.
 
 ```bash
 uv run python scripts/eval.py --limit 3 --workers 1   # smoke test
