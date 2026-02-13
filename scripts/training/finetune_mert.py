@@ -173,17 +173,83 @@ def mert_forward_pool(
     device: torch.device,
     num_layers: int,
     hidden_dim: int,
+    chunk_batch_size: int = 1,
 ) -> torch.Tensor:
     """Run MERT on a batch of audio arrays, return pooled (batch, num_layers, pooled_dim).
 
     Each audio is split into 5s chunks, processed through MERT, then
     mean+max pooled per layer. Gradients flow through for LoRA training.
     """
-    pooled_dim = hidden_dim * 2
-    batch_pooled = []
+    def _is_oom_error(exc: RuntimeError) -> bool:
+        msg = str(exc).lower()
+        return "out of memory" in msg
 
-    for audio_np in audios:
-        # Split into 5s chunks
+    def _run_chunk_items(
+        chunk_items: list[tuple[int, np.ndarray]],
+        per_audio_means: list[list[list[torch.Tensor]]],
+        per_audio_maxes: list[list[list[torch.Tensor]]],
+        batch_size: int,
+    ) -> None:
+        if not chunk_items:
+            return
+
+        start = 0
+        target_bs = max(1, int(batch_size))
+        current_bs = target_bs
+        warned_oom_downscale = False
+
+        while start < len(chunk_items):
+            bs = min(current_bs, len(chunk_items) - start)
+            batch_items = chunk_items[start : start + bs]
+            audio_idxs = [aidx for aidx, _ in batch_items]
+            chunk_batch = [chunk for _, chunk in batch_items]
+
+            try:
+                # attention_mask stays disabled for MPS stability.
+                # padding=True is safe here because we batch fixed 5s chunks.
+                inputs = processor(
+                    chunk_batch,
+                    sampling_rate=MERT_SR,
+                    return_tensors="pt",
+                    return_attention_mask=False,
+                    padding=True,
+                )
+                inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
+                outputs = mert_model(**inputs)
+            except RuntimeError as exc:
+                if not _is_oom_error(exc) or bs == 1:
+                    raise
+                current_bs = max(1, bs // 2)
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                if not warned_oom_downscale:
+                    print(f"  WARNING: OOM in chunk batching; reducing chunk batch size to {current_bs}")
+                    warned_oom_downscale = True
+                continue
+
+            for li in range(num_layers):
+                hs = outputs.hidden_states[li + 1]  # (bs, T, hidden_dim)
+                means = hs.mean(dim=1)
+                maxes = hs.max(dim=1).values
+                for bi, audio_idx in enumerate(audio_idxs):
+                    per_audio_means[audio_idx][li].append(means[bi])
+                    per_audio_maxes[audio_idx][li].append(maxes[bi])
+
+            start += bs
+            current_bs = target_bs
+
+    pooled_dim = hidden_dim * 2
+    per_audio_means: list[list[list[torch.Tensor]]] = [
+        [[] for _ in range(num_layers)] for _ in audios
+    ]
+    per_audio_maxes: list[list[list[torch.Tensor]]] = [
+        [[] for _ in range(num_layers)] for _ in audios
+    ]
+
+    # Batch only full-length 5s chunks. Tail chunks keep exact old behavior (single-item).
+    full_chunks: list[tuple[int, np.ndarray]] = []
+    tail_chunks: list[tuple[int, np.ndarray]] = []
+    for audio_idx, audio_np in enumerate(audios):
         chunks = []
         for start in range(0, len(audio_np), CHUNK_SAMPLES):
             chunk = audio_np[start : start + CHUNK_SAMPLES]
@@ -192,40 +258,24 @@ def mert_forward_pool(
             chunks.append(chunk)
         if not chunks:
             chunks = [audio_np]
-
-        # Process each chunk — accumulate pooled vectors with gradient
-        chunk_layer_means = [[] for _ in range(num_layers)]
-        chunk_layer_maxes = [[] for _ in range(num_layers)]
-
         for chunk in chunks:
-            # We use fixed-length chunks without padding; attention_mask is unnecessary
-            # and triggers unstable code paths on some MPS backends.
-            inputs = processor(
-                chunk,
-                sampling_rate=MERT_SR,
-                return_tensors="pt",
-                return_attention_mask=False,
-            )
-            inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
-            outputs = mert_model(**inputs)
+            if len(chunk) == CHUNK_SAMPLES:
+                full_chunks.append((audio_idx, chunk))
+            else:
+                tail_chunks.append((audio_idx, chunk))
 
-            # hidden_states[0] = conv features, [1..num_layers] = transformer layers
-            for li in range(num_layers):
-                hs = outputs.hidden_states[li + 1].squeeze(0)  # (T, hidden_dim)
-                chunk_layer_means[li].append(hs.mean(dim=0))
-                chunk_layer_maxes[li].append(hs.max(dim=0).values)
+    _run_chunk_items(full_chunks, per_audio_means, per_audio_maxes, batch_size=max(1, chunk_batch_size))
+    _run_chunk_items(tail_chunks, per_audio_means, per_audio_maxes, batch_size=1)
 
-        # Aggregate across chunks: mean of means, max of maxes
+    batch_pooled = []
+    for audio_idx in range(len(audios)):
         layer_pooled = []
         for li in range(num_layers):
-            mean_agg = torch.stack(chunk_layer_means[li]).mean(dim=0)  # (hidden_dim,)
-            max_agg = torch.stack(chunk_layer_maxes[li]).max(dim=0).values  # (hidden_dim,)
-            layer_pooled.append(torch.cat([mean_agg, max_agg]))  # (pooled_dim,)
-
-        # (num_layers, pooled_dim)
+            mean_agg = torch.stack(per_audio_means[audio_idx][li]).mean(dim=0)
+            max_agg = torch.stack(per_audio_maxes[audio_idx][li]).max(dim=0).values
+            layer_pooled.append(torch.cat([mean_agg, max_agg]))
         batch_pooled.append(torch.stack(layer_pooled))
 
-    # (batch, num_layers, pooled_dim)
     return torch.stack(batch_pooled)
 
 
@@ -323,6 +373,7 @@ def train_one_epoch(
     use_amp: bool = False,
     amp_dtype: torch.dtype = torch.float16,
     scaler=None,
+    chunk_batch_size: int = 1,
 ) -> tuple[float, float]:
     head.train()
     if use_lora:
@@ -350,11 +401,11 @@ def train_one_epoch(
             # Forward through MERT (with gradients for LoRA)
             if use_lora:
                 pooled = mert_forward_pool(audios, mert_model, processor, device,
-                                           num_layers, hidden_dim)
+                                           num_layers, hidden_dim, chunk_batch_size)
             else:
                 with torch.no_grad():
                     pooled = mert_forward_pool(audios, mert_model, processor, device,
-                                               num_layers, hidden_dim)
+                                               num_layers, hidden_dim, chunk_batch_size)
                 pooled = pooled.detach()
 
             # Forward through head
@@ -409,6 +460,7 @@ def evaluate(
     hidden_dim: int,
     use_amp: bool = False,
     amp_dtype: torch.dtype = torch.float16,
+    chunk_batch_size: int = 1,
 ) -> tuple[float, float, list[int], list[int], np.ndarray, np.ndarray]:
     """Evaluate model. Returns (loss, acc, primary_labels, primary_preds, all_probs, all_labels_multihot)."""
     head.eval()
@@ -432,7 +484,7 @@ def evaluate(
         )
         with amp_ctx:
             pooled = mert_forward_pool(audios, mert_model, processor, device,
-                                       num_layers, hidden_dim)
+                                       num_layers, hidden_dim, chunk_batch_size)
             logits = head(pooled)
             loss = criterion(logits, labels)
 
@@ -544,6 +596,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=2,
                         help="DataLoader workers per split (default: 2)")
+    parser.add_argument("--chunk-batch-size", type=int, default=0,
+                        help="MERT chunk batch size (0=auto; higher can be faster but uses more VRAM)")
     parser.add_argument("--amp", dest="amp", action="store_true",
                         help="Enable mixed precision autocast on CUDA (default)")
     parser.add_argument("--no-amp", dest="amp", action="store_false",
@@ -617,6 +671,14 @@ def main():
     amp_dtype = torch.bfloat16 if amp_mode == "bf16" else torch.float16
     amp_enabled = bool(args.amp and device.type == "cuda")
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and amp_dtype == torch.float16)
+    if args.chunk_batch_size > 0:
+        chunk_batch_size = int(args.chunk_batch_size)
+    elif device.type == "cuda":
+        cuda_index = device.index if device.index is not None else torch.cuda.current_device()
+        total_vram_gb = torch.cuda.get_device_properties(cuda_index).total_memory / (1024 ** 3)
+        chunk_batch_size = 4 if total_vram_gb >= 30 else 2
+    else:
+        chunk_batch_size = 1
 
     print(f"Model: {model_name}", flush=True)
     print(f"  Layers: {num_layers}, hidden: {hidden_dim}, pooled: {pooled_dim}")
@@ -624,6 +686,7 @@ def main():
     print(f"LoRA: {'disabled' if not use_lora else f'rank={args.lora_rank}, alpha={args.lora_alpha}'}")
     print(f"Effective batch size: {args.batch_size * args.grad_accum}")
     print(f"AMP: {'on' if amp_enabled else 'off'} ({amp_mode}), TF32: {tf32_enabled}")
+    print(f"Chunk batch size: {chunk_batch_size}")
 
     # Load data
     data_dir = args.data_dir.resolve()
@@ -890,11 +953,11 @@ def main():
         train_loss, train_acc = train_one_epoch(
             mert_model, head, processor, train_loader, criterion, optimizer,
             device, num_layers, hidden_dim, args.grad_accum, use_lora,
-            amp_enabled, amp_dtype, scaler,
+            amp_enabled, amp_dtype, scaler, chunk_batch_size,
         )
         val_loss, val_acc, val_labels_idx, val_preds_idx, val_probs, val_labels_mh = evaluate(
             mert_model, head, processor, val_loader, criterion,
-            device, num_layers, hidden_dim, amp_enabled, amp_dtype,
+            device, num_layers, hidden_dim, amp_enabled, amp_dtype, chunk_batch_size,
         )
 
         scheduler.step(val_acc)
@@ -941,6 +1004,7 @@ def main():
             "amp": amp_enabled,
             "amp_dtype": amp_mode,
             "tf32": tf32_enabled,
+            "chunk_batch_size": chunk_batch_size,
             "model_type": "MERTFineTuned",
         }
         torch.save(ckpt_data, checkpoint_path)
@@ -977,7 +1041,7 @@ def main():
 
     test_loss, test_acc, test_labels, test_preds, test_probs, test_labels_mh = evaluate(
         mert_model, head, processor, test_loader, criterion,
-        device, num_layers, hidden_dim, amp_enabled, amp_dtype,
+        device, num_layers, hidden_dim, amp_enabled, amp_dtype, chunk_batch_size,
     )
     print(f"\nTest loss: {test_loss:.4f}")
     print(f"Test accuracy: {test_acc:.1%} ({sum(1 for a, b in zip(test_labels, test_preds) if a == b)}/{len(test_labels)})")
@@ -1012,6 +1076,7 @@ def main():
                 "amp": amp_enabled,
                 "amp_dtype": amp_mode,
                 "tf32": tf32_enabled,
+                "chunk_batch_size": chunk_batch_size,
                 "model_type": "MERTFineTuned",
             },
             checkpoint_path,
