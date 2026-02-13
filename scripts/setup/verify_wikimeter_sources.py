@@ -23,7 +23,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from wikimeter_tools import PROJECT_ROOT, load_json, now_iso, parse_meters, save_json
+from wikimeter_tools import (
+    PROJECT_ROOT,
+    load_json,
+    now_iso,
+    parse_meters,
+    parse_youtube_video_id,
+    save_json,
+    source_from_youtube,
+    source_to_candidate,
+)
 
 DEFAULT_REVIEW_QUEUE = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "review_queue.json"
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "review_queue_verified.json"
@@ -71,6 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-page-chars", type=int, default=15000, help="How much page text to parse")
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--sleep", type=float, default=0.25, help="Pause between items")
+    parser.add_argument(
+        "--youtube-metadata",
+        action="store_true",
+        help="Include YouTube title/description metadata evidence when source is YouTube",
+    )
     parser.add_argument(
         "--apply-suggestions",
         action="store_true",
@@ -232,6 +246,22 @@ def yt_metadata(video_id: str, timeout_s: float) -> dict[str, Any]:
     }
 
 
+def candidate_source(item: dict[str, Any]) -> dict[str, Any]:
+    cand = item.get("candidate") or {}
+    src = cand.get("source")
+    if isinstance(src, dict) and src:
+        return source_to_candidate(src)
+    video_id = str(cand.get("video_id", item.get("video_id", ""))).strip()
+    video_url = str(cand.get("video_url", item.get("video_url", ""))).strip()
+    if not video_id and video_url:
+        video_id = parse_youtube_video_id(video_url)
+    if video_id:
+        return source_to_candidate(source_from_youtube(video_id=video_id, url=video_url or None))
+    if video_url:
+        return {"type": "url", "url": video_url}
+    return {}
+
+
 def _snippet(text: str, start: int, end: int, radius: int = 72) -> str:
     lo = max(0, start - radius)
     hi = min(len(text), end + radius)
@@ -361,16 +391,18 @@ def verify_one_item(
     web_hits: int,
     max_page_chars: int,
     timeout_s: float,
+    include_youtube_metadata: bool,
 ) -> tuple[list[Evidence], list[str]]:
     errors: list[str] = []
     evidence: list[Evidence] = []
     seed = item.get("seed") or {}
-    cand = item.get("candidate") or {}
     artist = str(seed.get("artist", item.get("artist", ""))).strip()
     title = str(seed.get("title", item.get("title", ""))).strip()
-    video_id = str(cand.get("video_id", item.get("video_id", ""))).strip()
+    source = candidate_source(item)
+    source_type = str(source.get("type", "")).strip().lower()
+    video_id = str(source.get("video_id", "")).strip()
 
-    if video_id:
+    if include_youtube_metadata and source_type == "youtube" and video_id:
         meta = yt_metadata(video_id, timeout_s=timeout_s)
         if "error" in meta:
             errors.append(f"youtube: {meta['error']}")
@@ -389,8 +421,6 @@ def verify_one_item(
                     source_url=str(meta.get("webpage_url", "")),
                 )
             )
-    else:
-        errors.append("missing video_id")
 
     queries = []
     if artist and title:
@@ -512,6 +542,7 @@ def main() -> None:
             web_hits=max(1, args.web_hits),
             max_page_chars=max(1000, args.max_page_chars),
             timeout_s=max(2.0, args.timeout),
+            include_youtube_metadata=bool(args.youtube_metadata),
         )
         score, conflict, confidence, suggested_status, reason = evidence_summary(target_set, evidence)
 
@@ -557,6 +588,7 @@ def main() -> None:
                 "wiki_hits": args.wiki_hits,
                 "web_hits": args.web_hits,
                 "max_page_chars": args.max_page_chars,
+                "youtube_metadata": bool(args.youtube_metadata),
                 "timeout": args.timeout,
                 "apply_suggestions": args.apply_suggestions,
             },

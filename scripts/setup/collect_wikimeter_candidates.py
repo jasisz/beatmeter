@@ -34,6 +34,7 @@ from wikimeter_tools import (
     normalize_meters,
     parse_meters,
     save_json,
+    song_video_ids,
     song_key,
     ytsearch,
 )
@@ -177,7 +178,9 @@ def main() -> None:
 
     output_path = args.output.resolve()
     songs = load_catalog(catalog_path)
-    existing_video_ids = {str(s["video_id"]).strip() for s in songs}
+    existing_video_ids: set[str] = set()
+    for song in songs:
+        existing_video_ids.update(song_video_ids(song))
     existing_song_keys = {song_key(s["artist"], s["title"]) for s in songs}
 
     seeds = load_all_seeds(args.seed_file, args.seed)
@@ -242,6 +245,7 @@ def main() -> None:
                     "query": seed["query"],
                     "video_id": video_id,
                     "video_url": cand["video_url"],
+                    "source": dict(cand.get("source") or {}),
                     "video_title": cand["video_title"],
                     "uploader": cand["uploader"],
                     "duration_s": cand["duration_s"],

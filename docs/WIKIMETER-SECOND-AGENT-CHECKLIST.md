@@ -24,7 +24,7 @@ Focus on correctness, data quality, and silent failure risks.
    - review queue payload shape
    - verification payload (`verification.evidence`, `suggested_status`, `confidence`)
 4. Verify dedup behavior:
-   - duplicate `video_id` handling
+   - duplicate source handling (`type+url` / `youtube:video_id`)
    - duplicate song handling
    - replace-vs-skip merge behavior
 5. Verify verification logic:

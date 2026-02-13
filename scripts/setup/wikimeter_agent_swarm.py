@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--sleep", type=float, default=0.25)
     parser.add_argument(
+        "--youtube-metadata",
+        action="store_true",
+        help="Include YouTube metadata evidence (title/description) in scout stage",
+    )
+    parser.add_argument(
         "--apply-consensus",
         action="store_true",
         help="Apply arbiter consensus into item.status in output",
@@ -48,8 +53,9 @@ def item_identity(item: dict[str, Any]) -> tuple[str, str, str]:
     cand = item.get("candidate") or {}
     artist = str(seed.get("artist", item.get("artist", ""))).strip()
     title = str(seed.get("title", item.get("title", ""))).strip()
-    video_id = str(cand.get("video_id", item.get("video_id", ""))).strip()
-    return artist, title, video_id
+    source = verify.candidate_source(item)
+    source_id = str(source.get("video_id", "")).strip() or str(source.get("url", "")).strip()
+    return artist, title, source_id
 
 
 def run_skeptic_agent(
@@ -190,6 +196,7 @@ def main() -> None:
             web_hits=max(1, args.scout_web_hits),
             max_page_chars=max(1000, args.max_page_chars),
             timeout_s=max(2.0, args.timeout),
+            include_youtube_metadata=bool(args.youtube_metadata),
         )
         scout_score, scout_conflict, scout_confidence, scout_suggested, scout_reason = verify.evidence_summary(
             target_set,
@@ -262,6 +269,7 @@ def main() -> None:
                 "scout_web_hits": args.scout_web_hits,
                 "skeptic_web_hits": args.skeptic_web_hits,
                 "max_page_chars": args.max_page_chars,
+                "youtube_metadata": bool(args.youtube_metadata),
                 "timeout": args.timeout,
                 "apply_consensus": args.apply_consensus,
             },

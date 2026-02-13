@@ -127,7 +127,8 @@ Current accuracy on the METER2800 test split: **76% overall** (88% on binary 3/4
 
 ### WIKIMETER Curation Workflow
 
-Use this when you want to expand `scripts/setup/wikimeter.json` in a controlled way:
+Use this when you want to expand `scripts/setup/wikimeter.json` in a controlled way.
+Catalog entries now support multi-source `sources[]` (e.g. `wikimedia` + `youtube` fallback).
 
 ```bash
 # 1) Collect YouTube candidates from seed file
@@ -137,20 +138,23 @@ uv run python scripts/setup/collect_wikimeter_candidates.py \
 # 2) Build review queue (top candidates per song)
 uv run python scripts/setup/build_wikimeter_review_queue.py
 
-# 3) Auto-verify with external sources (Wikipedia + web + YouTube metadata)
+# 3) Auto-verify with external sources (Wikipedia + web)
 uv run python scripts/setup/verify_wikimeter_sources.py \
   --apply-suggestions
 
-# Optional: run multi-agent consensus (scout + skeptic + arbiter)
+# Optional: include YouTube metadata evidence
+#   --youtube-metadata
+
+# 4) Multi-agent consensus (scout + skeptic + arbiter)
 uv run python scripts/setup/wikimeter_agent_swarm.py \
   --apply-consensus
 
-# 4) Manually review high-risk classes/items
+# 5) Manually review high-risk classes/items
 #    - 9/x, 11/x, poly
 #    - conflicting evidence
 #    - low-confidence suggestions
 
-# 5) Merge approved entries into catalog
+# 6) Merge approved entries into catalog
 uv run python scripts/setup/merge_wikimeter_reviewed.py
 ```
 

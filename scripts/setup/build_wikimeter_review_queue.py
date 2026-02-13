@@ -9,7 +9,20 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from wikimeter_tools import DEFAULT_CATALOG, PROJECT_ROOT, load_catalog, load_json, now_iso, parse_meters, save_json, song_key
+from wikimeter_tools import (
+    DEFAULT_CATALOG,
+    PROJECT_ROOT,
+    load_catalog,
+    load_json,
+    now_iso,
+    parse_meters,
+    parse_youtube_video_id,
+    save_json,
+    song_key,
+    song_video_ids,
+    source_from_youtube,
+    source_to_candidate,
+)
 
 DEFAULT_CANDIDATES = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "candidates.json"
 DEFAULT_REVIEW_QUEUE = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "review_queue.json"
@@ -46,13 +59,32 @@ def normalize_candidate(item: dict[str, Any]) -> dict[str, Any]:
     else:
         raise ValueError("candidate missing meters")
 
+    source_raw = item.get("source")
+    source: dict[str, Any] = {}
+    if isinstance(source_raw, dict) and source_raw:
+        source = source_to_candidate(source_raw)
+    else:
+        video_id = str(item.get("video_id", "")).strip()
+        video_url = str(item.get("video_url", "")).strip()
+        if not video_id and video_url:
+            video_id = parse_youtube_video_id(video_url)
+        if video_id:
+            source = source_to_candidate(source_from_youtube(video_id=video_id, url=video_url or None))
+        elif video_url:
+            source = {"type": "url", "url": video_url}
+
+    video_id = str(item.get("video_id", "")).strip()
+    if not video_id and source.get("type") == "youtube":
+        video_id = str(source.get("video_id", "")).strip()
+
     return {
         "artist": str(item["artist"]).strip(),
         "title": str(item["title"]).strip(),
         "meters": meters,
         "query": str(item.get("query", "")).strip(),
-        "video_id": str(item["video_id"]).strip(),
+        "video_id": video_id,
         "video_url": str(item.get("video_url", "")).strip(),
+        "source": source,
         "video_title": str(item.get("video_title", "")).strip(),
         "uploader": str(item.get("uploader", "")).strip(),
         "duration_s": int(item.get("duration_s") or 0),
@@ -87,7 +119,9 @@ def main() -> None:
 
     catalog = load_catalog(catalog_path)
     existing_song_keys = {song_key(s["artist"], s["title"]) for s in catalog}
-    existing_video_ids = {s["video_id"] for s in catalog}
+    existing_video_ids: set[str] = set()
+    for song in catalog:
+        existing_video_ids.update(song_video_ids(song))
 
     raw_items = load_candidate_items(candidates_path)
     print(f"Loaded candidates: {len(raw_items)}")
@@ -129,18 +163,18 @@ def main() -> None:
                 skipped_existing_song += 1
                 break
 
-            if item["video_id"] in existing_video_ids and not args.include_existing_video:
+            if item["video_id"] and item["video_id"] in existing_video_ids and not args.include_existing_video:
                 skipped_existing_video += 1
                 continue
 
-            if item["video_id"] in queue_video_ids:
+            if item["video_id"] and item["video_id"] in queue_video_ids:
                 skipped_duplicate_video += 1
                 continue
 
             review_flags = list(item["flags"])
             if skey in existing_song_keys:
                 review_flags.append("existing_song")
-            if item["video_id"] in existing_video_ids:
+            if item["video_id"] and item["video_id"] in existing_video_ids:
                 review_flags.append("existing_video")
             if item["search_rank"] > 1:
                 review_flags.append("not_top_result")
@@ -157,8 +191,9 @@ def main() -> None:
                         "query": item["query"],
                     },
                     "candidate": {
+                        "source": dict(item["source"]),
                         "video_id": item["video_id"],
-                        "video_url": item["video_url"],
+                        "video_url": item["video_url"] or str(item["source"].get("url", "")),
                         "video_title": item["video_title"],
                         "uploader": item["uploader"],
                         "duration_s": item["duration_s"],
@@ -169,7 +204,8 @@ def main() -> None:
                     "created_at": now_iso(),
                 }
             )
-            queue_video_ids.add(item["video_id"])
+            if item["video_id"]:
+                queue_video_ids.add(item["video_id"])
             taken += 1
             if taken >= args.top_per_song:
                 break

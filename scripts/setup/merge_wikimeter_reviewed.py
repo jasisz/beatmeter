@@ -14,10 +14,18 @@ from wikimeter_tools import (
     PROJECT_ROOT,
     load_catalog,
     load_json,
+    merge_sources,
     now_iso,
     parse_meters,
+    parse_youtube_video_id,
     save_catalog,
+    song_source_keys,
+    song_video_ids,
     song_key,
+    source_from_youtube,
+    source_key,
+    source_to_candidate,
+    normalize_sources,
 )
 
 DEFAULT_REVIEW_QUEUE = PROJECT_ROOT / "data" / "wikimeter" / "curation" / "review_queue.json"
@@ -70,17 +78,35 @@ def parse_review_item(item: dict[str, Any]) -> dict[str, Any]:
     else:
         raise ValueError("invalid meters format")
 
+    sources = normalize_sources(
+        raw_sources=(cand.get("sources") if isinstance(cand.get("sources"), list) else []),
+        fallback_video_id="",
+        fallback_url="",
+    )
+    if isinstance(cand.get("source"), dict):
+        sources = merge_sources(sources, [source_to_candidate(cand["source"])])
+    if isinstance(item.get("sources"), list):
+        sources = merge_sources(sources, list(item.get("sources") or []))
+
     video_id = str(cand.get("video_id", item.get("video_id", ""))).strip()
+    video_url = str(cand.get("video_url", item.get("video_url", ""))).strip()
+    if not video_id and video_url:
+        video_id = parse_youtube_video_id(video_url)
+    if video_id:
+        sources = merge_sources(sources, [source_from_youtube(video_id=video_id, url=video_url or None)])
+    elif video_url and not sources:
+        sources = normalize_sources([{"type": "url", "url": video_url}])
+
     if not artist or not title:
         raise ValueError("missing artist/title")
-    if not video_id:
-        raise ValueError("missing video_id")
+    if not sources:
+        raise ValueError("missing source")
 
     return {
         "artist": artist,
         "title": title,
         "meters": meters,
-        "video_id": video_id,
+        "sources": sources,
     }
 
 
@@ -129,47 +155,76 @@ def main() -> None:
 
     by_song: dict[str, int] = {}
     by_video: dict[str, int] = {}
+    by_source: dict[str, int] = {}
     for idx, song in enumerate(catalog):
         by_song[song_key(song["artist"], song["title"])] = idx
-        by_video[song["video_id"]] = idx
+        for video_id in song_video_ids(song):
+            by_video[video_id] = idx
+        for src_key in song_source_keys(song):
+            by_source[src_key] = idx
 
     merged = 0
     replaced = 0
+    appended_sources = 0
     skipped_existing_song = 0
     skipped_existing_video = 0
+    skipped_existing_source = 0
     duplicate_in_batch = 0
-    seen_batch: set[str] = set()
+    seen_batch_sources: set[str] = set()
 
     for item in accepted:
         skey = song_key(item["artist"], item["title"])
-        vid = item["video_id"]
-        if vid in seen_batch:
-            duplicate_in_batch += 1
-            continue
-        seen_batch.add(vid)
+        item_source_keys = {source_key(src) for src in item["sources"]}
+        item_video_ids = song_video_ids(item)
 
-        if vid in by_video:
-            skipped_existing_video += 1
+        if any(src_key in seen_batch_sources for src_key in item_source_keys):
+            duplicate_in_batch += 1
             continue
 
         if skey in by_song:
-            if not args.replace_existing_song:
-                skipped_existing_song += 1
-                continue
             idx = by_song[skey]
-            old_vid = catalog[idx]["video_id"]
-            if old_vid in by_video:
-                del by_video[old_vid]
-            catalog[idx] = item
+            current = catalog[idx]
+            current_sources = list(current.get("sources", []))
+            merged_song_sources = merge_sources(current_sources, item["sources"])
+            added = max(0, len(merged_song_sources) - len(current_sources))
+
+            if args.replace_existing_song:
+                catalog[idx] = {
+                    "artist": item["artist"],
+                    "title": item["title"],
+                    "meters": item["meters"],
+                    "sources": merged_song_sources,
+                }
+                replaced += 1
+            elif added > 0:
+                catalog[idx]["sources"] = merged_song_sources
+                appended_sources += added
+            else:
+                skipped_existing_song += 1
+
             by_song[skey] = idx
-            by_video[vid] = idx
-            replaced += 1
+            for video_id in song_video_ids(catalog[idx]):
+                by_video[video_id] = idx
+            for src_key in song_source_keys(catalog[idx]):
+                by_source[src_key] = idx
+            seen_batch_sources.update(item_source_keys)
+            continue
+
+        if any(video_id in by_video for video_id in item_video_ids):
+            skipped_existing_video += 1
+            continue
+        if any(src_key in by_source for src_key in item_source_keys):
+            skipped_existing_source += 1
             continue
 
         catalog.append(item)
         idx = len(catalog) - 1
         by_song[skey] = idx
-        by_video[vid] = idx
+        for video_id in item_video_ids:
+            by_video[video_id] = idx
+        for src_key in item_source_keys:
+            by_source[src_key] = idx
+        seen_batch_sources.update(item_source_keys)
         merged += 1
 
     catalog = sort_catalog(catalog)
@@ -178,8 +233,10 @@ def main() -> None:
     print(f"  accepted in queue: {len(accepted)}")
     print(f"  merged new songs: {merged}")
     print(f"  replaced existing songs: {replaced}")
+    print(f"  appended sources to existing songs: {appended_sources}")
     print(f"  skipped existing songs: {skipped_existing_song}")
     print(f"  skipped existing videos: {skipped_existing_video}")
+    print(f"  skipped existing sources: {skipped_existing_source}")
     print(f"  duplicates in accepted batch: {duplicate_in_batch}")
     if parse_errors:
         print(f"  malformed accepted entries: {parse_errors}")
