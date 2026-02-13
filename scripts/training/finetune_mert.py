@@ -286,8 +286,12 @@ def _format_per_class_watchdog(
         correct = int((preds_arr[mask] == idx).sum())
         acc = correct / support
         ap_text = "—"
-        if labels_binary[:, idx].sum() > 0:
-            ap_text = f"{average_precision_score(labels_binary[:, idx], probs[:, idx]):.3f}"
+        class_scores = probs[:, idx]
+        finite_mask = np.isfinite(class_scores)
+        if labels_binary[:, idx].sum() > 0 and finite_mask.all():
+            ap_text = f"{average_precision_score(labels_binary[:, idx], class_scores):.3f}"
+        elif labels_binary[:, idx].sum() > 0:
+            ap_text = "nan"
         chunks.append(f"{meter}/x n={support} acc={acc:.0%} ap={ap_text}")
     return " | ".join(chunks)
 
@@ -323,6 +327,7 @@ def train_one_epoch(
     use_scaler = bool(scaler is not None and scaler.is_enabled())
     trainable_params = list(head.parameters()) + [p for p in mert_model.parameters() if p.requires_grad]
     optimizer.zero_grad(set_to_none=True)
+    skipped_non_finite = 0
 
     pbar = tqdm(loader, desc="  Train", leave=False,
                 bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
@@ -349,6 +354,11 @@ def train_one_epoch(
             logits = head(pooled)
             loss = criterion(logits, labels) / grad_accum_steps
 
+        if not torch.isfinite(loss):
+            skipped_non_finite += 1
+            optimizer.zero_grad(set_to_none=True)
+            continue
+
         if use_scaler:
             scaler.scale(loss).backward()
         else:
@@ -373,6 +383,9 @@ def train_one_epoch(
         total += len(audios)
 
         pbar.set_postfix_str(f"loss={total_loss/total:.3f} acc={correct/total:.0%}")
+
+    if skipped_non_finite:
+        print(f"  WARNING: skipped {skipped_non_finite} train batches with non-finite loss")
 
     return total_loss / max(total, 1), correct / max(total, 1)
 
@@ -401,6 +414,7 @@ def evaluate(
     all_probs: list[np.ndarray] = []       # sigmoid probabilities
     all_labels_raw: list[np.ndarray] = []  # multi-hot label vectors
     amp_enabled = bool(use_amp and device.type == "cuda")
+    had_non_finite = False
 
     for audios, labels in tqdm(loader, desc="  Eval", leave=False):
         labels = labels.to(device, non_blocking=True)
@@ -415,6 +429,14 @@ def evaluate(
             logits = head(pooled)
             loss = criterion(logits, labels)
 
+        if not torch.isfinite(logits).all():
+            had_non_finite = True
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+            loss = criterion(logits, labels)
+        if not torch.isfinite(loss):
+            had_non_finite = True
+            loss = torch.tensor(0.0, device=device)
+
         total_loss += loss.item() * len(audios)
         probs = torch.sigmoid(logits)
         preds = logits.argmax(dim=1)
@@ -428,6 +450,8 @@ def evaluate(
 
     probs_arr = np.concatenate(all_probs, axis=0)      # (N, num_classes)
     labels_arr = np.concatenate(all_labels_raw, axis=0)  # (N, num_classes)
+    if had_non_finite:
+        print("  WARNING: non-finite eval logits/loss detected; sanitized for metrics.")
 
     return (total_loss / max(total, 1), correct / max(total, 1),
             all_labels_idx, all_preds_idx, probs_arr, labels_arr)
@@ -460,10 +484,14 @@ def print_eval_metrics(
         total_correct += c
         total_count += n
         ap_str = "—"
-        if labels_binary[:, i].sum() > 0:
-            ap = average_precision_score(labels_binary[:, i], probs[:, i])
+        class_scores = probs[:, i]
+        finite_mask = np.isfinite(class_scores)
+        if labels_binary[:, i].sum() > 0 and finite_mask.all():
+            ap = average_precision_score(labels_binary[:, i], class_scores)
             aps.append(ap)
             ap_str = f"{ap:.3f}"
+        elif labels_binary[:, i].sum() > 0:
+            ap_str = "nan"
         print(f"{m:>4d}/x  {c:>5d}/{n:<5d}       {acc:>5.1%}  {ap_str:>6s}")
 
     if total_count:
