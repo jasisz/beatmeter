@@ -125,6 +125,31 @@ uv run python scripts/dashboard.py
 
 Current accuracy on the METER2800 test split: **76% overall** (88% on binary 3/4 vs 4/4).
 
+### WIKIMETER Curation Workflow
+
+Use this when you want to expand `scripts/setup/wikimeter.json` in a controlled way:
+
+```bash
+# 1) Collect YouTube candidates from seed file
+uv run python scripts/setup/collect_wikimeter_candidates.py \
+  --seed-file data/wikimeter/curation/seeds.csv
+
+# 2) Build review queue (top candidates per song)
+uv run python scripts/setup/build_wikimeter_review_queue.py
+
+# 3) Manually edit review_queue.json:
+#    status = approved/rejected (+ optional review_note)
+
+# 4) Merge approved entries into catalog
+uv run python scripts/setup/merge_wikimeter_reviewed.py
+```
+
+Seed file format (`.csv`, `.json`, `.jsonl`) should include:
+- `artist`
+- `title`
+- `meters` (example: `5` or `3:0.8,4:0.7`)
+- optional `query`
+
 ## Project Structure
 
 ```
