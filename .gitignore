@@ -27,7 +27,12 @@ tests/fixtures/.cache/
 .cache/
 
 # Training data and model checkpoints
-data/
+data/*
+!data/wikimeter/
+data/wikimeter/*
+!data/wikimeter/blacklist.json
+data/wikimeter/curation/
+scripts/setup/wikimeter.bak.*.json
 
 # OS
 .DS_Store
