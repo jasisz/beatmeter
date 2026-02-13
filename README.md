@@ -125,44 +125,29 @@ uv run python scripts/dashboard.py
 
 Current accuracy on the METER2800 test split: **76% overall** (88% on binary 3/4 vs 4/4).
 
-### WIKIMETER Curation Workflow
+### WIKIMETER Catalog Workflow
 
 Use this when you want to expand `scripts/setup/wikimeter.json` in a controlled way.
-Catalog entries now support multi-source `sources[]` (e.g. `wikimedia` + `youtube` fallback).
+Catalog entries support multi-source `sources[]`.
 
 ```bash
-# 1) Collect YouTube candidates from seed file
-uv run python scripts/setup/collect_wikimeter_candidates.py \
-  --seed-file data/wikimeter/curation/seeds.csv
+# 1) Prepare a reviewed queue JSON (manual curation)
+#    default path: data/wikimeter/review_queue.json
 
-# 2) Build review queue (top candidates per song)
-uv run python scripts/setup/build_wikimeter_review_queue.py
+# 2) Merge approved entries into catalog (gate step)
+uv run python scripts/setup/merge_wikimeter_reviewed.py \
+  --review-queue data/wikimeter/review_queue.json
 
-# 3) Auto-verify with external sources (Wikipedia + web)
-uv run python scripts/setup/verify_wikimeter_sources.py \
-  --apply-suggestions
-
-# Optional: include YouTube metadata evidence
-#   --youtube-metadata
-
-# 4) Multi-agent consensus (scout + skeptic + arbiter)
-uv run python scripts/setup/wikimeter_agent_swarm.py \
-  --apply-consensus
-
-# 5) Manually review high-risk classes/items
-#    - 9/x, 11/x, poly
-#    - conflicting evidence
-#    - low-confidence suggestions
-
-# 6) Merge approved entries into catalog
-uv run python scripts/setup/merge_wikimeter_reviewed.py
+# 3) Download/refresh dataset from catalog
+uv run python scripts/setup/download_wikimeter.py
 ```
 
-Seed file format (`.csv`, `.json`, `.jsonl`) should include:
-- `artist`
-- `title`
-- `meters` (example: `5` or `3:0.8,4:0.7`)
-- optional `query`
+Review queue entries should include:
+- `seed.artist`
+- `seed.title`
+- `seed.meters` (example: `5` or `3:0.8,4:0.7`)
+- `status` (`approved` to merge)
+- source info in `candidate` (`source`, `sources`, `video_id`/`video_url` legacy)
 
 ## Project Structure
 
