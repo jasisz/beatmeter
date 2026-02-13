@@ -137,6 +137,24 @@ def download_from_youtube(source: Source, dest_dir: Path, timeout_s: int = 120) 
     return downloaded[0] if downloaded else None
 
 
+def resolve_wikimedia_url(url: str) -> str:
+    """Resolve Wikimedia Commons description page URL to direct file URL.
+
+    Converts 'commons.wikimedia.org/wiki/File:Name.ext' to
+    'commons.wikimedia.org/wiki/Special:FilePath/Name.ext' which
+    redirects to the actual CDN file.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if "commons.wikimedia.org" not in parsed.netloc:
+        return url
+    # Match /wiki/File:Something.ext
+    m = re.match(r"^/wiki/File:(.+)$", parsed.path)
+    if not m:
+        return url
+    filename = m.group(1)
+    return f"https://commons.wikimedia.org/wiki/Special:FilePath/{filename}"
+
+
 def _safe_suffix_from_url(url: str) -> str:
     path = urllib.parse.urlparse(url).path
     name = Path(path).name
@@ -173,7 +191,11 @@ def download_source_audio(source: Source, dest_dir: Path, timeout_s: int = 120) 
     s_type = str(source.get("type", "")).strip().lower()
     if s_type == "youtube":
         return download_from_youtube(source, dest_dir, timeout_s=timeout_s)
-    if s_type in {"wikimedia", "archive", "url", "http", "https"}:
+    if s_type == "wikimedia":
+        resolved = dict(source)
+        resolved["url"] = resolve_wikimedia_url(str(source.get("url", "")).strip())
+        return download_from_url(resolved, dest_dir, timeout_s=timeout_s)
+    if s_type in {"archive", "url", "http", "https"}:
         return download_from_url(source, dest_dir, timeout_s=timeout_s)
     # Unknown source type with URL fallback.
     if source.get("url"):

@@ -1,5 +1,230 @@
 [
   {
+    "artist": "A Tribe Called Quest",
+    "title": "Can I Kick It",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "O3pyCGnZzYA",
+        "url": "https://www.youtube.com/watch?v=O3pyCGnZzYA"
+      }
+    ]
+  },
+  {
+    "artist": "Aaron Parks",
+    "title": "Attention, Earthlings",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ljQLFg2V7Hc",
+        "url": "https://www.youtube.com/watch?v=ljQLFg2V7Hc"
+      }
+    ]
+  },
+  {
+    "artist": "ABBA",
+    "title": "Dancing Queen",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "xFrGuyw1V8s",
+        "url": "https://www.youtube.com/watch?v=xFrGuyw1V8s"
+      }
+    ]
+  },
+  {
+    "artist": "AC/DC",
+    "title": "Back in Black",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pAgnJDJN4VA",
+        "url": "https://www.youtube.com/watch?v=pAgnJDJN4VA"
+      }
+    ]
+  },
+  {
+    "artist": "Al Green",
+    "title": "Lets Stay Together",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "XXx6RDzR6eM",
+        "url": "https://www.youtube.com/watch?v=XXx6RDzR6eM"
+      }
+    ]
+  },
+  {
+    "artist": "Alice in Chains",
+    "title": "Them Bones",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "zTuD8k3JvxQ",
+        "url": "https://www.youtube.com/watch?v=zTuD8k3JvxQ"
+      }
+    ]
+  },
+  {
+    "artist": "Alkan",
+    "title": "Air a 7 temps Op 32 No 8",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "lq7oXJXXF8w",
+        "url": "https://www.youtube.com/watch?v=lq7oXJXXF8w"
+      }
+    ]
+  },
+  {
+    "artist": "American Football",
+    "title": "Stay Home",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "TTxw7xez_oM",
+        "url": "https://www.youtube.com/watch?v=TTxw7xez_oM"
+      }
+    ]
+  },
+  {
+    "artist": "Andrew Lloyd Webber",
+    "title": "Everything's Alright",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pX-JSZvXJ88",
+        "url": "https://www.youtube.com/watch?v=pX-JSZvXJ88"
+      }
+    ]
+  },
+  {
+    "artist": "Andrew Lloyd Webber",
+    "title": "Everythings Alright",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "qV9C6Am8xzk",
+        "url": "https://www.youtube.com/watch?v=qV9C6Am8xzk"
+      }
+    ]
+  },
+  {
+    "artist": "Aphex Twin",
+    "title": "Windowlicker",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "FATTzbm78cc",
+        "url": "https://www.youtube.com/watch?v=FATTzbm78cc"
+      }
+    ]
+  },
+  {
+    "artist": "Arctic Monkeys",
+    "title": "Do I Wanna Know",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "bpOSxM0rNPM",
+        "url": "https://www.youtube.com/watch?v=bpOSxM0rNPM"
+      }
+    ]
+  },
+  {
+    "artist": "Aretha Franklin",
+    "title": "Respect",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "A134hShx_gw",
+        "url": "https://www.youtube.com/watch?v=A134hShx_gw"
+      }
+    ]
+  },
+  {
+    "artist": "Avishai Cohen",
+    "title": "Eleven Wives",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "9n3g2xhJqx8",
+        "url": "https://www.youtube.com/watch?v=9n3g2xhJqx8"
+      }
+    ]
+  },
+  {
+    "artist": "B.B. King",
+    "title": "The Thrill Is Gone",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "oica5jG7FpU",
+        "url": "https://www.youtube.com/watch?v=oica5jG7FpU"
+      }
+    ]
+  },
+  {
     "artist": "Babatunde Olatunji",
     "title": "Jin-Go-Lo-Ba",
     "meters": {
@@ -12,6 +237,80 @@
         "priority": 100,
         "video_id": "2c12yuQ0VCo",
         "url": "https://www.youtube.com/watch?v=2c12yuQ0VCo"
+      }
+    ]
+  },
+  {
+    "artist": "Bartok",
+    "title": "Exercice a 7 temps No 2",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Bartok2.flac",
+        "license": "CC-BY-SA-4.0"
+      }
+    ]
+  },
+  {
+    "artist": "Bartók",
+    "title": "Mikrokosmos 149",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ay9FSnVtruo",
+        "url": "https://www.youtube.com/watch?v=ay9FSnVtruo"
+      }
+    ]
+  },
+  {
+    "artist": "Bartók",
+    "title": "Mikrokosmos 150",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "G32MdnXhiN8",
+        "url": "https://www.youtube.com/watch?v=G32MdnXhiN8"
+      }
+    ]
+  },
+  {
+    "artist": "Bartók",
+    "title": "Six Dances in Bulgarian Rhythm No 5",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "UGA9cr9805A",
+        "url": "https://www.youtube.com/watch?v=UGA9cr9805A"
+      }
+    ]
+  },
+  {
+    "artist": "Bee Gees",
+    "title": "Stayin Alive",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "fNFzfwLM72c",
+        "url": "https://www.youtube.com/watch?v=fNFzfwLM72c"
       }
     ]
   },
@@ -42,6 +341,111 @@
         "priority": 100,
         "video_id": "gxEPV4kolz0",
         "url": "https://www.youtube.com/watch?v=gxEPV4kolz0"
+      }
+    ]
+  },
+  {
+    "artist": "Björk",
+    "title": "Atom Dance",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "LKmNICDVJvg",
+        "url": "https://www.youtube.com/watch?v=LKmNICDVJvg"
+      }
+    ]
+  },
+  {
+    "artist": "Black Sabbath",
+    "title": "Iron Man",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "b3-QqGVt-tM",
+        "url": "https://www.youtube.com/watch?v=b3-QqGVt-tM"
+      }
+    ]
+  },
+  {
+    "artist": "Blind Faith",
+    "title": "Do What You Like",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "y90tUiNCwk4",
+        "url": "https://www.youtube.com/watch?v=y90tUiNCwk4"
+      }
+    ]
+  },
+  {
+    "artist": "Bob Marley",
+    "title": "No Woman No Cry",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "IT8XvzIfi4U",
+        "url": "https://www.youtube.com/watch?v=IT8XvzIfi4U"
+      }
+    ]
+  },
+  {
+    "artist": "Bob Marley",
+    "title": "Three Little Birds",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "HNBCVM4KbUM",
+        "url": "https://www.youtube.com/watch?v=HNBCVM4KbUM"
+      }
+    ]
+  },
+  {
+    "artist": "Boris Karlov",
+    "title": "Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "8BuKgRN0I7k",
+        "url": "https://www.youtube.com/watch?v=8BuKgRN0I7k"
+      }
+    ]
+  },
+  {
+    "artist": "Brahms",
+    "title": "Nachtens Op 112 Nr 2",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "XmSpOOtFYJw",
+        "url": "https://www.youtube.com/watch?v=XmSpOOtFYJw"
       }
     ]
   },
@@ -77,6 +481,141 @@
     ]
   },
   {
+    "artist": "Broken Social Scene",
+    "title": "7/4 Shoreline",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Uev2J_cBHjQ",
+        "url": "https://www.youtube.com/watch?v=Uev2J_cBHjQ"
+      }
+    ]
+  },
+  {
+    "artist": "Bruno Mars",
+    "title": "Uptown Funk",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "OPf0YbXqDm0",
+        "url": "https://www.youtube.com/watch?v=OPf0YbXqDm0"
+      }
+    ]
+  },
+  {
+    "artist": "BTS",
+    "title": "Dynamite",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "gdZLi9oWNZg",
+        "url": "https://www.youtube.com/watch?v=gdZLi9oWNZg"
+      }
+    ]
+  },
+  {
+    "artist": "Buena Vista Social Club",
+    "title": "Chan Chan",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tGbRZ73NvlY",
+        "url": "https://www.youtube.com/watch?v=tGbRZ73NvlY"
+      }
+    ]
+  },
+  {
+    "artist": "Burhan Öçal",
+    "title": "Limoncu",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "PYl5xzfTmew",
+        "url": "https://www.youtube.com/watch?v=PYl5xzfTmew"
+      }
+    ]
+  },
+  {
+    "artist": "Burt Bacharach",
+    "title": "Say A Little Prayer",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "3dqiHMjfb7I",
+        "url": "https://www.youtube.com/watch?v=3dqiHMjfb7I"
+      }
+    ]
+  },
+  {
+    "artist": "Béla Fleck",
+    "title": "Sinister Minister",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "w9XDUBDMNuk",
+        "url": "https://www.youtube.com/watch?v=w9XDUBDMNuk"
+      }
+    ]
+  },
+  {
+    "artist": "C418",
+    "title": "Haggstrom",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "laZusNy8QiY",
+        "url": "https://www.youtube.com/watch?v=laZusNy8QiY"
+      }
+    ]
+  },
+  {
+    "artist": "Celia Cruz",
+    "title": "La Vida Es Un Carnaval",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "0nBFWzpWXuM",
+        "url": "https://www.youtube.com/watch?v=0nBFWzpWXuM"
+      }
+    ]
+  },
+  {
     "artist": "Chabuca Granda",
     "title": "La Flor de la Canela",
     "meters": {
@@ -88,6 +627,21 @@
         "priority": 100,
         "video_id": "KisngEru6sQ",
         "url": "https://www.youtube.com/watch?v=KisngEru6sQ"
+      }
+    ]
+  },
+  {
+    "artist": "Chopin",
+    "title": "Fantaisie-Impromptu",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Gus4dnQuiGk",
+        "url": "https://www.youtube.com/watch?v=Gus4dnQuiGk"
       }
     ]
   },
@@ -114,10 +668,30 @@
     },
     "sources": [
       {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Muriel-Nguyen-Xuan-Chopin-valse-opus64-1.ogg",
+        "license": "CC-BY-SA-4.0"
+      },
+      {
         "type": "youtube",
         "priority": 100,
         "video_id": "3H0SRv8QNwk",
         "url": "https://www.youtube.com/watch?v=3H0SRv8QNwk"
+      }
+    ]
+  },
+  {
+    "artist": "Chopin",
+    "title": "Piano Sonata No 1 Larghetto",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "_Lz34k0Hi08",
+        "url": "https://www.youtube.com/watch?v=_Lz34k0Hi08"
       }
     ]
   },
@@ -128,6 +702,11 @@
       "3": 1.0
     },
     "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Chopin_-_Waltz_in_A_minor,_B_150.ogg",
+        "license": "public-domain"
+      },
       {
         "type": "youtube",
         "priority": 100,
@@ -144,10 +723,30 @@
     },
     "sources": [
       {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Chopin-waltz-op-64-no-2-in-c-sharp-minor.oga",
+        "license": "CC0"
+      },
+      {
         "type": "youtube",
         "priority": 100,
         "video_id": "SUT_0c2QVzo",
         "url": "https://www.youtube.com/watch?v=SUT_0c2QVzo"
+      }
+    ]
+  },
+  {
+    "artist": "Claude Le Jeune",
+    "title": "Cygne je suis de candeur",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "XQcUzpi3lyY",
+        "url": "https://www.youtube.com/watch?v=XQcUzpi3lyY"
       }
     ]
   },
@@ -168,6 +767,139 @@
     ]
   },
   {
+    "artist": "Daft Punk",
+    "title": "Around the World",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "K0HSD_i2DvA",
+        "url": "https://www.youtube.com/watch?v=K0HSD_i2DvA"
+      }
+    ]
+  },
+  {
+    "artist": "Daft Punk",
+    "title": "Get Lucky",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "5NV6Rdv1a3I",
+        "url": "https://www.youtube.com/watch?v=5NV6Rdv1a3I"
+      }
+    ]
+  },
+  {
+    "artist": "Damien Rice",
+    "title": "The Blower's Daughter",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "5YXVMCHG-Nk",
+        "url": "https://www.youtube.com/watch?v=5YXVMCHG-Nk"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Blue Rondo a la Turk",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "h07Nri6n3Y0"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Blue Rondo à la Turk",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "vKNZqM0d-xo",
+        "url": "https://www.youtube.com/watch?v=vKNZqM0d-xo"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Eleven Four",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "u2w2Ipl2jk4",
+        "url": "https://www.youtube.com/watch?v=u2w2Ipl2jk4"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Far More Blue",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "2aVjAZBTaA4",
+        "url": "https://www.youtube.com/watch?v=2aVjAZBTaA4"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Take Five",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tT9Eh8wNMkw",
+        "url": "https://www.youtube.com/watch?v=tT9Eh8wNMkw"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Unsquare Dance",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "_yExwkQYcp0",
+        "url": "https://www.youtube.com/watch?v=_yExwkQYcp0"
+      }
+    ]
+  },
+  {
     "artist": "Debussy",
     "title": "Clair de Lune",
     "meters": {
@@ -175,10 +907,237 @@
     },
     "sources": [
       {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Clair_de_lune_(Claude_Debussy)_Suite_bergamasque.ogg",
+        "license": "CC-BY-3.0"
+      },
+      {
         "type": "youtube",
         "priority": 100,
         "video_id": "WNcsUNKlAKw",
         "url": "https://www.youtube.com/watch?v=WNcsUNKlAKw"
+      }
+    ]
+  },
+  {
+    "artist": "Debussy",
+    "title": "La Plus que Lente",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Debussy_La_Plus_que_Lente.ogg",
+        "license": "CC-BY-SA-2.0"
+      }
+    ]
+  },
+  {
+    "artist": "Debussy",
+    "title": "Mazurka",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Debussy_-_Mazurka.ogg",
+        "license": "CC-BY-SA-3.0"
+      }
+    ]
+  },
+  {
+    "artist": "Deep Purple",
+    "title": "Smoke on the Water",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Q2FzZSBD5LE",
+        "url": "https://www.youtube.com/watch?v=Q2FzZSBD5LE"
+      }
+    ]
+  },
+  {
+    "artist": "Depeche Mode",
+    "title": "Personal Jesus",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "u1xrNaTO1bI",
+        "url": "https://www.youtube.com/watch?v=u1xrNaTO1bI"
+      }
+    ]
+  },
+  {
+    "artist": "Devo",
+    "title": "Blockhead",
+    "meters": {
+      "4": 0.6,
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "B1Zavh9ASsk"
+      }
+    ]
+  },
+  {
+    "artist": "Dionysis Savvopoulos",
+    "title": "Zeibekiko tis Kyriakis",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "g1dWpuOYTo4",
+        "url": "https://www.youtube.com/watch?v=g1dWpuOYTo4"
+      }
+    ]
+  },
+  {
+    "artist": "Dolly Parton",
+    "title": "Jolene",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Ixrje2rXLMA",
+        "url": "https://www.youtube.com/watch?v=Ixrje2rXLMA"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "5/4 Getaway",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "U9r852cyJiM",
+        "url": "https://www.youtube.com/watch?v=U9r852cyJiM"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "Blues in Elf",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "s5tILEadt0w",
+        "url": "https://www.youtube.com/watch?v=s5tILEadt0w"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "How's This for Openers",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "nIB1deC-3hQ",
+        "url": "https://www.youtube.com/watch?v=nIB1deC-3hQ"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "Indian Lady",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "l8Qy7YhFeeQ",
+        "url": "https://www.youtube.com/watch?v=l8Qy7YhFeeQ"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "Pussy Wiggle Stomp",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "BWAGjFJFMBA",
+        "url": "https://www.youtube.com/watch?v=BWAGjFJFMBA"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "Turkish Bath",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "HvmA_TskDTU",
+        "url": "https://www.youtube.com/watch?v=HvmA_TskDTU"
+      }
+    ]
+  },
+  {
+    "artist": "Don Ellis",
+    "title": "Upstart",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "T6QfpZnrZKs",
+        "url": "https://www.youtube.com/watch?v=T6QfpZnrZKs"
+      }
+    ]
+  },
+  {
+    "artist": "Donna Summer",
+    "title": "I Feel Love",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "yEbaeLv-aOo",
+        "url": "https://www.youtube.com/watch?v=yEbaeLv-aOo"
       }
     ]
   },
@@ -290,6 +1249,222 @@
     ]
   },
   {
+    "artist": "Frank Zappa",
+    "title": "Outside Now",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "6Wgx4AoIw5M",
+        "url": "https://www.youtube.com/watch?v=6Wgx4AoIw5M"
+      }
+    ]
+  },
+  {
+    "artist": "Freddie Hubbard",
+    "title": "Prophet Jennings",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "JH1kTBn4Wrg",
+        "url": "https://www.youtube.com/watch?v=JH1kTBn4Wrg"
+      }
+    ]
+  },
+  {
+    "artist": "Genesis",
+    "title": "Apocalypse in 9/8",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "IlkiFtCPXts",
+        "url": "https://www.youtube.com/watch?v=IlkiFtCPXts"
+      }
+    ]
+  },
+  {
+    "artist": "Genesis",
+    "title": "Riding the Scree",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "k_luIcxug0U",
+        "url": "https://www.youtube.com/watch?v=k_luIcxug0U"
+      }
+    ]
+  },
+  {
+    "artist": "Gentle Giant",
+    "title": "Raconteur Troubadour",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "c8NqYibMeow",
+        "url": "https://www.youtube.com/watch?v=c8NqYibMeow"
+      }
+    ]
+  },
+  {
+    "artist": "Gorillaz",
+    "title": "5 4",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "z46bm9HR7L4",
+        "url": "https://www.youtube.com/watch?v=z46bm9HR7L4"
+      }
+    ]
+  },
+  {
+    "artist": "Grandmaster Flash",
+    "title": "The Message",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "gYMkEMCHtJ4",
+        "url": "https://www.youtube.com/watch?v=gYMkEMCHtJ4"
+      }
+    ]
+  },
+  {
+    "artist": "Grateful Dead",
+    "title": "Estimated Prophet",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Sp18EhK_lBE",
+        "url": "https://www.youtube.com/watch?v=Sp18EhK_lBE"
+      }
+    ]
+  },
+  {
+    "artist": "Grateful Dead",
+    "title": "The Eleven",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "c_WpX9s2_rQ",
+        "url": "https://www.youtube.com/watch?v=c_WpX9s2_rQ"
+      }
+    ]
+  },
+  {
+    "artist": "Grigoris Bithikotsis",
+    "title": "Roloi Komboloi",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Rz5F0beHK9E",
+        "url": "https://www.youtube.com/watch?v=Rz5F0beHK9E"
+      }
+    ]
+  },
+  {
+    "artist": "Guns N Roses",
+    "title": "Sweet Child O Mine",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "1w7OgIMMRc4",
+        "url": "https://www.youtube.com/watch?v=1w7OgIMMRc4"
+      }
+    ]
+  },
+  {
+    "artist": "Gustav Holst",
+    "title": "Mars The Bringer of War",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Holst_-_The_Planets_(Columbia_1922-23).flac",
+        "license": "public-domain",
+        "note": "Full Planets suite — Mars is first ~7 minutes"
+      },
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "jsJwC9Pnr2M",
+        "url": "https://www.youtube.com/watch?v=jsJwC9Pnr2M"
+      }
+    ]
+  },
+  {
+    "artist": "Gustav Holst",
+    "title": "Mars, the Bringer of War",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "cXOanvv4plU",
+        "url": "https://www.youtube.com/watch?v=cXOanvv4plU"
+      }
+    ]
+  },
+  {
+    "artist": "Gustav Holst",
+    "title": "Neptune, the Mystic",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pcyfAgnlO-8",
+        "url": "https://www.youtube.com/watch?v=pcyfAgnlO-8"
+      }
+    ]
+  },
+  {
     "artist": "Henry Mancini",
     "title": "Moon River",
     "meters": {
@@ -301,6 +1476,66 @@
         "priority": 100,
         "video_id": "lYhVvT7fLVY",
         "url": "https://www.youtube.com/watch?v=lYhVvT7fLVY"
+      }
+    ]
+  },
+  {
+    "artist": "Ibro Lolov",
+    "title": "Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "dQQg7VQPG4A",
+        "url": "https://www.youtube.com/watch?v=dQQg7VQPG4A"
+      }
+    ]
+  },
+  {
+    "artist": "Ivo Papazov",
+    "title": "Kopanitsa Wedding",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "5Q4dPBy_3p8",
+        "url": "https://www.youtube.com/watch?v=5Q4dPBy_3p8"
+      }
+    ]
+  },
+  {
+    "artist": "James Brown",
+    "title": "I Got You",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pTdihu-mp90",
+        "url": "https://www.youtube.com/watch?v=pTdihu-mp90"
+      }
+    ]
+  },
+  {
+    "artist": "Jean Cras",
+    "title": "Danse a onze temps",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "KdKOMxoBiJY",
+        "url": "https://www.youtube.com/watch?v=KdKOMxoBiJY"
       }
     ]
   },
@@ -335,6 +1570,51 @@
     ]
   },
   {
+    "artist": "Jethro Tull",
+    "title": "Living in the Past",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "m__wmsIn99E",
+        "url": "https://www.youtube.com/watch?v=m__wmsIn99E"
+      }
+    ]
+  },
+  {
+    "artist": "Joe Farrell",
+    "title": "Follow Your Heart",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "LzigeAj-2-k",
+        "url": "https://www.youtube.com/watch?v=LzigeAj-2-k"
+      }
+    ]
+  },
+  {
+    "artist": "John Carpenter",
+    "title": "Halloween Main Theme",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pT4FY3NrhGg",
+        "url": "https://www.youtube.com/watch?v=pT4FY3NrhGg"
+      }
+    ]
+  },
+  {
     "artist": "John Coltrane",
     "title": "Afro Blue",
     "meters": {
@@ -351,6 +1631,21 @@
     ]
   },
   {
+    "artist": "John McLaughlin",
+    "title": "Arjen's Bag",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "YUHhAkhXRSE",
+        "url": "https://www.youtube.com/watch?v=YUHhAkhXRSE"
+      }
+    ]
+  },
+  {
     "artist": "Journey",
     "title": "Open Arms",
     "meters": {
@@ -362,6 +1657,21 @@
         "priority": 100,
         "video_id": "i5pUOVC50Y8",
         "url": "https://www.youtube.com/watch?v=i5pUOVC50Y8"
+      }
+    ]
+  },
+  {
+    "artist": "Joy Division",
+    "title": "Love Will Tear Us Apart",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "zuuObGsB0No",
+        "url": "https://www.youtube.com/watch?v=zuuObGsB0No"
       }
     ]
   },
@@ -396,6 +1706,21 @@
     ]
   },
   {
+    "artist": "Kendrick Lamar",
+    "title": "HUMBLE.",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tvTRZJ-4EyI",
+        "url": "https://www.youtube.com/watch?v=tvTRZJ-4EyI"
+      }
+    ]
+  },
+  {
     "artist": "Khachaturian",
     "title": "Masquerade Waltz",
     "meters": {
@@ -411,6 +1736,121 @@
     ]
   },
   {
+    "artist": "King Crimson",
+    "title": "Frame by Frame",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "2HL-gGLu8Jo",
+        "url": "https://www.youtube.com/watch?v=2HL-gGLu8Jo"
+      }
+    ]
+  },
+  {
+    "artist": "King Gizzard and the Lizard Wizard",
+    "title": "Gamma Knife",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "nC7ii3Ir-no"
+      }
+    ]
+  },
+  {
+    "artist": "Kraftwerk",
+    "title": "Autobahn",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "x-G28iyPtz0",
+        "url": "https://www.youtube.com/watch?v=x-G28iyPtz0"
+      }
+    ]
+  },
+  {
+    "artist": "Kraftwerk",
+    "title": "The Model",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "GEnx9xS79Lc",
+        "url": "https://www.youtube.com/watch?v=GEnx9xS79Lc"
+      }
+    ]
+  },
+  {
+    "artist": "Lalo Schifrin",
+    "title": "Mission Impossible Theme",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pz7Y-0cY1zU",
+        "url": "https://www.youtube.com/watch?v=pz7Y-0cY1zU"
+      }
+    ]
+  },
+  {
+    "artist": "Led Zeppelin",
+    "title": "The Crunge",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "W711RXvFwmI"
+      }
+    ]
+  },
+  {
+    "artist": "Led Zeppelin",
+    "title": "The Ocean",
+    "meters": {
+      "4": 0.7,
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "oqAmnEKlIZw"
+      }
+    ]
+  },
+  {
+    "artist": "Led Zeppelin",
+    "title": "Whole Lotta Love",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "HQmmM_qwG4k",
+        "url": "https://www.youtube.com/watch?v=HQmmM_qwG4k"
+      }
+    ]
+  },
+  {
     "artist": "Leonard Cohen",
     "title": "Take This Waltz",
     "meters": {
@@ -422,6 +1862,21 @@
         "priority": 100,
         "video_id": "wfNOogGqSLA",
         "url": "https://www.youtube.com/watch?v=wfNOogGqSLA"
+      }
+    ]
+  },
+  {
+    "artist": "Leprous",
+    "title": "Foe",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "vhKViUXuF04",
+        "url": "https://www.youtube.com/watch?v=vhKViUXuF04"
       }
     ]
   },
@@ -457,1116 +1912,6 @@
     ]
   },
   {
-    "artist": "Maurice Jarre",
-    "title": "Somewhere My Love",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "WiWWa-T0EIY",
-        "url": "https://www.youtube.com/watch?v=WiWWa-T0EIY"
-      }
-    ]
-  },
-  {
-    "artist": "Mazzy Star",
-    "title": "Fade Into You",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "ImKY6TZEyrI",
-        "url": "https://www.youtube.com/watch?v=ImKY6TZEyrI"
-      }
-    ]
-  },
-  {
-    "artist": "Nino Rota",
-    "title": "The Godfather Waltz",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "LaI5jYU-sPw",
-        "url": "https://www.youtube.com/watch?v=LaI5jYU-sPw"
-      }
-    ]
-  },
-  {
-    "artist": "Norah Jones",
-    "title": "Come Away With Me",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "lbjZPFBD6JU",
-        "url": "https://www.youtube.com/watch?v=lbjZPFBD6JU"
-      }
-    ]
-  },
-  {
-    "artist": "Patti Page",
-    "title": "Tennessee Waltz",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "iVsJsooSN2Q",
-        "url": "https://www.youtube.com/watch?v=iVsJsooSN2Q"
-      }
-    ]
-  },
-  {
-    "artist": "R.E.M.",
-    "title": "Everybody Hurts",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "5rOiW_xY-kc",
-        "url": "https://www.youtube.com/watch?v=5rOiW_xY-kc"
-      }
-    ]
-  },
-  {
-    "artist": "Ravel",
-    "title": "La Valse",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "UlMJ6Ri-LMM",
-        "url": "https://www.youtube.com/watch?v=UlMJ6Ri-LMM"
-      }
-    ]
-  },
-  {
-    "artist": "Seal",
-    "title": "Kiss From a Rose",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "hDd2G_V1rzc",
-        "url": "https://www.youtube.com/watch?v=hDd2G_V1rzc"
-      }
-    ]
-  },
-  {
-    "artist": "Shostakovich",
-    "title": "Waltz No 2",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "mmCnQDUSO4I",
-        "url": "https://www.youtube.com/watch?v=mmCnQDUSO4I"
-      }
-    ]
-  },
-  {
-    "artist": "Steve Reich",
-    "title": "Clapping Music",
-    "meters": {
-      "3": 0.9,
-      "4": 0.6
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "lzkOFJMI5i8",
-        "url": "https://www.youtube.com/watch?v=lzkOFJMI5i8"
-      }
-    ]
-  },
-  {
-    "artist": "Strauss II",
-    "title": "Emperor Waltz",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "LAVvBF7m260",
-        "url": "https://www.youtube.com/watch?v=LAVvBF7m260"
-      }
-    ]
-  },
-  {
-    "artist": "Strauss II",
-    "title": "Tales from the Vienna Woods",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "VVjxfFft6AU",
-        "url": "https://www.youtube.com/watch?v=VVjxfFft6AU"
-      }
-    ]
-  },
-  {
-    "artist": "Strauss II",
-    "title": "The Blue Danube",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "_CTYymbbEL4",
-        "url": "https://www.youtube.com/watch?v=_CTYymbbEL4"
-      }
-    ]
-  },
-  {
-    "artist": "Talking Heads",
-    "title": "I Zimbra",
-    "meters": {
-      "3": 0.6,
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "qKFn66dzdz0",
-        "url": "https://www.youtube.com/watch?v=qKFn66dzdz0"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Sleeping Beauty Waltz",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "2Sb8WCPjPDs",
-        "url": "https://www.youtube.com/watch?v=2Sb8WCPjPDs"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Swan Lake Waltz",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "CShopT9QUzw",
-        "url": "https://www.youtube.com/watch?v=CShopT9QUzw"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Waltz of the Flowers",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "LKcZL8q1eBw",
-        "url": "https://www.youtube.com/watch?v=LKcZL8q1eBw"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Waltz of the Snowflakes",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "42asIhamWU4",
-        "url": "https://www.youtube.com/watch?v=42asIhamWU4"
-      }
-    ]
-  },
-  {
-    "artist": "The Beatles",
-    "title": "Norwegian Wood",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Y_V6y1ZCg_8",
-        "url": "https://www.youtube.com/watch?v=Y_V6y1ZCg_8"
-      }
-    ]
-  },
-  {
-    "artist": "The Dubliners",
-    "title": "The Wild Rover",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "9iRRvjjHDkw",
-        "url": "https://www.youtube.com/watch?v=9iRRvjjHDkw"
-      }
-    ]
-  },
-  {
-    "artist": "Tony Allen",
-    "title": "Asiko",
-    "meters": {
-      "3": 0.5,
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HCBaUt8Zk_g",
-        "url": "https://www.youtube.com/watch?v=HCBaUt8Zk_g"
-      }
-    ]
-  },
-  {
-    "artist": "Toots Thielemans",
-    "title": "Bluesette",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "yKnG_9q4crA",
-        "url": "https://www.youtube.com/watch?v=yKnG_9q4crA"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Afoxé",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "PKB0uhcTMw8",
-        "url": "https://www.youtube.com/watch?v=PKB0uhcTMw8"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Agbekor",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "cYKW-5De8nc",
-        "url": "https://www.youtube.com/watch?v=cYKW-5De8nc"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Amazing Grace",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "XjcfQZtgwAI",
-        "url": "https://www.youtube.com/watch?v=XjcfQZtgwAI"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Bembe",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "xBTm1UErSNA",
-        "url": "https://www.youtube.com/watch?v=xBTm1UErSNA"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Djembe Dununba",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "qLBGgJi59l8",
-        "url": "https://www.youtube.com/watch?v=qLBGgJi59l8"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Edelweiss",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "8bL2BCiFkTk",
-        "url": "https://www.youtube.com/watch?v=8bL2BCiFkTk"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Gahu",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "YXla5h48A80",
-        "url": "https://www.youtube.com/watch?v=YXla5h48A80"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Gamelan Gong Kebyar",
-    "meters": {
-      "3": 0.7,
-      "4": 0.7
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "UY8NEAupxjc",
-        "url": "https://www.youtube.com/watch?v=UY8NEAupxjc"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Gamelan Jegog",
-    "meters": {
-      "3": 0.7,
-      "4": 0.7
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "IW-QPw4-4cU",
-        "url": "https://www.youtube.com/watch?v=IW-QPw4-4cU"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Greensleeves",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "jS_nLcVG_tg",
-        "url": "https://www.youtube.com/watch?v=jS_nLcVG_tg"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Kpanlogo",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "jGBBSTOQRG8",
-        "url": "https://www.youtube.com/watch?v=jGBBSTOQRG8"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Kuku",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Qsq5PHoik-s",
-        "url": "https://www.youtube.com/watch?v=Qsq5PHoik-s"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Rumba Guaguancó",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "qtgyOFZeExE",
-        "url": "https://www.youtube.com/watch?v=qtgyOFZeExE"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Scarborough Fair",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "_gCGEblL3Mk",
-        "url": "https://www.youtube.com/watch?v=_gCGEblL3Mk"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Sinte",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "7RtHa4hQVfE",
-        "url": "https://www.youtube.com/watch?v=7RtHa4hQVfE"
-      }
-    ]
-  },
-  {
-    "artist": "Vampire Weekend",
-    "title": "Cape Cod Kwassa Kwassa",
-    "meters": {
-      "3": 0.6,
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "9wHl9qRsMzw",
-        "url": "https://www.youtube.com/watch?v=9wHl9qRsMzw"
-      }
-    ]
-  },
-  {
-    "artist": "Willie Nelson",
-    "title": "Waltz Across Texas",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "1Y7YuDRO5d0",
-        "url": "https://www.youtube.com/watch?v=1Y7YuDRO5d0"
-      }
-    ]
-  },
-  {
-    "artist": "Wings",
-    "title": "Mull of Kintyre",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Plhtk_XJqhM",
-        "url": "https://www.youtube.com/watch?v=Plhtk_XJqhM"
-      }
-    ]
-  },
-  {
-    "artist": "Yann Tiersen",
-    "title": "La Valse d'Amelie",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "uj9BihmugmI",
-        "url": "https://www.youtube.com/watch?v=uj9BihmugmI"
-      }
-    ]
-  },
-  {
-    "artist": "A Tribe Called Quest",
-    "title": "Can I Kick It",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "O3pyCGnZzYA",
-        "url": "https://www.youtube.com/watch?v=O3pyCGnZzYA"
-      }
-    ]
-  },
-  {
-    "artist": "ABBA",
-    "title": "Dancing Queen",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "xFrGuyw1V8s",
-        "url": "https://www.youtube.com/watch?v=xFrGuyw1V8s"
-      }
-    ]
-  },
-  {
-    "artist": "AC/DC",
-    "title": "Back in Black",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pAgnJDJN4VA",
-        "url": "https://www.youtube.com/watch?v=pAgnJDJN4VA"
-      }
-    ]
-  },
-  {
-    "artist": "Al Green",
-    "title": "Lets Stay Together",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "XXx6RDzR6eM",
-        "url": "https://www.youtube.com/watch?v=XXx6RDzR6eM"
-      }
-    ]
-  },
-  {
-    "artist": "Aphex Twin",
-    "title": "Windowlicker",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "FATTzbm78cc",
-        "url": "https://www.youtube.com/watch?v=FATTzbm78cc"
-      }
-    ]
-  },
-  {
-    "artist": "Arctic Monkeys",
-    "title": "Do I Wanna Know",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "bpOSxM0rNPM",
-        "url": "https://www.youtube.com/watch?v=bpOSxM0rNPM"
-      }
-    ]
-  },
-  {
-    "artist": "Aretha Franklin",
-    "title": "Respect",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "A134hShx_gw",
-        "url": "https://www.youtube.com/watch?v=A134hShx_gw"
-      }
-    ]
-  },
-  {
-    "artist": "B.B. King",
-    "title": "The Thrill Is Gone",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "oica5jG7FpU",
-        "url": "https://www.youtube.com/watch?v=oica5jG7FpU"
-      }
-    ]
-  },
-  {
-    "artist": "Bee Gees",
-    "title": "Stayin Alive",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "fNFzfwLM72c",
-        "url": "https://www.youtube.com/watch?v=fNFzfwLM72c"
-      }
-    ]
-  },
-  {
-    "artist": "Black Sabbath",
-    "title": "Iron Man",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "b3-QqGVt-tM",
-        "url": "https://www.youtube.com/watch?v=b3-QqGVt-tM"
-      }
-    ]
-  },
-  {
-    "artist": "Bob Marley",
-    "title": "No Woman No Cry",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "IT8XvzIfi4U",
-        "url": "https://www.youtube.com/watch?v=IT8XvzIfi4U"
-      }
-    ]
-  },
-  {
-    "artist": "Bob Marley",
-    "title": "Three Little Birds",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HNBCVM4KbUM",
-        "url": "https://www.youtube.com/watch?v=HNBCVM4KbUM"
-      }
-    ]
-  },
-  {
-    "artist": "Bruno Mars",
-    "title": "Uptown Funk",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "OPf0YbXqDm0",
-        "url": "https://www.youtube.com/watch?v=OPf0YbXqDm0"
-      }
-    ]
-  },
-  {
-    "artist": "BTS",
-    "title": "Dynamite",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "gdZLi9oWNZg",
-        "url": "https://www.youtube.com/watch?v=gdZLi9oWNZg"
-      }
-    ]
-  },
-  {
-    "artist": "Buena Vista Social Club",
-    "title": "Chan Chan",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tGbRZ73NvlY",
-        "url": "https://www.youtube.com/watch?v=tGbRZ73NvlY"
-      }
-    ]
-  },
-  {
-    "artist": "Celia Cruz",
-    "title": "La Vida Es Un Carnaval",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "0nBFWzpWXuM",
-        "url": "https://www.youtube.com/watch?v=0nBFWzpWXuM"
-      }
-    ]
-  },
-  {
-    "artist": "Chopin",
-    "title": "Fantaisie-Impromptu",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Gus4dnQuiGk",
-        "url": "https://www.youtube.com/watch?v=Gus4dnQuiGk"
-      }
-    ]
-  },
-  {
-    "artist": "Daft Punk",
-    "title": "Around the World",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "K0HSD_i2DvA",
-        "url": "https://www.youtube.com/watch?v=K0HSD_i2DvA"
-      }
-    ]
-  },
-  {
-    "artist": "Daft Punk",
-    "title": "Get Lucky",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "5NV6Rdv1a3I",
-        "url": "https://www.youtube.com/watch?v=5NV6Rdv1a3I"
-      }
-    ]
-  },
-  {
-    "artist": "Damien Rice",
-    "title": "The Blower's Daughter",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "5YXVMCHG-Nk",
-        "url": "https://www.youtube.com/watch?v=5YXVMCHG-Nk"
-      }
-    ]
-  },
-  {
-    "artist": "Deep Purple",
-    "title": "Smoke on the Water",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Q2FzZSBD5LE",
-        "url": "https://www.youtube.com/watch?v=Q2FzZSBD5LE"
-      }
-    ]
-  },
-  {
-    "artist": "Depeche Mode",
-    "title": "Personal Jesus",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "u1xrNaTO1bI",
-        "url": "https://www.youtube.com/watch?v=u1xrNaTO1bI"
-      }
-    ]
-  },
-  {
-    "artist": "Dolly Parton",
-    "title": "Jolene",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Ixrje2rXLMA",
-        "url": "https://www.youtube.com/watch?v=Ixrje2rXLMA"
-      }
-    ]
-  },
-  {
-    "artist": "Donna Summer",
-    "title": "I Feel Love",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "yEbaeLv-aOo",
-        "url": "https://www.youtube.com/watch?v=yEbaeLv-aOo"
-      }
-    ]
-  },
-  {
-    "artist": "Grandmaster Flash",
-    "title": "The Message",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "gYMkEMCHtJ4",
-        "url": "https://www.youtube.com/watch?v=gYMkEMCHtJ4"
-      }
-    ]
-  },
-  {
-    "artist": "Guns N Roses",
-    "title": "Sweet Child O Mine",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "1w7OgIMMRc4",
-        "url": "https://www.youtube.com/watch?v=1w7OgIMMRc4"
-      }
-    ]
-  },
-  {
-    "artist": "James Brown",
-    "title": "I Got You",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pTdihu-mp90",
-        "url": "https://www.youtube.com/watch?v=pTdihu-mp90"
-      }
-    ]
-  },
-  {
-    "artist": "Joy Division",
-    "title": "Love Will Tear Us Apart",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "zuuObGsB0No",
-        "url": "https://www.youtube.com/watch?v=zuuObGsB0No"
-      }
-    ]
-  },
-  {
-    "artist": "Kendrick Lamar",
-    "title": "HUMBLE.",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tvTRZJ-4EyI",
-        "url": "https://www.youtube.com/watch?v=tvTRZJ-4EyI"
-      }
-    ]
-  },
-  {
-    "artist": "Kraftwerk",
-    "title": "Autobahn",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "x-G28iyPtz0",
-        "url": "https://www.youtube.com/watch?v=x-G28iyPtz0"
-      }
-    ]
-  },
-  {
-    "artist": "Kraftwerk",
-    "title": "The Model",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "GEnx9xS79Lc",
-        "url": "https://www.youtube.com/watch?v=GEnx9xS79Lc"
-      }
-    ]
-  },
-  {
-    "artist": "Led Zeppelin",
-    "title": "Whole Lotta Love",
-    "meters": {
-      "4": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HQmmM_qwG4k",
-        "url": "https://www.youtube.com/watch?v=HQmmM_qwG4k"
-      }
-    ]
-  },
-  {
     "artist": "Luis Fonsi",
     "title": "Despacito",
     "meters": {
@@ -1578,6 +1923,51 @@
         "priority": 100,
         "video_id": "kJQP7kiw5Fk",
         "url": "https://www.youtube.com/watch?v=kJQP7kiw5Fk"
+      }
+    ]
+  },
+  {
+    "artist": "Mahavishnu Orchestra",
+    "title": "Vital Transformation",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "u3ADv-gGqYs",
+        "url": "https://www.youtube.com/watch?v=u3ADv-gGqYs"
+      }
+    ]
+  },
+  {
+    "artist": "Manos Loizos",
+    "title": "To Zeibekiko tis Evdokias",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ZHcFf--WrCM",
+        "url": "https://www.youtube.com/watch?v=ZHcFf--WrCM"
+      }
+    ]
+  },
+  {
+    "artist": "Marinella",
+    "title": "Anoixe Petra",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "a1IdFPnpB1k",
+        "url": "https://www.youtube.com/watch?v=a1IdFPnpB1k"
       }
     ]
   },
@@ -1608,6 +1998,36 @@
         "priority": 100,
         "video_id": "u7K72X4eo_s",
         "url": "https://www.youtube.com/watch?v=u7K72X4eo_s"
+      }
+    ]
+  },
+  {
+    "artist": "Maurice Jarre",
+    "title": "Somewhere My Love",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "WiWWa-T0EIY",
+        "url": "https://www.youtube.com/watch?v=WiWWa-T0EIY"
+      }
+    ]
+  },
+  {
+    "artist": "Mazzy Star",
+    "title": "Fade Into You",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ImKY6TZEyrI",
+        "url": "https://www.youtube.com/watch?v=ImKY6TZEyrI"
       }
     ]
   },
@@ -1735,6 +2155,36 @@
     ]
   },
   {
+    "artist": "Mozaik",
+    "title": "Suleman's Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "bAPepcWn5gg",
+        "url": "https://www.youtube.com/watch?v=bAPepcWn5gg"
+      }
+    ]
+  },
+  {
+    "artist": "Muse",
+    "title": "Animals",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "DB8myENAl98",
+        "url": "https://www.youtube.com/watch?v=DB8myENAl98"
+      }
+    ]
+  },
+  {
     "artist": "Nas",
     "title": "N.Y. State of Mind",
     "meters": {
@@ -1746,6 +2196,21 @@
         "priority": 100,
         "video_id": "hI8A14Qcv68",
         "url": "https://www.youtube.com/watch?v=hI8A14Qcv68"
+      }
+    ]
+  },
+  {
+    "artist": "Neshko Neshev",
+    "title": "Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "b8h5LB-0EYs",
+        "url": "https://www.youtube.com/watch?v=b8h5LB-0EYs"
       }
     ]
   },
@@ -1765,6 +2230,36 @@
     ]
   },
   {
+    "artist": "Nick Drake",
+    "title": "River Man",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "idcaRTg4-fM",
+        "url": "https://www.youtube.com/watch?v=idcaRTg4-fM"
+      }
+    ]
+  },
+  {
+    "artist": "Nino Rota",
+    "title": "The Godfather Waltz",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "LaI5jYU-sPw",
+        "url": "https://www.youtube.com/watch?v=LaI5jYU-sPw"
+      }
+    ]
+  },
+  {
     "artist": "Nirvana",
     "title": "Smells Like Teen Spirit",
     "meters": {
@@ -1776,6 +2271,21 @@
         "priority": 100,
         "video_id": "hTWKbfoikeg",
         "url": "https://www.youtube.com/watch?v=hTWKbfoikeg"
+      }
+    ]
+  },
+  {
+    "artist": "Norah Jones",
+    "title": "Come Away With Me",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "lbjZPFBD6JU",
+        "url": "https://www.youtube.com/watch?v=lbjZPFBD6JU"
       }
     ]
   },
@@ -1810,6 +2320,36 @@
     ]
   },
   {
+    "artist": "Patti Page",
+    "title": "Tennessee Waltz",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "iVsJsooSN2Q",
+        "url": "https://www.youtube.com/watch?v=iVsJsooSN2Q"
+      }
+    ]
+  },
+  {
+    "artist": "Paul Desmond",
+    "title": "Take Ten",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "rI7hArFCiR8",
+        "url": "https://www.youtube.com/watch?v=rI7hArFCiR8"
+      }
+    ]
+  },
+  {
     "artist": "Pearl Jam",
     "title": "Alive",
     "meters": {
@@ -1821,6 +2361,21 @@
         "priority": 100,
         "video_id": "qM0zINtulhM",
         "url": "https://www.youtube.com/watch?v=qM0zINtulhM"
+      }
+    ]
+  },
+  {
+    "artist": "Peter Gabriel",
+    "title": "Solsbury Hill",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "_OO2PuGz-H8",
+        "url": "https://www.youtube.com/watch?v=_OO2PuGz-H8"
       }
     ]
   },
@@ -1840,6 +2395,21 @@
     ]
   },
   {
+    "artist": "Pink Floyd",
+    "title": "Money",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "2aW7HweAf3o",
+        "url": "https://www.youtube.com/watch?v=2aW7HweAf3o"
+      }
+    ]
+  },
+  {
     "artist": "Pixies",
     "title": "Where Is My Mind",
     "meters": {
@@ -1851,6 +2421,36 @@
         "priority": 100,
         "video_id": "OJ62RzJkYUo",
         "url": "https://www.youtube.com/watch?v=OJ62RzJkYUo"
+      }
+    ]
+  },
+  {
+    "artist": "Plini",
+    "title": "11 Nights",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tKMZsXY75d4",
+        "url": "https://www.youtube.com/watch?v=tKMZsXY75d4"
+      }
+    ]
+  },
+  {
+    "artist": "Primus",
+    "title": "Eleven",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "7tIeS_v0hos",
+        "url": "https://www.youtube.com/watch?v=7tIeS_v0hos"
       }
     ]
   },
@@ -1885,6 +2485,81 @@
     ]
   },
   {
+    "artist": "Queens of the Stone Age",
+    "title": "Hangin' Tree",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "473wEdL_GzU",
+        "url": "https://www.youtube.com/watch?v=473wEdL_GzU"
+      }
+    ]
+  },
+  {
+    "artist": "R.E.M.",
+    "title": "Everybody Hurts",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "5rOiW_xY-kc",
+        "url": "https://www.youtube.com/watch?v=5rOiW_xY-kc"
+      }
+    ]
+  },
+  {
+    "artist": "Rachmaninoff",
+    "title": "Isle of the Dead",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "KlrfMmBl5PI",
+        "url": "https://www.youtube.com/watch?v=KlrfMmBl5PI"
+      }
+    ]
+  },
+  {
+    "artist": "Radiohead",
+    "title": "15 Step",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "9bahTUVLXZw",
+        "url": "https://www.youtube.com/watch?v=9bahTUVLXZw"
+      }
+    ]
+  },
+  {
+    "artist": "Radiohead",
+    "title": "2 plus 2 equals 5",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "iP38uoDsrFM",
+        "url": "https://www.youtube.com/watch?v=iP38uoDsrFM"
+      }
+    ]
+  },
+  {
     "artist": "Radiohead",
     "title": "Creep",
     "meters": {
@@ -1896,6 +2571,49 @@
         "priority": 100,
         "video_id": "XFkzRNyygfk",
         "url": "https://www.youtube.com/watch?v=XFkzRNyygfk"
+      }
+    ]
+  },
+  {
+    "artist": "Radiohead",
+    "title": "Everything In Its Right Place",
+    "meters": {
+      "5": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "NUnXxh5U25Y"
+      }
+    ]
+  },
+  {
+    "artist": "Radiohead",
+    "title": "Morning Bell",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "XTT6k3Q4JnQ",
+        "url": "https://www.youtube.com/watch?v=XTT6k3Q4JnQ"
+      }
+    ]
+  },
+  {
+    "artist": "Rammstein",
+    "title": "5/4",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "A1l7UhTwbrs",
+        "url": "https://www.youtube.com/watch?v=A1l7UhTwbrs"
       }
     ]
   },
@@ -1915,6 +2633,35 @@
     ]
   },
   {
+    "artist": "Ravel",
+    "title": "La Valse",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "UlMJ6Ri-LMM",
+        "url": "https://www.youtube.com/watch?v=UlMJ6Ri-LMM"
+      }
+    ]
+  },
+  {
+    "artist": "Rush",
+    "title": "YYZ",
+    "meters": {
+      "4": 0.7,
+      "5": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "ftVTWDrtrlc"
+      }
+    ]
+  },
+  {
     "artist": "Santana",
     "title": "Oye Como Va",
     "meters": {
@@ -1926,6 +2673,80 @@
         "priority": 100,
         "video_id": "J7ATTjg7tpE",
         "url": "https://www.youtube.com/watch?v=J7ATTjg7tpE"
+      }
+    ]
+  },
+  {
+    "artist": "Scott Joplin",
+    "title": "Bethena",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Bethena_(1905),_by_Scott_Joplin.opus",
+        "license": "public-domain"
+      }
+    ]
+  },
+  {
+    "artist": "Seal",
+    "title": "Kiss From a Rose",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "hDd2G_V1rzc",
+        "url": "https://www.youtube.com/watch?v=hDd2G_V1rzc"
+      }
+    ]
+  },
+  {
+    "artist": "Shostakovich",
+    "title": "Fugue No 12 in G-sharp minor",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "vap2SuWWt9c",
+        "url": "https://www.youtube.com/watch?v=vap2SuWWt9c"
+      }
+    ]
+  },
+  {
+    "artist": "Shostakovich",
+    "title": "Waltz No 2",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "mmCnQDUSO4I",
+        "url": "https://www.youtube.com/watch?v=mmCnQDUSO4I"
+      }
+    ]
+  },
+  {
+    "artist": "Slavster",
+    "title": "Sulejmanovo Oro",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "R2PjPyEptdE",
+        "url": "https://www.youtube.com/watch?v=R2PjPyEptdE"
       }
     ]
   },
@@ -1945,6 +2766,82 @@
     ]
   },
   {
+    "artist": "Soundgarden",
+    "title": "My Wave",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "HEbYxEXM2cE",
+        "url": "https://www.youtube.com/watch?v=HEbYxEXM2cE"
+      }
+    ]
+  },
+  {
+    "artist": "Stelios Kazantzidis",
+    "title": "Cadirimin Ustune",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "phXC-PIets8",
+        "url": "https://www.youtube.com/watch?v=phXC-PIets8"
+      }
+    ]
+  },
+  {
+    "artist": "Stelios Kazantzidis",
+    "title": "Dio Portes Echi I Zoi",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "9_EsauMIKhU",
+        "url": "https://www.youtube.com/watch?v=9_EsauMIKhU"
+      }
+    ]
+  },
+  {
+    "artist": "Stereolab",
+    "title": "Diagonals",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Hw_6_P1OiB8",
+        "url": "https://www.youtube.com/watch?v=Hw_6_P1OiB8"
+      }
+    ]
+  },
+  {
+    "artist": "Steve Reich",
+    "title": "Clapping Music",
+    "meters": {
+      "3": 0.9,
+      "4": 0.6
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "lzkOFJMI5i8",
+        "url": "https://www.youtube.com/watch?v=lzkOFJMI5i8"
+      }
+    ]
+  },
+  {
     "artist": "Stevie Wonder",
     "title": "Superstition",
     "meters": {
@@ -1956,6 +2853,334 @@
         "priority": 100,
         "video_id": "0CFuCYNx-1g",
         "url": "https://www.youtube.com/watch?v=0CFuCYNx-1g"
+      }
+    ]
+  },
+  {
+    "artist": "Sting",
+    "title": "I Hung My Head",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tXUrQk3AYpI",
+        "url": "https://www.youtube.com/watch?v=tXUrQk3AYpI"
+      }
+    ]
+  },
+  {
+    "artist": "Sting",
+    "title": "Love Is Stronger Than Justice",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "VhBq-ckOvNw",
+        "url": "https://www.youtube.com/watch?v=VhBq-ckOvNw"
+      }
+    ]
+  },
+  {
+    "artist": "Sting",
+    "title": "Saint Augustine in Hell",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "xgFL1sSIsSU",
+        "url": "https://www.youtube.com/watch?v=xgFL1sSIsSU"
+      }
+    ]
+  },
+  {
+    "artist": "Sting",
+    "title": "Seven Days",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "pG7_gceIFL4",
+        "url": "https://www.youtube.com/watch?v=pG7_gceIFL4"
+      }
+    ]
+  },
+  {
+    "artist": "Strauss II",
+    "title": "Emperor Waltz",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "LAVvBF7m260",
+        "url": "https://www.youtube.com/watch?v=LAVvBF7m260"
+      }
+    ]
+  },
+  {
+    "artist": "Strauss II",
+    "title": "Kunstlerleben",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Strauss,_K%C3%BCnstlerleben.ogg",
+        "license": "CC0"
+      }
+    ]
+  },
+  {
+    "artist": "Strauss II",
+    "title": "Rosen aus dem Suden",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "wikimedia",
+        "url": "https://commons.wikimedia.org/wiki/File:Strauss,_Rosen_aus_dem_S%C3%BCden.ogg",
+        "license": "CC0"
+      }
+    ]
+  },
+  {
+    "artist": "Strauss II",
+    "title": "Tales from the Vienna Woods",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "VVjxfFft6AU",
+        "url": "https://www.youtube.com/watch?v=VVjxfFft6AU"
+      }
+    ]
+  },
+  {
+    "artist": "Strauss II",
+    "title": "The Blue Danube",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "_CTYymbbEL4",
+        "url": "https://www.youtube.com/watch?v=_CTYymbbEL4"
+      }
+    ]
+  },
+  {
+    "artist": "Sufjan Stevens",
+    "title": "A Good Man Is Hard to Find",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "zvgUWbpW0Tc",
+        "url": "https://www.youtube.com/watch?v=zvgUWbpW0Tc"
+      }
+    ]
+  },
+  {
+    "artist": "Sufjan Stevens",
+    "title": "The Tallest Man, The Broadest Shoulders",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "PLEXd_P6A0s",
+        "url": "https://www.youtube.com/watch?v=PLEXd_P6A0s"
+      }
+    ]
+  },
+  {
+    "artist": "Talking Heads",
+    "title": "I Zimbra",
+    "meters": {
+      "3": 0.6,
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "qKFn66dzdz0",
+        "url": "https://www.youtube.com/watch?v=qKFn66dzdz0"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Sleeping Beauty Waltz",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "2Sb8WCPjPDs",
+        "url": "https://www.youtube.com/watch?v=2Sb8WCPjPDs"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Swan Lake Waltz",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "CShopT9QUzw",
+        "url": "https://www.youtube.com/watch?v=CShopT9QUzw"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Symphony No 6 Movement 2",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "HDPraQyNqho",
+        "url": "https://www.youtube.com/watch?v=HDPraQyNqho"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Waltz in 5/8 Op 72 No 16",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tt7RQejsG98",
+        "url": "https://www.youtube.com/watch?v=tt7RQejsG98"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Waltz of the Flowers",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "LKcZL8q1eBw",
+        "url": "https://www.youtube.com/watch?v=LKcZL8q1eBw"
+      }
+    ]
+  },
+  {
+    "artist": "Tchaikovsky",
+    "title": "Waltz of the Snowflakes",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "42asIhamWU4",
+        "url": "https://www.youtube.com/watch?v=42asIhamWU4"
+      }
+    ]
+  },
+  {
+    "artist": "The Allman Brothers Band",
+    "title": "Whipping Post",
+    "meters": {
+      "11": 0.8,
+      "3": 0.7
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "nfrSIUE3iAE"
+      }
+    ]
+  },
+  {
+    "artist": "The Beatles",
+    "title": "Norwegian Wood",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Y_V6y1ZCg_8",
+        "url": "https://www.youtube.com/watch?v=Y_V6y1ZCg_8"
+      }
+    ]
+  },
+  {
+    "artist": "The Chieftains",
+    "title": "The Foxhunt",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "jumdtvwU0VM",
+        "url": "https://www.youtube.com/watch?v=jumdtvwU0VM"
+      }
+    ]
+  },
+  {
+    "artist": "The Dubliners",
+    "title": "The Wild Rover",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "9iRRvjjHDkw",
+        "url": "https://www.youtube.com/watch?v=9iRRvjjHDkw"
       }
     ]
   },
@@ -2005,557 +3230,76 @@
     ]
   },
   {
-    "artist": "Toto",
-    "title": "Africa",
+    "artist": "Tony Allen",
+    "title": "Asiko",
     "meters": {
+      "3": 0.5,
       "4": 1.0
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "FTQbiNvZqaY",
-        "url": "https://www.youtube.com/watch?v=FTQbiNvZqaY"
+        "video_id": "HCBaUt8Zk_g",
+        "url": "https://www.youtube.com/watch?v=HCBaUt8Zk_g"
       }
     ]
   },
   {
-    "artist": "Traditional",
-    "title": "Danny Boy",
+    "artist": "Tool",
+    "title": "Jambi",
     "meters": {
-      "4": 1.0
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "ed_UWFr13pU"
+      }
+    ]
+  },
+  {
+    "artist": "Tool",
+    "title": "Lateralus",
+    "meters": {
+      "7": 0.8,
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "Y7JG63IuaWs"
+      }
+    ]
+  },
+  {
+    "artist": "Tool",
+    "title": "Right in Two",
+    "meters": {
+      "11": 1.0
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "6ppdB6JX99Q",
-        "url": "https://www.youtube.com/watch?v=6ppdB6JX99Q"
+        "video_id": "bndL7wwAj0U",
+        "url": "https://www.youtube.com/watch?v=bndL7wwAj0U"
       }
     ]
   },
   {
-    "artist": "Youssou N'Dour",
-    "title": "7 Seconds",
+    "artist": "Tool",
+    "title": "Rosetta Stoned",
     "meters": {
-      "4": 1.0
+      "11": 0.8,
+      "9": 0.6,
+      "5": 0.5,
+      "4": 0.5
     },
     "sources": [
       {
         "type": "youtube",
-        "priority": 100,
-        "video_id": "wqCpjFMvz-k",
-        "url": "https://www.youtube.com/watch?v=wqCpjFMvz-k"
-      }
-    ]
-  },
-  {
-    "artist": "Andrew Lloyd Webber",
-    "title": "Everything's Alright",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pX-JSZvXJ88",
-        "url": "https://www.youtube.com/watch?v=pX-JSZvXJ88"
-      }
-    ]
-  },
-  {
-    "artist": "Andrew Lloyd Webber",
-    "title": "Everythings Alright",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "qV9C6Am8xzk",
-        "url": "https://www.youtube.com/watch?v=qV9C6Am8xzk"
-      }
-    ]
-  },
-  {
-    "artist": "Bartók",
-    "title": "Mikrokosmos 150",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "G32MdnXhiN8",
-        "url": "https://www.youtube.com/watch?v=G32MdnXhiN8"
-      }
-    ]
-  },
-  {
-    "artist": "Björk",
-    "title": "Atom Dance",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "LKmNICDVJvg",
-        "url": "https://www.youtube.com/watch?v=LKmNICDVJvg"
-      }
-    ]
-  },
-  {
-    "artist": "Blind Faith",
-    "title": "Do What You Like",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "y90tUiNCwk4",
-        "url": "https://www.youtube.com/watch?v=y90tUiNCwk4"
-      }
-    ]
-  },
-  {
-    "artist": "Brahms",
-    "title": "Nachtens Op 112 Nr 2",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "XmSpOOtFYJw",
-        "url": "https://www.youtube.com/watch?v=XmSpOOtFYJw"
-      }
-    ]
-  },
-  {
-    "artist": "Béla Fleck",
-    "title": "Sinister Minister",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "w9XDUBDMNuk",
-        "url": "https://www.youtube.com/watch?v=w9XDUBDMNuk"
-      }
-    ]
-  },
-  {
-    "artist": "Chopin",
-    "title": "Piano Sonata No 1 Larghetto",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "_Lz34k0Hi08",
-        "url": "https://www.youtube.com/watch?v=_Lz34k0Hi08"
-      }
-    ]
-  },
-  {
-    "artist": "Dave Brubeck",
-    "title": "Far More Blue",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "2aVjAZBTaA4",
-        "url": "https://www.youtube.com/watch?v=2aVjAZBTaA4"
-      }
-    ]
-  },
-  {
-    "artist": "Dave Brubeck",
-    "title": "Take Five",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tT9Eh8wNMkw",
-        "url": "https://www.youtube.com/watch?v=tT9Eh8wNMkw"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "5/4 Getaway",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "U9r852cyJiM",
-        "url": "https://www.youtube.com/watch?v=U9r852cyJiM"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "Indian Lady",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "l8Qy7YhFeeQ",
-        "url": "https://www.youtube.com/watch?v=l8Qy7YhFeeQ"
-      }
-    ]
-  },
-  {
-    "artist": "Gorillaz",
-    "title": "5 4",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "z46bm9HR7L4",
-        "url": "https://www.youtube.com/watch?v=z46bm9HR7L4"
-      }
-    ]
-  },
-  {
-    "artist": "Gustav Holst",
-    "title": "Mars The Bringer of War",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "jsJwC9Pnr2M",
-        "url": "https://www.youtube.com/watch?v=jsJwC9Pnr2M"
-      }
-    ]
-  },
-  {
-    "artist": "Gustav Holst",
-    "title": "Mars, the Bringer of War",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "cXOanvv4plU",
-        "url": "https://www.youtube.com/watch?v=cXOanvv4plU"
-      }
-    ]
-  },
-  {
-    "artist": "Gustav Holst",
-    "title": "Neptune, the Mystic",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pcyfAgnlO-8",
-        "url": "https://www.youtube.com/watch?v=pcyfAgnlO-8"
-      }
-    ]
-  },
-  {
-    "artist": "Jethro Tull",
-    "title": "Living in the Past",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "m__wmsIn99E",
-        "url": "https://www.youtube.com/watch?v=m__wmsIn99E"
-      }
-    ]
-  },
-  {
-    "artist": "John Carpenter",
-    "title": "Halloween Main Theme",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pT4FY3NrhGg",
-        "url": "https://www.youtube.com/watch?v=pT4FY3NrhGg"
-      }
-    ]
-  },
-  {
-    "artist": "Lalo Schifrin",
-    "title": "Mission Impossible Theme",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pz7Y-0cY1zU",
-        "url": "https://www.youtube.com/watch?v=pz7Y-0cY1zU"
-      }
-    ]
-  },
-  {
-    "artist": "Muse",
-    "title": "Animals",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "DB8myENAl98",
-        "url": "https://www.youtube.com/watch?v=DB8myENAl98"
-      }
-    ]
-  },
-  {
-    "artist": "Nick Drake",
-    "title": "River Man",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "idcaRTg4-fM",
-        "url": "https://www.youtube.com/watch?v=idcaRTg4-fM"
-      }
-    ]
-  },
-  {
-    "artist": "Paul Desmond",
-    "title": "Take Ten",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "rI7hArFCiR8",
-        "url": "https://www.youtube.com/watch?v=rI7hArFCiR8"
-      }
-    ]
-  },
-  {
-    "artist": "Queens of the Stone Age",
-    "title": "Hangin' Tree",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "473wEdL_GzU",
-        "url": "https://www.youtube.com/watch?v=473wEdL_GzU"
-      }
-    ]
-  },
-  {
-    "artist": "Rachmaninoff",
-    "title": "Isle of the Dead",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "KlrfMmBl5PI",
-        "url": "https://www.youtube.com/watch?v=KlrfMmBl5PI"
-      }
-    ]
-  },
-  {
-    "artist": "Radiohead",
-    "title": "15 Step",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "9bahTUVLXZw",
-        "url": "https://www.youtube.com/watch?v=9bahTUVLXZw"
-      }
-    ]
-  },
-  {
-    "artist": "Radiohead",
-    "title": "Morning Bell",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "XTT6k3Q4JnQ",
-        "url": "https://www.youtube.com/watch?v=XTT6k3Q4JnQ"
-      }
-    ]
-  },
-  {
-    "artist": "Rammstein",
-    "title": "5/4",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "A1l7UhTwbrs",
-        "url": "https://www.youtube.com/watch?v=A1l7UhTwbrs"
-      }
-    ]
-  },
-  {
-    "artist": "Shostakovich",
-    "title": "Fugue No 12 in G-sharp minor",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "vap2SuWWt9c",
-        "url": "https://www.youtube.com/watch?v=vap2SuWWt9c"
-      }
-    ]
-  },
-  {
-    "artist": "Soundgarden",
-    "title": "My Wave",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HEbYxEXM2cE",
-        "url": "https://www.youtube.com/watch?v=HEbYxEXM2cE"
-      }
-    ]
-  },
-  {
-    "artist": "Stereolab",
-    "title": "Diagonals",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Hw_6_P1OiB8",
-        "url": "https://www.youtube.com/watch?v=Hw_6_P1OiB8"
-      }
-    ]
-  },
-  {
-    "artist": "Sting",
-    "title": "Seven Days",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "pG7_gceIFL4",
-        "url": "https://www.youtube.com/watch?v=pG7_gceIFL4"
-      }
-    ]
-  },
-  {
-    "artist": "Sufjan Stevens",
-    "title": "A Good Man Is Hard to Find",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "zvgUWbpW0Tc",
-        "url": "https://www.youtube.com/watch?v=zvgUWbpW0Tc"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Symphony No 6 Movement 2",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HDPraQyNqho",
-        "url": "https://www.youtube.com/watch?v=HDPraQyNqho"
-      }
-    ]
-  },
-  {
-    "artist": "Tchaikovsky",
-    "title": "Waltz in 5/8 Op 72 No 16",
-    "meters": {
-      "5": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tt7RQejsG98",
-        "url": "https://www.youtube.com/watch?v=tt7RQejsG98"
+        "video_id": "qnlhVVwBfew"
       }
     ]
   },
@@ -2575,287 +3319,94 @@
     ]
   },
   {
+    "artist": "Toots Thielemans",
+    "title": "Bluesette",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "yKnG_9q4crA",
+        "url": "https://www.youtube.com/watch?v=yKnG_9q4crA"
+      }
+    ]
+  },
+  {
+    "artist": "Toto",
+    "title": "Africa",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "FTQbiNvZqaY",
+        "url": "https://www.youtube.com/watch?v=FTQbiNvZqaY"
+      }
+    ]
+  },
+  {
     "artist": "Traditional",
-    "title": "Paidushko Horo",
+    "title": "A Fig for a Kiss",
     "meters": {
-      "5": 1.0
+      "9": 1.0
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "ktHXR6eG3k8",
-        "url": "https://www.youtube.com/watch?v=ktHXR6eG3k8"
+        "video_id": "7W9R-c1UeU0",
+        "url": "https://www.youtube.com/watch?v=7W9R-c1UeU0"
       }
     ]
   },
   {
-    "artist": "Wayne Shorter",
-    "title": "Indian Song",
+    "artist": "Traditional",
+    "title": "Abdala",
     "meters": {
-      "5": 1.0
+      "9": 1.0
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "RpIKiDz3rI4",
-        "url": "https://www.youtube.com/watch?v=RpIKiDz3rI4"
+        "video_id": "YMf8yXaQDiQ",
+        "url": "https://www.youtube.com/watch?v=YMf8yXaQDiQ"
       }
     ]
   },
   {
-    "artist": "XTC",
-    "title": "English Roundabout",
+    "artist": "Traditional",
+    "title": "Afoxé",
     "meters": {
-      "5": 1.0
+      "3": 0.7,
+      "4": 0.8
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "aSIyaZoG0sU",
-        "url": "https://www.youtube.com/watch?v=aSIyaZoG0sU"
+        "video_id": "PKB0uhcTMw8",
+        "url": "https://www.youtube.com/watch?v=PKB0uhcTMw8"
       }
     ]
   },
   {
-    "artist": "Alice in Chains",
-    "title": "Them Bones",
+    "artist": "Traditional",
+    "title": "Agbekor",
     "meters": {
-      "7": 1.0
+      "3": 0.7,
+      "4": 0.8
     },
     "sources": [
       {
         "type": "youtube",
         "priority": 100,
-        "video_id": "zTuD8k3JvxQ",
-        "url": "https://www.youtube.com/watch?v=zTuD8k3JvxQ"
-      }
-    ]
-  },
-  {
-    "artist": "Alkan",
-    "title": "Air a 7 temps Op 32 No 8",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "lq7oXJXXF8w",
-        "url": "https://www.youtube.com/watch?v=lq7oXJXXF8w"
-      }
-    ]
-  },
-  {
-    "artist": "American Football",
-    "title": "Stay Home",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "TTxw7xez_oM",
-        "url": "https://www.youtube.com/watch?v=TTxw7xez_oM"
-      }
-    ]
-  },
-  {
-    "artist": "Bartók",
-    "title": "Mikrokosmos 149",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "ay9FSnVtruo",
-        "url": "https://www.youtube.com/watch?v=ay9FSnVtruo"
-      }
-    ]
-  },
-  {
-    "artist": "Broken Social Scene",
-    "title": "7/4 Shoreline",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Uev2J_cBHjQ",
-        "url": "https://www.youtube.com/watch?v=Uev2J_cBHjQ"
-      }
-    ]
-  },
-  {
-    "artist": "C418",
-    "title": "Haggstrom",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "laZusNy8QiY",
-        "url": "https://www.youtube.com/watch?v=laZusNy8QiY"
-      }
-    ]
-  },
-  {
-    "artist": "Dave Brubeck",
-    "title": "Unsquare Dance",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "_yExwkQYcp0",
-        "url": "https://www.youtube.com/watch?v=_yExwkQYcp0"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "Pussy Wiggle Stomp",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "BWAGjFJFMBA",
-        "url": "https://www.youtube.com/watch?v=BWAGjFJFMBA"
-      }
-    ]
-  },
-  {
-    "artist": "Grateful Dead",
-    "title": "Estimated Prophet",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Sp18EhK_lBE",
-        "url": "https://www.youtube.com/watch?v=Sp18EhK_lBE"
-      }
-    ]
-  },
-  {
-    "artist": "King Crimson",
-    "title": "Frame by Frame",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "2HL-gGLu8Jo",
-        "url": "https://www.youtube.com/watch?v=2HL-gGLu8Jo"
-      }
-    ]
-  },
-  {
-    "artist": "Leprous",
-    "title": "Foe",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "vhKViUXuF04",
-        "url": "https://www.youtube.com/watch?v=vhKViUXuF04"
-      }
-    ]
-  },
-  {
-    "artist": "Peter Gabriel",
-    "title": "Solsbury Hill",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "_OO2PuGz-H8",
-        "url": "https://www.youtube.com/watch?v=_OO2PuGz-H8"
-      }
-    ]
-  },
-  {
-    "artist": "Pink Floyd",
-    "title": "Money",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "2aW7HweAf3o",
-        "url": "https://www.youtube.com/watch?v=2aW7HweAf3o"
-      }
-    ]
-  },
-  {
-    "artist": "Radiohead",
-    "title": "2 plus 2 equals 5",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "iP38uoDsrFM",
-        "url": "https://www.youtube.com/watch?v=iP38uoDsrFM"
-      }
-    ]
-  },
-  {
-    "artist": "Sting",
-    "title": "Love Is Stronger Than Justice",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "VhBq-ckOvNw",
-        "url": "https://www.youtube.com/watch?v=VhBq-ckOvNw"
-      }
-    ]
-  },
-  {
-    "artist": "Sting",
-    "title": "Saint Augustine in Hell",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "xgFL1sSIsSU",
-        "url": "https://www.youtube.com/watch?v=xgFL1sSIsSU"
+        "video_id": "cYKW-5De8nc",
+        "url": "https://www.youtube.com/watch?v=cYKW-5De8nc"
       }
     ]
   },
@@ -2876,6 +3427,67 @@
   },
   {
     "artist": "Traditional",
+    "title": "Amazing Grace",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "XjcfQZtgwAI",
+        "url": "https://www.youtube.com/watch?v=XjcfQZtgwAI"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Arap",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "VhWsRJJMN14",
+        "url": "https://www.youtube.com/watch?v=VhWsRJJMN14"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Bembe",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "xBTm1UErSNA",
+        "url": "https://www.youtube.com/watch?v=xBTm1UErSNA"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Bistrishka Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Cvmz0Ypizss",
+        "url": "https://www.youtube.com/watch?v=Cvmz0Ypizss"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Chetvorno Horo",
     "meters": {
       "7": 1.0
@@ -2886,6 +3498,36 @@
         "priority": 100,
         "video_id": "5u4jOtmmX_M",
         "url": "https://www.youtube.com/watch?v=5u4jOtmmX_M"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Daichovo Horo",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "TtnYFUSpp5c",
+        "url": "https://www.youtube.com/watch?v=TtnYFUSpp5c"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Danny Boy",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "6ppdB6JX99Q",
+        "url": "https://www.youtube.com/watch?v=6ppdB6JX99Q"
       }
     ]
   },
@@ -2906,6 +3548,37 @@
   },
   {
     "artist": "Traditional",
+    "title": "Djembe Dununba",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "qLBGgJi59l8",
+        "url": "https://www.youtube.com/watch?v=qLBGgJi59l8"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Edelweiss",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "8bL2BCiFkTk",
+        "url": "https://www.youtube.com/watch?v=8bL2BCiFkTk"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Elenino Horo",
     "meters": {
       "7": 1.0
@@ -2921,6 +3594,84 @@
   },
   {
     "artist": "Traditional",
+    "title": "Gahu",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "YXla5h48A80",
+        "url": "https://www.youtube.com/watch?v=YXla5h48A80"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Gamelan Gong Kebyar",
+    "meters": {
+      "3": 0.7,
+      "4": 0.7
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "UY8NEAupxjc",
+        "url": "https://www.youtube.com/watch?v=UY8NEAupxjc"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Gamelan Jegog",
+    "meters": {
+      "3": 0.7,
+      "4": 0.7
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "IW-QPw4-4cU",
+        "url": "https://www.youtube.com/watch?v=IW-QPw4-4cU"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Gankino Horo",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "68gOu19y1kA",
+        "url": "https://www.youtube.com/watch?v=68gOu19y1kA"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Greensleeves",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "jS_nLcVG_tg",
+        "url": "https://www.youtube.com/watch?v=jS_nLcVG_tg"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Ivailo",
     "meters": {
       "7": 1.0
@@ -2931,6 +3682,83 @@
         "priority": 100,
         "video_id": "6ob0RCmOlag",
         "url": "https://www.youtube.com/watch?v=6ob0RCmOlag"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Karsilama",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "FNISqOVpuuw",
+        "url": "https://www.youtube.com/watch?v=FNISqOVpuuw"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Kid on the Mountain",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "1Ss5I8PdKO0",
+        "url": "https://www.youtube.com/watch?v=1Ss5I8PdKO0"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "s3YfeqssM8Q",
+        "url": "https://www.youtube.com/watch?v=s3YfeqssM8Q"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Kpanlogo",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "jGBBSTOQRG8",
+        "url": "https://www.youtube.com/watch?v=jGBBSTOQRG8"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Kuku",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Qsq5PHoik-s",
+        "url": "https://www.youtube.com/watch?v=Qsq5PHoik-s"
       }
     ]
   },
@@ -2981,6 +3809,21 @@
   },
   {
     "artist": "Traditional",
+    "title": "Mastika",
+    "meters": {
+      "9": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ACgY9H8WO1s",
+        "url": "https://www.youtube.com/watch?v=ACgY9H8WO1s"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Milo Mou Kokkino",
     "meters": {
       "7": 1.0
@@ -3026,6 +3869,36 @@
   },
   {
     "artist": "Traditional",
+    "title": "Paidushko Horo",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "ktHXR6eG3k8",
+        "url": "https://www.youtube.com/watch?v=ktHXR6eG3k8"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Pazardzhishka Kopanitsa",
+    "meters": {
+      "11": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "tStgu-ZdrYo",
+        "url": "https://www.youtube.com/watch?v=tStgu-ZdrYo"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Petrunino Horo",
     "meters": {
       "7": 1.0
@@ -3056,6 +3929,22 @@
   },
   {
     "artist": "Traditional",
+    "title": "Rumba Guaguancó",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "qtgyOFZeExE",
+        "url": "https://www.youtube.com/watch?v=qtgyOFZeExE"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Samiotissa",
     "meters": {
       "7": 1.0
@@ -3066,6 +3955,21 @@
         "priority": 100,
         "video_id": "bC-hnfVEOzU",
         "url": "https://www.youtube.com/watch?v=bC-hnfVEOzU"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
+    "title": "Scarborough Fair",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "_gCGEblL3Mk",
+        "url": "https://www.youtube.com/watch?v=_gCGEblL3Mk"
       }
     ]
   },
@@ -3086,6 +3990,22 @@
   },
   {
     "artist": "Traditional",
+    "title": "Sinte",
+    "meters": {
+      "3": 0.7,
+      "4": 0.8
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "7RtHa4hQVfE",
+        "url": "https://www.youtube.com/watch?v=7RtHa4hQVfE"
+      }
+    ]
+  },
+  {
+    "artist": "Traditional",
     "title": "Snijeg pade na behar na voce",
     "meters": {
       "7": 1.0
@@ -3096,351 +4016,6 @@
         "priority": 100,
         "video_id": "MQBLIXaEsE8",
         "url": "https://www.youtube.com/watch?v=MQBLIXaEsE8"
-      }
-    ]
-  },
-  {
-    "artist": "Yanni",
-    "title": "Waltz in 7/8",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "1QCjbWHLYt8",
-        "url": "https://www.youtube.com/watch?v=1QCjbWHLYt8"
-      }
-    ]
-  },
-  {
-    "artist": "Bartók",
-    "title": "Six Dances in Bulgarian Rhythm No 5",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "UGA9cr9805A",
-        "url": "https://www.youtube.com/watch?v=UGA9cr9805A"
-      }
-    ]
-  },
-  {
-    "artist": "Burhan Öçal",
-    "title": "Limoncu",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "PYl5xzfTmew",
-        "url": "https://www.youtube.com/watch?v=PYl5xzfTmew"
-      }
-    ]
-  },
-  {
-    "artist": "Dave Brubeck",
-    "title": "Blue Rondo à la Turk",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "vKNZqM0d-xo",
-        "url": "https://www.youtube.com/watch?v=vKNZqM0d-xo"
-      }
-    ]
-  },
-  {
-    "artist": "Dionysis Savvopoulos",
-    "title": "Zeibekiko tis Kyriakis",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "g1dWpuOYTo4",
-        "url": "https://www.youtube.com/watch?v=g1dWpuOYTo4"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "Turkish Bath",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "HvmA_TskDTU",
-        "url": "https://www.youtube.com/watch?v=HvmA_TskDTU"
-      }
-    ]
-  },
-  {
-    "artist": "Genesis",
-    "title": "Apocalypse in 9/8",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "IlkiFtCPXts",
-        "url": "https://www.youtube.com/watch?v=IlkiFtCPXts"
-      }
-    ]
-  },
-  {
-    "artist": "Genesis",
-    "title": "Riding the Scree",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "k_luIcxug0U",
-        "url": "https://www.youtube.com/watch?v=k_luIcxug0U"
-      }
-    ]
-  },
-  {
-    "artist": "Grigoris Bithikotsis",
-    "title": "Roloi Komboloi",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Rz5F0beHK9E",
-        "url": "https://www.youtube.com/watch?v=Rz5F0beHK9E"
-      }
-    ]
-  },
-  {
-    "artist": "Mahavishnu Orchestra",
-    "title": "Vital Transformation",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "u3ADv-gGqYs",
-        "url": "https://www.youtube.com/watch?v=u3ADv-gGqYs"
-      }
-    ]
-  },
-  {
-    "artist": "Manos Loizos",
-    "title": "To Zeibekiko tis Evdokias",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "ZHcFf--WrCM",
-        "url": "https://www.youtube.com/watch?v=ZHcFf--WrCM"
-      }
-    ]
-  },
-  {
-    "artist": "Marinella",
-    "title": "Anoixe Petra",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "a1IdFPnpB1k",
-        "url": "https://www.youtube.com/watch?v=a1IdFPnpB1k"
-      }
-    ]
-  },
-  {
-    "artist": "Stelios Kazantzidis",
-    "title": "Cadirimin Ustune",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "phXC-PIets8",
-        "url": "https://www.youtube.com/watch?v=phXC-PIets8"
-      }
-    ]
-  },
-  {
-    "artist": "Stelios Kazantzidis",
-    "title": "Dio Portes Echi I Zoi",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "9_EsauMIKhU",
-        "url": "https://www.youtube.com/watch?v=9_EsauMIKhU"
-      }
-    ]
-  },
-  {
-    "artist": "Sting",
-    "title": "I Hung My Head",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tXUrQk3AYpI",
-        "url": "https://www.youtube.com/watch?v=tXUrQk3AYpI"
-      }
-    ]
-  },
-  {
-    "artist": "The Chieftains",
-    "title": "The Foxhunt",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "jumdtvwU0VM",
-        "url": "https://www.youtube.com/watch?v=jumdtvwU0VM"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "A Fig for a Kiss",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "7W9R-c1UeU0",
-        "url": "https://www.youtube.com/watch?v=7W9R-c1UeU0"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Abdala",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "YMf8yXaQDiQ",
-        "url": "https://www.youtube.com/watch?v=YMf8yXaQDiQ"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Arap",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "VhWsRJJMN14",
-        "url": "https://www.youtube.com/watch?v=VhWsRJJMN14"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Daichovo Horo",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "TtnYFUSpp5c",
-        "url": "https://www.youtube.com/watch?v=TtnYFUSpp5c"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Karsilama",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "FNISqOVpuuw",
-        "url": "https://www.youtube.com/watch?v=FNISqOVpuuw"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Kid on the Mountain",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "1Ss5I8PdKO0",
-        "url": "https://www.youtube.com/watch?v=1Ss5I8PdKO0"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Mastika",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "ACgY9H8WO1s",
-        "url": "https://www.youtube.com/watch?v=ACgY9H8WO1s"
       }
     ]
   },
@@ -3520,441 +4095,6 @@
     ]
   },
   {
-    "artist": "Aaron Parks",
-    "title": "Attention, Earthlings",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "ljQLFg2V7Hc",
-        "url": "https://www.youtube.com/watch?v=ljQLFg2V7Hc"
-      }
-    ]
-  },
-  {
-    "artist": "Avishai Cohen",
-    "title": "Eleven Wives",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "9n3g2xhJqx8",
-        "url": "https://www.youtube.com/watch?v=9n3g2xhJqx8"
-      }
-    ]
-  },
-  {
-    "artist": "Boris Karlov",
-    "title": "Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "8BuKgRN0I7k",
-        "url": "https://www.youtube.com/watch?v=8BuKgRN0I7k"
-      }
-    ]
-  },
-  {
-    "artist": "Burt Bacharach",
-    "title": "Say A Little Prayer",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "3dqiHMjfb7I",
-        "url": "https://www.youtube.com/watch?v=3dqiHMjfb7I"
-      }
-    ]
-  },
-  {
-    "artist": "Claude Le Jeune",
-    "title": "Cygne je suis de candeur",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "XQcUzpi3lyY",
-        "url": "https://www.youtube.com/watch?v=XQcUzpi3lyY"
-      }
-    ]
-  },
-  {
-    "artist": "Dave Brubeck",
-    "title": "Eleven Four",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "u2w2Ipl2jk4",
-        "url": "https://www.youtube.com/watch?v=u2w2Ipl2jk4"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "Blues in Elf",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "s5tILEadt0w",
-        "url": "https://www.youtube.com/watch?v=s5tILEadt0w"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "How's This for Openers",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "nIB1deC-3hQ",
-        "url": "https://www.youtube.com/watch?v=nIB1deC-3hQ"
-      }
-    ]
-  },
-  {
-    "artist": "Don Ellis",
-    "title": "Upstart",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "T6QfpZnrZKs",
-        "url": "https://www.youtube.com/watch?v=T6QfpZnrZKs"
-      }
-    ]
-  },
-  {
-    "artist": "Frank Zappa",
-    "title": "Outside Now",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "6Wgx4AoIw5M",
-        "url": "https://www.youtube.com/watch?v=6Wgx4AoIw5M"
-      }
-    ]
-  },
-  {
-    "artist": "Freddie Hubbard",
-    "title": "Prophet Jennings",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "JH1kTBn4Wrg",
-        "url": "https://www.youtube.com/watch?v=JH1kTBn4Wrg"
-      }
-    ]
-  },
-  {
-    "artist": "Gentle Giant",
-    "title": "Raconteur Troubadour",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "c8NqYibMeow",
-        "url": "https://www.youtube.com/watch?v=c8NqYibMeow"
-      }
-    ]
-  },
-  {
-    "artist": "Grateful Dead",
-    "title": "The Eleven",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "c_WpX9s2_rQ",
-        "url": "https://www.youtube.com/watch?v=c_WpX9s2_rQ"
-      }
-    ]
-  },
-  {
-    "artist": "Ibro Lolov",
-    "title": "Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "dQQg7VQPG4A",
-        "url": "https://www.youtube.com/watch?v=dQQg7VQPG4A"
-      }
-    ]
-  },
-  {
-    "artist": "Ivo Papazov",
-    "title": "Kopanitsa Wedding",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "5Q4dPBy_3p8",
-        "url": "https://www.youtube.com/watch?v=5Q4dPBy_3p8"
-      }
-    ]
-  },
-  {
-    "artist": "Jean Cras",
-    "title": "Danse a onze temps",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "KdKOMxoBiJY",
-        "url": "https://www.youtube.com/watch?v=KdKOMxoBiJY"
-      }
-    ]
-  },
-  {
-    "artist": "Joe Farrell",
-    "title": "Follow Your Heart",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "LzigeAj-2-k",
-        "url": "https://www.youtube.com/watch?v=LzigeAj-2-k"
-      }
-    ]
-  },
-  {
-    "artist": "John McLaughlin",
-    "title": "Arjen's Bag",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "YUHhAkhXRSE",
-        "url": "https://www.youtube.com/watch?v=YUHhAkhXRSE"
-      }
-    ]
-  },
-  {
-    "artist": "Mozaik",
-    "title": "Suleman's Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "bAPepcWn5gg",
-        "url": "https://www.youtube.com/watch?v=bAPepcWn5gg"
-      }
-    ]
-  },
-  {
-    "artist": "Neshko Neshev",
-    "title": "Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "b8h5LB-0EYs",
-        "url": "https://www.youtube.com/watch?v=b8h5LB-0EYs"
-      }
-    ]
-  },
-  {
-    "artist": "Plini",
-    "title": "11 Nights",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tKMZsXY75d4",
-        "url": "https://www.youtube.com/watch?v=tKMZsXY75d4"
-      }
-    ]
-  },
-  {
-    "artist": "Primus",
-    "title": "Eleven",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "7tIeS_v0hos",
-        "url": "https://www.youtube.com/watch?v=7tIeS_v0hos"
-      }
-    ]
-  },
-  {
-    "artist": "Slavster",
-    "title": "Sulejmanovo Oro",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "R2PjPyEptdE",
-        "url": "https://www.youtube.com/watch?v=R2PjPyEptdE"
-      }
-    ]
-  },
-  {
-    "artist": "Sufjan Stevens",
-    "title": "The Tallest Man, The Broadest Shoulders",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "PLEXd_P6A0s",
-        "url": "https://www.youtube.com/watch?v=PLEXd_P6A0s"
-      }
-    ]
-  },
-  {
-    "artist": "Tool",
-    "title": "Right in Two",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "bndL7wwAj0U",
-        "url": "https://www.youtube.com/watch?v=bndL7wwAj0U"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Bistrishka Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "Cvmz0Ypizss",
-        "url": "https://www.youtube.com/watch?v=Cvmz0Ypizss"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Gankino Horo",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "68gOu19y1kA",
-        "url": "https://www.youtube.com/watch?v=68gOu19y1kA"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "s3YfeqssM8Q",
-        "url": "https://www.youtube.com/watch?v=s3YfeqssM8Q"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Pazardzhishka Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "priority": 100,
-        "video_id": "tStgu-ZdrYo",
-        "url": "https://www.youtube.com/watch?v=tStgu-ZdrYo"
-      }
-    ]
-  },
-  {
     "artist": "Trakiiskata Troika",
     "title": "Kopanitsa",
     "meters": {
@@ -3966,6 +4106,127 @@
         "priority": 100,
         "video_id": "4jNdT1UWLCc",
         "url": "https://www.youtube.com/watch?v=4jNdT1UWLCc"
+      }
+    ]
+  },
+  {
+    "artist": "Vampire Weekend",
+    "title": "Cape Cod Kwassa Kwassa",
+    "meters": {
+      "3": 0.6,
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "9wHl9qRsMzw",
+        "url": "https://www.youtube.com/watch?v=9wHl9qRsMzw"
+      }
+    ]
+  },
+  {
+    "artist": "Wayne Shorter",
+    "title": "Indian Song",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "RpIKiDz3rI4",
+        "url": "https://www.youtube.com/watch?v=RpIKiDz3rI4"
+      }
+    ]
+  },
+  {
+    "artist": "Willie Nelson",
+    "title": "Waltz Across Texas",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "1Y7YuDRO5d0",
+        "url": "https://www.youtube.com/watch?v=1Y7YuDRO5d0"
+      }
+    ]
+  },
+  {
+    "artist": "Wings",
+    "title": "Mull of Kintyre",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "Plhtk_XJqhM",
+        "url": "https://www.youtube.com/watch?v=Plhtk_XJqhM"
+      }
+    ]
+  },
+  {
+    "artist": "XTC",
+    "title": "English Roundabout",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "aSIyaZoG0sU",
+        "url": "https://www.youtube.com/watch?v=aSIyaZoG0sU"
+      }
+    ]
+  },
+  {
+    "artist": "Yann Tiersen",
+    "title": "La Valse d'Amelie",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "uj9BihmugmI",
+        "url": "https://www.youtube.com/watch?v=uj9BihmugmI"
+      }
+    ]
+  },
+  {
+    "artist": "Yanni",
+    "title": "Waltz in 7/8",
+    "meters": {
+      "7": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "1QCjbWHLYt8",
+        "url": "https://www.youtube.com/watch?v=1QCjbWHLYt8"
+      }
+    ]
+  },
+  {
+    "artist": "Youssou N'Dour",
+    "title": "7 Seconds",
+    "meters": {
+      "4": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "priority": 100,
+        "video_id": "wqCpjFMvz-k",
+        "url": "https://www.youtube.com/watch?v=wqCpjFMvz-k"
       }
     ]
   }
