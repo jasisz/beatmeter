@@ -137,10 +137,20 @@ uv run python scripts/setup/collect_wikimeter_candidates.py \
 # 2) Build review queue (top candidates per song)
 uv run python scripts/setup/build_wikimeter_review_queue.py
 
-# 3) Manually edit review_queue.json:
-#    status = approved/rejected (+ optional review_note)
+# 3) Auto-verify with external sources (Wikipedia + web + YouTube metadata)
+uv run python scripts/setup/verify_wikimeter_sources.py \
+  --apply-suggestions
 
-# 4) Merge approved entries into catalog
+# Optional: run multi-agent consensus (scout + skeptic + arbiter)
+uv run python scripts/setup/wikimeter_agent_swarm.py \
+  --apply-consensus
+
+# 4) Manually review high-risk classes/items
+#    - 9/x, 11/x, poly
+#    - conflicting evidence
+#    - low-confidence suggestions
+
+# 5) Merge approved entries into catalog
 uv run python scripts/setup/merge_wikimeter_reviewed.py
 ```
 
