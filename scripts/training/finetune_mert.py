@@ -20,6 +20,7 @@ import argparse
 import sys
 import time
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 
 import librosa
@@ -198,7 +199,7 @@ def mert_forward_pool(
 
         for chunk in chunks:
             inputs = processor(chunk, sampling_rate=MERT_SR, return_tensors="pt")
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             outputs = mert_model(**inputs)
 
             # hidden_states[0] = conv features, [1..num_layers] = transformer layers
@@ -308,6 +309,9 @@ def train_one_epoch(
     hidden_dim: int,
     grad_accum_steps: int = 1,
     use_lora: bool = True,
+    use_amp: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
+    scaler=None,
 ) -> tuple[float, float]:
     head.train()
     if use_lora:
@@ -315,35 +319,51 @@ def train_one_epoch(
     total_loss = 0.0
     correct = 0
     total = 0
-    optimizer.zero_grad()
+    amp_enabled = bool(use_amp and device.type == "cuda")
+    use_scaler = bool(scaler is not None and scaler.is_enabled())
+    trainable_params = list(head.parameters()) + [p for p in mert_model.parameters() if p.requires_grad]
+    optimizer.zero_grad(set_to_none=True)
 
     pbar = tqdm(loader, desc="  Train", leave=False,
                 bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}")
     for step, (audios, labels) in enumerate(pbar):
-        labels = labels.to(device)
+        labels = labels.to(device, non_blocking=True)
 
-        # Forward through MERT (with gradients for LoRA)
-        if use_lora:
-            pooled = mert_forward_pool(audios, mert_model, processor, device,
-                                       num_layers, hidden_dim)
-        else:
-            with torch.no_grad():
+        amp_ctx = (
+            torch.autocast(device_type="cuda", dtype=amp_dtype)
+            if amp_enabled
+            else nullcontext()
+        )
+        with amp_ctx:
+            # Forward through MERT (with gradients for LoRA)
+            if use_lora:
                 pooled = mert_forward_pool(audios, mert_model, processor, device,
                                            num_layers, hidden_dim)
-            pooled = pooled.detach()
+            else:
+                with torch.no_grad():
+                    pooled = mert_forward_pool(audios, mert_model, processor, device,
+                                               num_layers, hidden_dim)
+                pooled = pooled.detach()
 
-        # Forward through head
-        logits = head(pooled)
-        loss = criterion(logits, labels) / grad_accum_steps
-        loss.backward()
+            # Forward through head
+            logits = head(pooled)
+            loss = criterion(logits, labels) / grad_accum_steps
+
+        if use_scaler:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         if (step + 1) % grad_accum_steps == 0 or step == len(loader) - 1:
-            torch.nn.utils.clip_grad_norm_(
-                list(head.parameters()) + [p for p in mert_model.parameters() if p.requires_grad],
-                1.0,
-            )
-            optimizer.step()
-            optimizer.zero_grad()
+            if use_scaler:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+            if use_scaler:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
         total_loss += loss.item() * grad_accum_steps * len(audios)
         # Primary accuracy: argmax prediction matches argmax of label
@@ -367,6 +387,8 @@ def evaluate(
     device: torch.device,
     num_layers: int,
     hidden_dim: int,
+    use_amp: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
 ) -> tuple[float, float, list[int], list[int], np.ndarray, np.ndarray]:
     """Evaluate model. Returns (loss, acc, primary_labels, primary_preds, all_probs, all_labels_multihot)."""
     head.eval()
@@ -378,13 +400,20 @@ def evaluate(
     all_preds_idx: list[int] = []    # argmax prediction index
     all_probs: list[np.ndarray] = []       # sigmoid probabilities
     all_labels_raw: list[np.ndarray] = []  # multi-hot label vectors
+    amp_enabled = bool(use_amp and device.type == "cuda")
 
     for audios, labels in tqdm(loader, desc="  Eval", leave=False):
-        labels = labels.to(device)
-        pooled = mert_forward_pool(audios, mert_model, processor, device,
-                                   num_layers, hidden_dim)
-        logits = head(pooled)
-        loss = criterion(logits, labels)
+        labels = labels.to(device, non_blocking=True)
+        amp_ctx = (
+            torch.autocast(device_type="cuda", dtype=amp_dtype)
+            if amp_enabled
+            else nullcontext()
+        )
+        with amp_ctx:
+            pooled = mert_forward_pool(audios, mert_model, processor, device,
+                                       num_layers, hidden_dim)
+            logits = head(pooled)
+            loss = criterion(logits, labels)
 
         total_loss += loss.item() * len(audios)
         probs = torch.sigmoid(logits)
@@ -480,6 +509,16 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=2,
                         help="DataLoader workers per split (default: 2)")
+    parser.add_argument("--amp", dest="amp", action="store_true",
+                        help="Enable mixed precision autocast on CUDA (default)")
+    parser.add_argument("--no-amp", dest="amp", action="store_false",
+                        help="Disable mixed precision autocast")
+    parser.add_argument("--amp-dtype", type=str, default="bf16", choices=["bf16", "fp16"],
+                        help="Autocast dtype for AMP on CUDA")
+    parser.add_argument("--tf32", dest="tf32", action="store_true",
+                        help="Enable TF32 matmul/conv on CUDA (default)")
+    parser.add_argument("--no-tf32", dest="tf32", action="store_false",
+                        help="Disable TF32 matmul/conv on CUDA")
     parser.add_argument("--grad-accum", type=int, default=8,
                         help="Gradient accumulation steps (effective batch = batch-size * grad-accum)")
     parser.add_argument("--lr", type=float, default=None,
@@ -506,6 +545,7 @@ def main():
                         help="Fraction of extra data songs held out for val")
     parser.add_argument("--resume", type=Path, default=None,
                         help="Resume from checkpoint")
+    parser.set_defaults(amp=True, tf32=True)
     args = parser.parse_args()
 
     # Auto-scale LR per model size if not explicitly set
@@ -527,12 +567,28 @@ def main():
     num_layers, hidden_dim = MODEL_CONFIGS[model_name]
     pooled_dim = hidden_dim * 2
     use_lora = not args.no_lora
+    tf32_enabled = bool(args.tf32 and device.type == "cuda")
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = tf32_enabled
+        torch.backends.cudnn.allow_tf32 = tf32_enabled
+        if tf32_enabled:
+            torch.backends.cudnn.benchmark = True
+            torch.set_float32_matmul_precision("high")
+
+    amp_mode = args.amp_dtype.strip().lower()
+    if amp_mode == "bf16" and device.type == "cuda" and not torch.cuda.is_bf16_supported():
+        print("WARNING: bf16 not supported on this GPU; falling back to fp16")
+        amp_mode = "fp16"
+    amp_dtype = torch.bfloat16 if amp_mode == "bf16" else torch.float16
+    amp_enabled = bool(args.amp and device.type == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and amp_dtype == torch.float16)
 
     print(f"Model: {model_name}", flush=True)
     print(f"  Layers: {num_layers}, hidden: {hidden_dim}, pooled: {pooled_dim}")
     print(f"Device: {device}")
     print(f"LoRA: {'disabled' if not use_lora else f'rank={args.lora_rank}, alpha={args.lora_alpha}'}")
     print(f"Effective batch size: {args.batch_size * args.grad_accum}")
+    print(f"AMP: {'on' if amp_enabled else 'off'} ({amp_mode}), TF32: {tf32_enabled}")
 
     # Load data
     data_dir = args.data_dir.resolve()
@@ -779,6 +835,8 @@ def main():
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         if "scheduler_state_dict" in ckpt:
             scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if scaler.is_enabled() and ckpt.get("scaler_state_dict"):
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
         best_val_acc = ckpt.get("val_accuracy", -1.0)
         best_val_loss = ckpt.get("val_loss", float("inf"))
@@ -797,10 +855,11 @@ def main():
         train_loss, train_acc = train_one_epoch(
             mert_model, head, processor, train_loader, criterion, optimizer,
             device, num_layers, hidden_dim, args.grad_accum, use_lora,
+            amp_enabled, amp_dtype, scaler,
         )
         val_loss, val_acc, val_labels_idx, val_preds_idx, val_probs, val_labels_mh = evaluate(
             mert_model, head, processor, val_loader, criterion,
-            device, num_layers, hidden_dim,
+            device, num_layers, hidden_dim, amp_enabled, amp_dtype,
         )
 
         scheduler.step(val_acc)
@@ -830,6 +889,7 @@ def main():
             "lora_state_dict": {n: p.cpu().clone() for n, p in mert_model.named_parameters() if p.requires_grad} if use_lora else None,
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict() if scaler.is_enabled() else None,
             "class_map": IDX_TO_METER,
             "model_name": model_name,
             "num_layers": num_layers,
@@ -843,6 +903,9 @@ def main():
             "epoch": epoch,
             "lora_rank": args.lora_rank if use_lora else 0,
             "lora_alpha": args.lora_alpha if use_lora else 0,
+            "amp": amp_enabled,
+            "amp_dtype": amp_mode,
+            "tf32": tf32_enabled,
             "model_type": "MERTFineTuned",
         }
         torch.save(ckpt_data, checkpoint_path)
@@ -879,7 +942,7 @@ def main():
 
     test_loss, test_acc, test_labels, test_preds, test_probs, test_labels_mh = evaluate(
         mert_model, head, processor, test_loader, criterion,
-        device, num_layers, hidden_dim,
+        device, num_layers, hidden_dim, amp_enabled, amp_dtype,
     )
     print(f"\nTest loss: {test_loss:.4f}")
     print(f"Test accuracy: {test_acc:.1%} ({sum(1 for a, b in zip(test_labels, test_preds) if a == b)}/{len(test_labels)})")
@@ -911,6 +974,9 @@ def main():
                 "epoch": max(start_epoch - 1, 0),
                 "lora_rank": args.lora_rank if use_lora else 0,
                 "lora_alpha": args.lora_alpha if use_lora else 0,
+                "amp": amp_enabled,
+                "amp_dtype": amp_mode,
+                "tf32": tf32_enabled,
                 "model_type": "MERTFineTuned",
             },
             checkpoint_path,
