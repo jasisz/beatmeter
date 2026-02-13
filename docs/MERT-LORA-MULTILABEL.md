@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Round 12 of the BeatMeter project transitions MERT fine-tuning from single-label (softmax) to multi-label (sigmoid) architecture to enable polyrhythm detection. The class set is expanded from 4 classes [3, 4, 5, 7] to 6 classes [3, 4, 5, 7, 9, 11]. Two external datasets were curated from YouTube: WIKIMETER (Round 12a, odd meters only) and WIKIMETER (Round 12b, all meters including 3/4, 4/4, and polyrhythmic). A comprehensive diagnostic framework monitors label leakage, confidence selectivity, and polyrhythm detection thresholds. First training run (330M + WIKIMETER, A100) reached val 14.7% at epoch 9 before session crash; second run (WIKIMETER, L4 GPU) pending.
+Round 12 of the BeatMeter project transitions MERT fine-tuning from single-label (softmax) to multi-label (sigmoid) architecture to enable polyrhythm detection. The class set is expanded from 4 classes [3, 4, 5, 7] to 6 classes [3, 4, 5, 7, 9, 11]. Two external datasets were curated from YouTube: WIKIMETER (Round 12a, odd meters only) and WIKIMETER (Round 12b, all meters including 3/4, 4/4, and polyrhythmic). The current notebook-aligned evaluation reports per-class accuracy/AP, macro-F1, and confidence gap. First training run (330M + WIKIMETER, A100) reached val 14.7% at epoch 9 before session crash; second run (WIKIMETER, L4 GPU) pending.
 
 ## 1. Motivation
 
@@ -26,11 +26,11 @@ METER2800 covers only [3, 4, 5, 7], but real-world odd-meter music includes:
 
 Adding 9 and 11 to the class set makes the model useful for a broader range of non-Western and progressive music.
 
-### 1.3 Why External Data? (WIKIMETER → WIKIMETER)
+### 1.3 Why External Data? (WIKIMETER)
 
 METER2800 has approximately 150 training files per odd meter class (5/4, 7/4), and zero files for 9/x or 11/x. LoRA fine-tuning requires more data for underrepresented classes. Wikipedia maintains a curated [list of musical works in unusual time signatures](https://en.wikipedia.org/wiki/List_of_musical_works_in_unusual_time_signatures) -- a musicologically vetted resource covering diverse genres and cultures.
 
-The initial dataset (WIKIMETER, Round 12a) contained only odd meters (5/x, 7/x, 9/x, 11/x + poly), which created a training distribution mismatch — the model saw disproportionately more odd-meter data from YouTube vs METER2800. The expanded dataset (WIKIMETER, Round 12b) adds 29 curated 3/4 songs and 29 curated 4/4 songs to balance the distribution, plus per-song expected duration filtering to prevent downloading albums or compilations.
+The initial dataset (WIKIMETER, Round 12a) contained only odd meters (5/x, 7/x, 9/x, 11/x + poly), which created a training distribution mismatch — the model saw disproportionately more odd-meter data from YouTube vs METER2800. The expanded dataset (WIKIMETER, Round 12b) adds curated 3/4 and 4/4 songs to balance the distribution.
 
 ## 2. Architecture Changes
 
@@ -87,7 +87,7 @@ audio = audio[start : start + max_samples]
 **Rationale**: 30-second segments start at arbitrary beat phase positions. Without random cropping, the model might learn spurious phase-dependent features (e.g., "5/4 music always starts on beat 3"). Random cropping teaches phase-invariance by presenting different alignments of the same piece across epochs.
 
 Additional augmentations during training:
-- Gaussian noise injection: `audio += 0.005 * randn`
+- Gaussian noise injection: `audio += 0.01 * randn` (default, configurable via `--noise-std`)
 - Random circular shift: up to 0.5 seconds in either direction
 
 ### 2.4 Label Smoothing
@@ -103,7 +103,7 @@ for m in meters:
 
 Negative classes get 0.1 instead of 0.0, preventing the model from pushing all non-target sigmoid outputs to exactly zero. This provides a form of regularization that encourages the model to maintain some activation even for "wrong" classes.
 
-**Risk**: If too aggressive, label smoothing could cause "label leakage" -- artificial positive correlation between class activations. This is monitored via the inter-class correlation matrix (Section 5.5).
+**Risk**: If too aggressive, label smoothing can reduce class selectivity. In the current workflow this is monitored indirectly via per-class AP, Macro-F1, and confidence gap trends.
 
 ### 2.5 Multi-Label Data Loading
 
@@ -117,34 +117,34 @@ Negative classes get 0.1 instead of 0.0, preventing the model from pushing all n
 
 ### 3.1 WIKIMETER
 
-Curated dataset with all meter classes, sourced from Wikipedia-verified time signatures. Song catalog lives in `scripts/setup/wikimeter.json` (single source of truth, committed to repo). Includes per-song expected duration filtering (0.5x–2.0x tolerance) to reject albums/compilations.
+Curated dataset with all meter classes, sourced from Wikipedia-verified time signatures. Song catalog lives in `scripts/setup/wikimeter.json` (single source of truth, committed to repo).
 
 | Meter | Songs | Example Artists/Works |
 |-------|-------|----------------------|
-| 3/4 | 74 | Strauss waltzes, Chopin, Tchaikovsky, Beatles ("Norwegian Wood"), folk |
-| 4/4 | 87 | Queen, AC/DC, Nirvana, Michael Jackson, Daft Punk, Kraftwerk |
-| 5/x | 33 | Dave Brubeck ("Take Five"), Radiohead, Holst ("Mars"), Muse, Halloween theme |
-| 7/x | 26 | Pink Floyd ("Money"), Peter Gabriel ("Solsbury Hill"), King Crimson, Balkan folk |
-| 9/x | 30 | Blue Rondo a la Turk, Greek zeimbekiko, Irish slip jigs, Turkish karsilama |
-| 11/x | 24 | Gankino Horo, Kopanitsa variants, Brubeck ("Eleven Four"), Primus, Tool |
-| Polyrhythmic | 29 | African drumming [3,4], Meshuggah [5,4]/[7,4], gamelan, hemiola |
-| **Total** | **244** | |
+| 3/4 | 49 | Strauss waltzes, Chopin, Tchaikovsky, Beatles ("Norwegian Wood"), folk |
+| 4/4 | 61 | Queen, AC/DC, Nirvana, Michael Jackson, Daft Punk, Kraftwerk |
+| 5/x | 32 | Dave Brubeck ("Take Five"), Radiohead, Holst ("Mars"), Muse, Halloween theme |
+| 7/x | 29 | Pink Floyd ("Money"), Peter Gabriel ("Solsbury Hill"), King Crimson, Balkan folk |
+| 9/x | 25 | Blue Rondo a la Turk, Greek zeimbekiko, Irish slip jigs, Turkish karsilama |
+| 11/x | 29 | Gankino Horo, Kopanitsa variants, Brubeck ("Eleven Four"), Primus, Tool |
+| Polyrhythmic | 25 | African drumming [3,4], Meshuggah [5,4]/[7,4], gamelan, hemiola |
+| **Total** | **250** | |
 
-**History**: Round 12a used an odd-meter-only subset (105 songs, 5/7/9/11 + poly). This caused training distribution mismatch. Round 12b added balanced 3/4 and 4/4 data. Current catalog (244 songs) includes all meters.
+**History**: Round 12a used an odd-meter-only subset (5/7/9/11 + poly). This caused training distribution mismatch. Round 12b added balanced 3/4 and 4/4 data. Current catalog includes all meters (250 songs).
 
 ### 3.2 Download and Segmentation Pipeline
 
 Scripts: `scripts/setup/download_wikimeter.py` (reads `wikimeter.json`) and embedded in Colab notebook cell-7.
 
 1. **YouTube search and download** via `yt-dlp`: Each song searched by artist + title (or custom query override).
-2. **Duration filtering**: Per-song expected duration with 2x tolerance (e.g., 300s expected → accept 150s–600s). Prevents downloading compilations, live albums, or wrong videos.
-3. **Segmentation** via `ffmpeg`: Each full track split into 30-second segments:
+2. **Segmentation** via `ffmpeg`: Each full track split into short excerpts:
    - Skip first 10 seconds (intro/fade-in)
    - Skip last 10 seconds (outro/fade-out)
-   - Max 25 segments per song
+   - Max 5 segments per song
+   - Default segment length: 35 seconds
    - Minimum segment length: 15 seconds
    - Naming: `{artist}_{title}_seg{NN}.mp3`
-4. **Label file generation**: `data_wikimeter.tab` with multi-label meter column:
+3. **Label file generation**: `data_wikimeter.tab` with multi-label meter column:
    ```
    filename	label	meter	alt_meter
    "/dave_brubeck_take_five_seg00.mp3"	"five"	5	10
@@ -153,20 +153,20 @@ Scripts: `scripts/setup/download_wikimeter.py` (reads `wikimeter.json`) and embe
 
 ### 3.4 Integration with Training
 
-The `--extra-data` flag in `finetune_mert.py` appends extra entries to training only:
+The `--extra-data` flag in `finetune_mert.py` appends extra entries and performs a per-song stratified split into train/val:
 
 ```bash
 uv run python scripts/training/finetune_mert.py \
     --data-dir data/meter2800 \
-    --extra-data data/wikimeter \
-    --epochs 30 --lr 1e-4
+    --extra-data data/wikimeter
 ```
 
 Implementation details:
 - Custom CSV/TSV parser handles multi-label meter column (`"3,4"` -> `[3, 4]`)
 - Entries are filtered against `METER_TO_IDX` (only known class meters are kept)
 - Audio paths are resolved via `resolve_audio_path`
-- Extra data is appended only to training, never to validation or test (to preserve METER2800 benchmark integrity)
+- Extra song groups are split into train/val by `--extra-val-ratio` (default 0.1), preventing segment leakage between splits
+- METER2800 test split remains untouched (benchmark integrity preserved)
 
 ## 4. Model Architecture
 
@@ -218,7 +218,7 @@ Audio (any SR) --> librosa.load at 24 kHz, mono
 Input: (batch, num_layers, pooled_dim)
     --> softmax-weighted layer combination: w_i * layer_i, summed --> (batch, pooled_dim)
     --> LayerNorm(pooled_dim)
-    --> Linear(pooled_dim, head_dim=256) --> GELU --> Dropout(0.3)
+    --> Linear(pooled_dim, head_dim=256) --> GELU --> Dropout(0.4)
     --> Linear(head_dim, num_classes=6)
 Output: (batch, 6) logits
 ```
@@ -229,272 +229,83 @@ Layer weights are learnable parameters initialized to uniform, allowing the mode
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| Epochs | 30 | With early stopping (patience=10) |
-| Batch size | 4 | Physical batch size per forward pass |
-| Gradient accumulation | 8 | Effective batch = 32 |
-| Head LR | 1e-4 | For classification head parameters |
-| LoRA LR | 1e-5 | 10x smaller for LoRA adapters |
+| Epochs | 80 | Early stopping enabled (`patience=15`) |
+| Batch size | 4 (330M), 8 (95M) | Physical batch size per forward pass |
+| Gradient accumulation | 8 (330M), 4 (95M) | Effective batch = 32 |
+| Head LR | 5e-4 (330M), 1e-3 (95M) | Auto-selected per model unless overridden |
+| LoRA LR | 5e-5 (330M/95M) | Separate LR for LoRA adapters |
 | Optimizer | AdamW | weight_decay=1e-4 |
-| Scheduler | CosineAnnealingLR | T_max=epochs |
+| Scheduler | ReduceLROnPlateau | mode=max, factor=0.5, patience=5, min_lr=1e-6 |
 | Gradient clipping | 1.0 | max_norm on all trainable parameters |
 | Loss | BCEWithLogitsLoss | With per-class pos_weight |
 
-Discriminative learning rates: the classification head trains at 10x the LoRA adapter rate, since the head must learn from scratch while LoRA only needs small adjustments to a pre-trained backbone.
+Notebook behavior is mirrored in `scripts/training/finetune_mert.py`:
 
-## 5. Evaluation Metrics and Diagnostic Framework
+- Automatic LR defaults per model (`--lr`, `--lora-lr`) with manual override support
+- Per-song train/val split for `--extra-data` to avoid segment leakage
+- Checkpoint saved every epoch (`head_state_dict`, optional `lora_state_dict`, optimizer/scheduler state)
+- Auto-resume from `--checkpoint` (or explicit `--resume`)
+- Test evaluation loads the latest saved checkpoint and writes back `test_accuracy`
 
-The evaluation framework is designed as a coherent diagnostic system for multi-label classification with polyrhythm detection. All metrics are computed in `print_eval_metrics()`.
+## 5. Evaluation (Notebook-Aligned)
 
-### 5.1 Standard Metrics
+Current `print_eval_metrics()` output is intentionally compact and follows the notebook:
 
-**Confusion Matrix** (argmax-based): Backward compatible with single-label evaluation. Primary accuracy uses `argmax(predictions)` vs `argmax(labels)`.
+1. Per-class primary accuracy (argmax) and AP (Average Precision)
+2. Overall primary accuracy and mAP summary
+3. Macro-F1 (thresholded multi-label output, classes with positives only)
+4. Confidence gap (`top1_prob - top2_prob`, mean + median)
 
-**mAP (mean Average Precision)**: Per-class AP computed from sigmoid probabilities against binarized labels (threshold 0.5 to separate true positives from label-smoothed negatives). Measures ranking quality independent of threshold.
+This replaced earlier extended diagnostics (entropy/correlation/noise-floor reporting) to keep CLI output consistent with the notebook.
 
-**Macro-F1**: Multi-label F1 at threshold 0.5 on sigmoid outputs, averaged across classes with data.
+## 6. Run Status
 
-### 5.2 Co-occurrence Analysis (Polyrhythm Proxy)
+### 6.1 Run 1 (A100, crashed)
 
-Counts samples where sigmoid output exceeds 0.4 for two or more classes simultaneously:
+- Configuration: 330M, LoRA rank 16 / alpha 32, BCE + `pos_weight`, WIKIMETER augmentation
+- Best observed validation accuracy: **14.7% at epoch 9**
+- Session crashed before completion
 
-```python
-COOCCURRENCE_THRESH = 0.4
-multi_active = (probs > COOCCURRENCE_THRESH).sum(axis=1)
-n_poly = int((multi_active >= 2).sum())
-```
+### 6.2 Current baseline for ongoing runs
 
-For polyrhythmic samples, the most common class pairs are reported (e.g., `3+4: 15 samples`, `5+4: 8 samples`).
+- 330M defaults: batch 4, grad_accum 8, head LR 5e-4, LoRA LR 5e-5
+- Early stopping: patience 15
+- Scheduler: ReduceLROnPlateau
+- Epoch checkpoints: enabled by default (crash-safe)
 
-**Interpretation**: On single-label METER2800 data, co-occurrence should be low (only model noise). On WIKIMETER polyrhythmic data, co-occurrence should be high for the correct pair.
+## 7. Files and Artifacts
 
-### 5.3 Confidence Gap
+| File | Status |
+|------|--------|
+| `notebooks/colab_mert_lora.ipynb` | Current reference workflow |
+| `scripts/training/finetune_mert.py` | Synced to notebook training loop + metrics + checkpoint flow |
+| `scripts/training/check_mert_orthogonality.py` | Supports both legacy embedding checkpoints and finetuned notebook checkpoints |
+| `scripts/setup/wikimeter.json` | Catalog source of truth (250 songs) |
+| `scripts/setup/download_wikimeter.py` | Segmentation pipeline (max 5 segments, 35s default) |
 
-The confidence gap is defined as the difference between the top two sigmoid probabilities:
-
-```
-delta_P = P_top1 - P_top2
-```
-
-| delta_P Range | Interpretation |
-|---------------|----------------|
-| > 0.5 | Model is selective -- one class dominates (good for single-label data) |
-| 0.3 -- 0.5 | Moderate confidence -- possibly ambiguous meter |
-| < 0.3 | Model is "spreading" probability -- possible label leakage or genuine polyrhythm |
-
-Reported as mean, median, std, and per-predicted-class breakdown.
-
-### 5.4 Normalized Shannon Entropy
-
-Binary entropy per sigmoid output, normalized to [0, 1]:
-
-```
-H = -sum[p * log2(p) + (1-p) * log2(1-p)]  per sample
-H_norm = H / (C * log2(2))                   where C = number of classes
-```
-
-| H_norm | Meaning |
-|--------|---------|
-| 0 | Model certain of one configuration (all sigmoids near 0 or 1) |
-| 1 | Maximum uncertainty (all sigmoids near 0.5) |
-
-**Key diagnostic**: Entropy disambiguates the confidence gap:
-- **High H + low delta_P** = Label leakage: model is confused, spreading probability uniformly
-- **Low H + low delta_P** = Polyrhythm candidate: model is confidently activating exactly 2 classes
-
-This is implemented as "diagnostic quadrants" -- samples below median delta_P are split by median H_norm into leakage-risk vs. polyrhythm-candidate categories.
-
-### 5.5 Inter-class Correlation Matrix
-
-Pearson correlation between sigmoid outputs across all samples:
-
-```python
-corr = np.corrcoef(probs.T)  # (num_classes, num_classes)
-```
-
-**Expected behavior on single-label data**: Correlations should be near-zero or negative (when one class activates, others should not).
-
-**Label leakage signal**: Positive correlation > 0.3 is flagged as `"LEAKAGE"`. This would indicate that label smoothing (setting negatives to 0.1 instead of 0.0) is causing the model to learn spurious positive associations between classes.
-
-Key pairs to monitor:
-- 3/4 <-> 4/4 (the most common confusion pair in meter detection)
-- 4/4 <-> 5/4 (MERT historically over-predicts odd meters)
-
-### 5.6 Secondary Activation Noise Floor
-
-On single-label data, the second-highest sigmoid output (`P_top2`) represents model noise -- not a real secondary meter. Its distribution provides empirical thresholds:
-
-```
-Mean P_top2, Median P_top2
-Percentiles: 90th, 95th, 99th
-Per-class: P_top2 when true class is each meter
-```
-
-**Usage for production thresholds**:
-- **95th percentile** -> evaluation threshold: captures more polyrhythm candidates for analysis
-- **99th percentile** -> production/live threshold: conservative, avoids false polyrhythm detection
-
-This is superior to an ad hoc threshold (e.g., 0.4) because:
-1. It is **data-driven** -- derived from the actual noise distribution
-2. It is **class-adaptive** -- different meters may have different noise floors
-3. It adapts to model quality -- a better-trained model will have a lower noise floor
-
-## 6. Diagnostic Framework Summary
-
-The five metrics form a coherent diagnostic pipeline:
-
-```
-1. Is the model selective?
-   --> Confidence Gap (delta_P)
-   --> High delta_P = good, model picks one class
-
-2. If not selective, is it confused or seeing polyrhythm?
-   --> Normalized Shannon Entropy (H_norm) disambiguates
-   --> High H + low delta_P = confused (leakage)
-   --> Low H + low delta_P = genuine polyrhythm
-
-3. Is label smoothing causing leakage?
-   --> Inter-class Correlation Matrix
-   --> Positive r > 0.3 = systematic leakage
-
-4. What threshold should we use for polyrhythm detection?
-   --> Noise Floor Percentiles (per-class)
-   --> 95th pct = evaluation, 99th pct = production
-```
-
-## 7. Training Results
-
-### 7.1 Run 1: MERT-330M + WIKIMETER on Colab Pro A100 (crashed)
-
-**Config**: MODEL_NAME=MERT-v1-330M, EPOCHS=30, BATCH_SIZE=4, GRAD_ACCUM=8, LORA_RANK=16, HEAD_LR=5e-4 (accidentally used 95M values), LORA_LR=1e-4, USE_EXTRA_DATA=True (WIKIMETER).
-
-| Epoch | Train Acc | Val Acc | Notes |
-|-------|-----------|---------|-------|
-| 1–5 | 4–7% | 0.0% | pos_weight forces rare-class predictions |
-| 6 | 12.3% | 9.8% | Breakthrough — model "clicks" |
-| 7 | 16.1% | 4.6% | Post-breakthrough oscillation |
-| 8 | 18.9% | 2.5% | Val dropping |
-| 9 | 20.6% | **14.7%** | New best val |
-| 10 | 22.7% | 6.7% | Session crashed, checkpoint lost (was in RAM only) |
-
-**Key learnings**:
-1. **pos_weight with heavy imbalance takes ~6 epochs to "click"** — patience is essential, do not abort early
-2. **Val oscillates wildly** — 0→0→0→0→0→9.8→4.6→2.5→14.7→6.7%, typical for aggressive pos_weight
-3. **95M LR values work on 330M** — discovered accidentally, the "wrong" LR still produced learning
-4. **Must save checkpoint to disk** — RAM-only checkpoints are lost on session crash
-
-### 7.2 Run 2: MERT-330M + WIKIMETER on Colab Pro L4 (pending)
-
-**Changes from Run 1**:
-- WIKIMETER replaces WIKIMETER (balanced 3/4 + 4/4 added, polyrhythmic included)
-- Per-model LR auto-scaling: HEAD_LR=1e-4, LORA_LR=2e-5 for 330M
-- Checkpoint saved to disk after each best-val epoch
-- L4 GPU (~1.7 compute units/h vs A100's ~7.5) — ~3x cheaper but ~3x slower
-
-## 8. Files Modified and Created
-
-| File | Action | Description |
-|------|--------|-------------|
-| `scripts/training/finetune_mert.py` | Major refactor | Sigmoid + BCE, multi-label data loading, 6 classes, phase augmentation, `--extra-data` flag, full diagnostic metrics suite |
-| `scripts/setup/download_wikimeter.py` | Refactored | WIKIMETER download script (reads wikimeter.json, 244 songs) |
-| `scripts/setup/wikimeter.json` | New | Song catalog — single source of truth (244 songs, committed to repo) |
-| `notebooks/colab_mert_lora.ipynb` | Major update | Self-contained Colab notebook: METER2800 download, WIKIMETER download, training with disk checkpointing |
-| `data/wikimeter/data_wikimeter.tab` | Generated | Multi-label .tab file for WIKIMETER segments |
-| `data/wikimeter/audio/` | Generated | 30s segments from 244 songs |
-
-### 8.1 Key Constants in finetune_mert.py
-
-```python
-CLASS_METERS = [3, 4, 5, 7, 9, 11]     # 6 classes (expanded from [3, 4, 5, 7])
-MERT_SR = 24000                          # MERT sampling rate
-CHUNK_SAMPLES = 5 * MERT_SR             # 5-second chunks for MERT input
-MAX_DURATION_S = 30                      # Maximum audio duration
-LABEL_SMOOTH_NEG = 0.1                   # Label smoothing for negative classes
-```
-
-### 8.2 Command-Line Interface
+## 8. Quick Commands
 
 ```bash
-# Basic LoRA fine-tuning on METER2800
+# Notebook-aligned default training (330M)
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800
 
-# With WIKIMETER augmentation
+# Add WIKIMETER data
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --extra-data data/wikimeter
+  --extra-data data/wikimeter
 
-# Smoke test (3 files per split)
+# Resume explicitly
 uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --limit 3
+  --resume data/meter_mert_finetuned.pt
 
-# Frozen baseline (no LoRA, only train head)
-uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --no-lora
-
-# 95M model (faster, less accurate)
-uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --model m-a-p/MERT-v1-95M
-
-# Custom hyperparameters
-uv run python scripts/training/finetune_mert.py --data-dir data/meter2800 \
-    --epochs 50 --lr 2e-4 --lora-lr 2e-5 --lora-rank 32 --lora-alpha 64 \
-    --batch-size 2 --grad-accum 16 --dropout 0.4
+# Orthogonality check with finetuned checkpoint
+uv run python scripts/training/check_mert_orthogonality.py \
+  --checkpoint data/meter_mert_finetuned.pt
 ```
 
-## 9. Experimental Plan
+## 9. Open Risks
 
-### 9.1 Immediate Next Steps
-
-1. **Run LoRA fine-tuning** with `--extra-data data/wikimeter` on MERT-v1-330M (L4 GPU)
-2. **Monitor during training**:
-   - H_norm trend: should decrease as model becomes more certain
-   - delta_P trend: should increase as model becomes more selective
-   - Correlation matrix: watch for r > 0.3 between any class pair
-3. **If correlation shows leakage**: Reduce `LABEL_SMOOTH_NEG` from 0.1 to 0.05 or 0.02
-
-### 9.2 Threshold Calibration
-
-After training:
-1. Compute per-class 99th percentile noise floor on METER2800 test split (single-label data)
-2. Use these as production thresholds for polyrhythm detection in `mert_signal.py`
-3. Any live sample with `P_top2 > noise_floor_99th` for its predicted class is flagged as polyrhythmic
-
-### 9.3 Gate Check
-
-Before enabling in the ensemble:
-1. Run orthogonality evaluation on 272 internal benchmark fixtures
-2. Compute complementarity ratio (gains / losses)
-3. Target: ratio > 1.5, agreement 65--80%
-4. If passed: integrate with initial weight W_MERT = 0.0, then tune up
-
-### 9.4 Ablation Studies
-
-| Experiment | Variable | Expected Outcome |
-|------------|----------|------------------|
-| Smoothing sweep | LABEL_SMOOTH_NEG in {0.0, 0.02, 0.05, 0.1, 0.2} | Find leakage threshold |
-| LoRA rank sweep | r in {4, 8, 16, 32} | Capacity vs. overfitting tradeoff |
-| Frozen vs. LoRA | --no-lora vs default | Quantify LoRA benefit |
-| Extra data impact | With/without --extra-data | Quantify WIKIMETER benefit |
-| Phase augmentation | With/without random crop | Quantify phase-invariance benefit |
-
-## 10. Relationship to Prior Work
-
-This experiment builds directly on the findings from Rounds 8--9 (documented in `docs/RESEARCH.md`, Sections 4.8--4.9):
-
-| Finding | Round | How Round 12 Addresses It |
-|---------|-------|---------------------------|
-| MERT frozen + MLP: 80.7% test, gate FAIL | 8 | LoRA fine-tuning to adapt MERT representations |
-| Multi-layer 95M: 79.9%, no improvement | 9 | Move to 330M (24 layers, richer representations) |
-| Best layer is 3 (early) | 8 | Learnable layer weights discover optimal combination |
-| Over-predicts 7/4 and 5/4 | 8 | More training data for these classes via WIKIMETER |
-| Softmax forces single class | 8--9 | Sigmoid enables genuine polyrhythm detection |
-| 150 train files per odd meter | -- | WIKIMETER adds 304 (5/x), 262 (7/x), 106 (9/x), 73 (11/x) |
-
-## 11. Risk Analysis
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Label leakage from smoothing | Medium | Model loses selectivity | Correlation matrix monitoring; reduce LABEL_SMOOTH_NEG |
-| WIKIMETER label noise | Medium | Incorrect labels degrade training | Wikipedia source is musicologically vetted; manual review of ambiguous entries |
-| YouTube audio quality variance | Low | Inconsistent features | MERT is pre-trained on diverse audio quality; 30s segments average out local artifacts |
-| LoRA overfitting on small dataset | Medium | Good val, poor test | Early stopping, dropout, gradient clipping, cosine LR schedule |
-| New classes (9, 11) too sparse | High | Model never learns 9/x, 11/x reliably | pos_weight compensates class imbalance; WIKIMETER provides targeted data |
-| Compute cost | -- | ~2--4 hours per training run on MPS | Smoke test with --limit 3 first; --no-lora baseline for quick iteration |
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Label noise in WIKIMETER | Slower convergence / noisy validation | Keep per-song split, inspect high-loss files |
+| Sparse 9/x and 11/x effective coverage | Weak class-wise generalization | Continue targeted data expansion and monitor AP per class |
+| Overfitting on augmented data | Good val, poor test transfer | Early stopping + dropout + checkpointed validation tracking |

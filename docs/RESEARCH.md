@@ -119,7 +119,7 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 8 | 303 | 253/303 (83%) | mert_meter (80.7%) -- gate FAIL, disabled |
 | 9 | 303 | 253/303 (83%) | Multi-layer 95M: 79.9% test (no improvement), LoRA scripts ready |
 | 12a | 303 | -- (in progress) | Multi-label sigmoid, 6 classes, WIKIMETER, LoRA 330M (val 14.7% @ ep9, crashed) |
-| 12b | 303 | -- (pending) | WIKIMETER dataset (244 songs, all meters + poly), disk checkpointing, L4 GPU |
+| 12b | 303 | -- (pending) | WIKIMETER dataset (250 songs, all meters + poly), disk checkpointing, L4 GPU |
 
 ### 2.4 Confidence Calibration
 
@@ -355,10 +355,10 @@ Despite being 5.3pp more accurate than resnet_meter on METER2800, mert_meter ach
 
 We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) classification to enable polyrhythm detection, expanded classes from 4 to 6 (adding 9/8, 11/8), and curated two external datasets from YouTube:
 
-1. **WIKIMETER** (Round 12a): 1028 segments from 82 odd-meter songs (5/x, 7/x, 9/x, 11/x only)
-2. **WIKIMETER** (Round 12b): 244 songs across all meters (74×3/4, 87×4/4, 33×5/x, 26×7/x, 30×9/x, 24×11/x, 29×poly). Song catalog in `scripts/setup/wikimeter.json` (single source of truth). Per-song duration filtering to reject album/compilation downloads
+1. **WIKIMETER** (Round 12a): odd-meter-only subset (5/x, 7/x, 9/x, 11/x + poly)
+2. **WIKIMETER** (Round 12b): full catalog with all classes, currently 250 songs. Song catalog in `scripts/setup/wikimeter.json` (single source of truth).
 
-Novel diagnostic metrics include Confidence Gap (ΔP), Normalized Shannon Entropy, inter-class correlation matrix for label leakage detection, and per-class noise floor for data-driven polyrhythm detection thresholds.
+Notebook-aligned diagnostics now focus on compact outputs: per-class accuracy/AP, macro-F1, and confidence gap.
 
 #### First Training Run: MERT-330M + WIKIMETER on Colab Pro A100
 
@@ -379,12 +379,12 @@ Novel diagnostic metrics include Confidence Gap (ΔP), Normalized Shannon Entrop
 - **Breakthrough at epoch 6**: val acc jumped from 0% to 9.8% after 5 epochs of zero val. This is characteristic of pos_weight with heavy class imbalance — the model initially learns to predict only rare classes, then suddenly "clicks" on common classes.
 - **Val oscillation**: 0→0→0→0→0→9.8→4.6→2.5→14.7→6.7%. Typical post-breakthrough behavior with aggressive pos_weight.
 - **LR discovery**: Training was accidentally run with 95M learning rates (HEAD_LR=5e-4, LORA_LR=1e-4) on the 330M model. Despite being "too high", it worked — the model showed clear learning. Subsequent runs use per-model LR auto-scaling.
-- **Session crashed at epoch 10**: Colab runtime disconnected, checkpoint was only in RAM → lost. This led to adding persistent disk checkpointing after each best-val epoch.
+- **Session crashed at epoch 10**: Colab runtime disconnected, checkpoint was only in RAM → lost. This led to adding persistent disk checkpointing every epoch.
 
 **Infrastructure improvements** from this run:
-- Checkpoint saved to disk (`torch.save`) after each new best val — crash-safe
+- Checkpoint saved to disk (`torch.save`) every epoch — crash-safe
 - Default model changed to 330M (95M showed 0% val for all epochs on T4)
-- WIKIMETER replaces WIKIMETER — balanced across all meter classes, includes polyrhythmic songs
+- WIKIMETER (Round 12b) replaces the odd-meter-only subset from Round 12a — balanced across all meter classes, includes polyrhythmic songs
 
 Full architecture and diagnostic details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
@@ -471,7 +471,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **MERT-330M LoRA multi-label results** -- First run (WIKIMETER) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. Key metrics to evaluate: mAP, confidence gap, entropy diagnostics, noise floor thresholds. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+1. **MERT-330M LoRA multi-label results** -- First run (WIKIMETER) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. Key metrics to evaluate: per-class AP/accuracy, macro-F1, confidence gap. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
 2. **MERT confidence gating** -- Only use mert_meter predictions when softmax confidence exceeds 0.8. Could eliminate many false 7/4 and 5/4 predictions while preserving gains on classical 3/4.
 

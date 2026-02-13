@@ -19,7 +19,6 @@ Usage:
 import argparse
 import sys
 import time
-import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -27,7 +26,6 @@ import librosa
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -58,26 +56,26 @@ MODEL_CONFIGS = {
 class MERTAudioDataset(Dataset):
     """Dataset that loads audio files and returns resampled+cropped waveforms.
 
-    Supports multi-label with soft weights: each entry has a dict {meter: weight}.
-    Returns soft label vector for BCEWithLogitsLoss.
+    Supports multi-label class lists: each entry has meters like [3] or [3, 4].
+    Returns a smoothed multi-hot label vector for BCEWithLogitsLoss.
     """
 
     def __init__(
         self,
-        entries: list[tuple[Path, dict[int, float]]],
+        entries: list[tuple[Path, list[int]]],
         augment: bool = False,
         noise_std: float = 0.01,
     ):
-        self.entries: list[tuple[Path, dict[int, float]]] = []
+        self.entries: list[tuple[Path, list[int]]] = []
         self.augment = augment
         self.noise_std = noise_std
 
         skipped = 0
-        for audio_path, meter_weights in entries:
+        for audio_path, meters in entries:
             if not audio_path.exists():
                 skipped += 1
                 continue
-            valid = {m: w for m, w in meter_weights.items() if m in METER_TO_IDX}
+            valid = [m for m in meters if m in METER_TO_IDX]
             if valid:
                 self.entries.append((audio_path, valid))
 
@@ -88,11 +86,10 @@ class MERTAudioDataset(Dataset):
         return len(self.entries)
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
-        path, meter_weights = self.entries[idx]
-        # Soft label: per-meter weight from data, label smoothing on negatives
+        path, meters = self.entries[idx]
         label = np.full(len(CLASS_METERS), LABEL_SMOOTH_NEG, dtype=np.float32)
-        for m, w in meter_weights.items():
-            label[METER_TO_IDX[m]] = w
+        for m in meters:
+            label[METER_TO_IDX[m]] = 1.0
 
         try:
             audio, _ = librosa.load(str(path), sr=MERT_SR, mono=True)
@@ -229,8 +226,8 @@ def mert_forward_pool(
 # ---------------------------------------------------------------------------
 
 
-def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, dict[int, float]]] | None:
-    """Load entries for a specific split. Returns (path, {meter: weight}) tuples."""
+def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, list[int]]] | None:
+    """Load entries for a specific split. Returns (path, [meter]) tuples."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from scripts.utils import parse_label_file
 
@@ -239,19 +236,18 @@ def load_split_entries(data_dir: Path, split: str) -> list[tuple[Path, dict[int,
         label_path = data_dir / f"data_{split}_4_classes{ext}"
         if label_path.exists():
             raw = parse_label_file(label_path, data_dir, valid_meters=valid_meters)
-            # Convert single-label to dict format: meter → 1.0
-            entries = [(p, {m: 1.0}) for p, m in raw]
+            entries = [(p, [m]) for p, m in raw]
             print(f"  Loaded {len(entries)} entries from {label_path.name}")
             return entries
     return None
 
 
-def compute_pos_weights(entries: list[tuple[Path, dict[int, float]]], num_classes: int) -> torch.Tensor:
+def compute_pos_weights(entries: list[tuple[Path, list[int]]], num_classes: int) -> torch.Tensor:
     """Compute pos_weight for BCEWithLogitsLoss: ratio of negatives/positives per class."""
     pos_counts = np.zeros(num_classes, dtype=np.float32)
-    for _, meter_weights in entries:
-        for m, w in meter_weights.items():
-            if m in METER_TO_IDX and w > 0.5:
+    for _, meters in entries:
+        for m in meters:
+            if m in METER_TO_IDX:
                 pos_counts[METER_TO_IDX[m]] += 1
     total = len(entries)
     neg_counts = total - pos_counts
@@ -378,161 +374,51 @@ def print_eval_metrics(
     labels_idx: list[int], preds_idx: list[int],
     probs: np.ndarray, labels_multihot: np.ndarray,
 ) -> None:
-    """Print confusion matrix, mAP, Macro-F1, and co-occurrence analysis."""
+    """Print compact multi-label metrics (notebook-aligned)."""
     from sklearn.metrics import average_precision_score, f1_score
 
-    meter_names = [f"{m}/x" for m in CLASS_METERS]
     num_classes = len(CLASS_METERS)
-
-    # --- Confusion Matrix (argmax-based, backward compatible) ---
-    cm = confusion_matrix(labels_idx, preds_idx, labels=list(range(num_classes)))
-    print("\nConfusion Matrix (primary class, argmax):")
-    header = "          " + "  ".join(f"{n:>6s}" for n in meter_names)
-    print(header)
-    print("          " + "-" * (8 * num_classes))
-    for i, row in enumerate(cm):
-        row_str = "  ".join(f"{v:6d}" for v in row)
-        row_total = row.sum()
-        row_acc = row[i] / row_total * 100 if row_total > 0 else 0.0
-        print(f"  {meter_names[i]:>6s} | {row_str}   ({row_acc:5.1f}%)")
-
-    print("\nPer-class accuracy:")
-    for i, m in enumerate(CLASS_METERS):
-        class_total = cm[i].sum()
-        class_correct = cm[i][i]
-        acc = class_correct / class_total * 100 if class_total > 0 else 0.0
-        print(f"  {m}/x: {class_correct}/{class_total} = {acc:.1f}%")
-
-    # --- mAP (mean Average Precision) ---
-    # Binarize labels: positive = above label smoothing threshold
     labels_binary = (labels_multihot > 0.5).astype(np.float32)
-    print("\nMulti-label metrics:")
-    per_class_ap = []
+    print(f"\n{'Meter':>6s}  {'Correct':>7s}  {'Total':>5s}  {'Acc':>6s}  {'AP':>6s}")
+    print("-" * 40)
+    total_correct = total_count = 0
+    aps = []
+    labels_arr = np.array(labels_idx)
+    preds_arr = np.array(preds_idx)
+
     for i, m in enumerate(CLASS_METERS):
+        mask = labels_arr == i
+        n = int(mask.sum())
+        if n == 0:
+            print(f"{m:>4d}/x  {'—':>7s}  {0:>5d}  {'—':>6s}  {'—':>6s}")
+            continue
+        c = int((preds_arr[mask] == i).sum())
+        acc = c / n
+        total_correct += c
+        total_count += n
+        ap_str = "—"
         if labels_binary[:, i].sum() > 0:
             ap = average_precision_score(labels_binary[:, i], probs[:, i])
-            per_class_ap.append(ap)
-            print(f"  AP({m}/x): {ap:.3f}")
+            aps.append(ap)
+            ap_str = f"{ap:.3f}"
+        print(f"{m:>4d}/x  {c:>5d}/{n:<5d}       {acc:>5.1%}  {ap_str:>6s}")
+
+    if total_count:
+        print("-" * 40)
+        if aps:
+            print(f"{'Total':>6s}  {total_correct:>5d}/{total_count:<5d}       {total_correct/total_count:>5.1%}  mAP={np.mean(aps):.3f}")
         else:
-            print(f"  AP({m}/x): n/a (no positive samples)")
-    if per_class_ap:
-        print(f"  mAP: {np.mean(per_class_ap):.3f}")
+            print(f"{'Total':>6s}  {total_correct:>5d}/{total_count:<5d}       {total_correct/total_count:>5.1%}")
 
-    # --- Macro-F1 (threshold=0.5 on sigmoid) ---
     preds_binary = (probs > 0.5).astype(np.int32)
-    cols_with_data = [i for i in range(num_classes) if labels_binary[:, i].sum() > 0]
-    if cols_with_data:
-        macro_f1 = f1_score(
-            labels_binary[:, cols_with_data],
-            preds_binary[:, cols_with_data],
-            average="macro", zero_division=0,
-        )
-        print(f"  Macro-F1: {macro_f1:.3f}")
+    cols = [i for i in range(num_classes) if labels_binary[:, i].sum() > 0]
+    if cols:
+        mf1 = f1_score(labels_binary[:, cols], preds_binary[:, cols], average="macro", zero_division=0)
+        print(f"Macro-F1: {mf1:.3f}")
 
-    # --- Co-occurrence analysis (polyrhythm proxy) ---
-    COOCCURRENCE_THRESH = 0.4
-    multi_active = (probs > COOCCURRENCE_THRESH).sum(axis=1)  # classes above threshold per sample
-    n_poly = int((multi_active >= 2).sum())
-    n_total = len(probs)
-    print(f"\nCo-occurrence analysis (sigmoid > {COOCCURRENCE_THRESH}):")
-    print(f"  Samples with 2+ active classes: {n_poly}/{n_total} ({n_poly/max(n_total,1):.1%})")
-
-    if n_poly > 0:
-        # Show which class pairs co-occur most
-        poly_mask = multi_active >= 2
-        poly_probs = probs[poly_mask]
-        poly_active = poly_probs > COOCCURRENCE_THRESH
-        pair_counts: dict[str, int] = {}
-        for row in poly_active:
-            active_classes = [CLASS_METERS[i] for i in range(num_classes) if row[i]]
-            if len(active_classes) >= 2:
-                pair = "+".join(str(m) for m in sorted(active_classes))
-                pair_counts[pair] = pair_counts.get(pair, 0) + 1
-        for pair, count in sorted(pair_counts.items(), key=lambda x: -x[1])[:5]:
-            print(f"    {pair}: {count} samples")
-
-    # --- Confidence Gap (ΔP = P_top1 - P_top2) ---
-    # On single-label data, high gap = model is selective (good).
-    # Dropping gap = model is "leaking" confidence across classes.
-    true_primary = np.array(labels_idx)
-    sorted_probs = np.sort(probs, axis=1)[:, ::-1]  # descending per sample
-    p_top1 = sorted_probs[:, 0]
-    p_top2 = sorted_probs[:, 1] if num_classes >= 2 else np.zeros_like(p_top1)
-    gaps = p_top1 - p_top2
-
-    print(f"\nConfidence Gap (P_top1 - P_top2):")
-    print(f"  Mean ΔP:   {gaps.mean():.3f}")
-    print(f"  Median ΔP: {np.median(gaps):.3f}")
-    print(f"  Std ΔP:    {gaps.std():.3f}")
-    # Per-class breakdown: gap when model predicts each class
-    primary_pred = probs.argmax(axis=1)
-    for i, m in enumerate(CLASS_METERS):
-        mask = primary_pred == i
-        if mask.sum() > 0:
-            print(f"  ΔP for pred={m}/x: {gaps[mask].mean():.3f} (n={mask.sum()})")
-
-    # --- Normalized Shannon Entropy ---
-    # H_norm ∈ [0, 1]: 0 = model certain of one class, 1 = uniform across all.
-    # Key diagnostic:
-    #   High H + low ΔP = label leakage (model confused, spreading probability)
-    #   Low H  + low ΔP = polyrhythm candidate (model certain of 2 classes)
-    eps = 1e-7
-    p_clamped = np.clip(probs, eps, 1 - eps)
-    per_sample_H = -(p_clamped * np.log2(p_clamped) + (1 - p_clamped) * np.log2(1 - p_clamped)).sum(axis=1)
-    H_max = num_classes * np.log2(2)  # max entropy for C independent binary sigmoids
-    H_norm = per_sample_H / H_max
-
-    print(f"\nNormalized Shannon Entropy (H_norm ∈ [0,1]):")
-    print(f"  Mean H_norm:   {H_norm.mean():.3f}")
-    print(f"  Median H_norm: {np.median(H_norm):.3f}")
-    # Per-class breakdown
-    for i, m in enumerate(CLASS_METERS):
-        mask = true_primary == i
-        if mask.sum() > 0:
-            print(f"  H_norm for true={m}/x: {H_norm[mask].mean():.3f} (n={mask.sum()})")
-
-    # Diagnostic quadrants: H vs ΔP
-    low_gap = gaps < np.median(gaps)
-    high_H = H_norm > np.median(H_norm)
-    n_leakage = int((low_gap & high_H).sum())      # confused model
-    n_poly_candidate = int((low_gap & ~high_H).sum())  # confident in 2+ classes
-    print(f"  Diagnostic (below-median ΔP samples):")
-    print(f"    High H (leakage risk): {n_leakage}")
-    print(f"    Low H  (poly candidate): {n_poly_candidate}")
-
-    # --- Inter-class Correlation Matrix ---
-    # On single-label data, correlations between classes should be near-zero
-    # or negative. Positive correlation = label leakage.
-    print(f"\nInter-class Sigmoid Correlation (top pairs):")
-    corr = np.corrcoef(probs.T)  # (num_classes, num_classes)
-    pairs: list[tuple[float, str]] = []
-    for i in range(num_classes):
-        for j in range(i + 1, num_classes):
-            pairs.append((corr[i, j], f"{CLASS_METERS[i]}/x ↔ {CLASS_METERS[j]}/x"))
-    pairs.sort(key=lambda x: -abs(x[0]))
-    for r, name in pairs[:6]:
-        flag = " ⚠ LEAKAGE" if r > 0.3 else ""
-        print(f"  {name}: r={r:+.3f}{flag}")
-
-    # --- Secondary Activation Noise Floor ---
-    # On single-label data, P_top2 should be low (just model noise).
-    # The 95th/99th percentile of P_top2 gives an empirical threshold:
-    # if a live sample's P_top2 exceeds this, it's likely a real polyrhythm.
-    print(f"\nSecondary Activation Noise Floor (P_top2 on single-label data):")
-    print(f"  Mean P_top2:   {p_top2.mean():.4f}")
-    print(f"  Median P_top2: {np.median(p_top2):.4f}")
-    pcts = [90, 95, 99]
-    for pct in pcts:
-        val = np.percentile(p_top2, pct)
-        print(f"  {pct}th percentile: {val:.4f}")
-
-    # Per-class noise floor: P_top2 when TRUE class is each meter
-    print("  Per-class noise floor (P_top2 by true class, 95th pct):")
-    for i, m in enumerate(CLASS_METERS):
-        mask = true_primary == i
-        if mask.sum() >= 5:  # need enough samples for percentile
-            p95 = np.percentile(p_top2[mask], 95)
-            print(f"    True={m}/x: P95={p95:.4f}, mean={p_top2[mask].mean():.4f} (n={mask.sum()})")
+    sorted_p = np.sort(probs, axis=1)[:, ::-1]
+    gap = sorted_p[:, 0] - sorted_p[:, 1]
+    print(f"Confidence gap: mean={gap.mean():.3f}, median={np.median(gap):.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -543,10 +429,10 @@ def print_eval_metrics(
 def select_device(requested: str) -> torch.device:
     if requested != "auto":
         return torch.device(requested)
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
     if torch.cuda.is_available():
         return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
     return torch.device("cpu")
 
 
@@ -556,7 +442,7 @@ def main():
     parser.add_argument("--checkpoint", type=Path, default=Path("data/meter_mert_finetuned.pt"))
     parser.add_argument("--model", type=str, default="m-a-p/MERT-v1-330M",
                         choices=list(MODEL_CONFIGS.keys()))
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-accum", type=int, default=8,
                         help="Gradient accumulation steps (effective batch = batch-size * grad-accum)")
@@ -624,11 +510,8 @@ def main():
         print("ERROR: Could not find train/val/test split files")
         sys.exit(1)
 
-    # Load extra data directories with per-song stratified val split
-    # Supports three meter column formats:
-    #   "3"       → {3: 1.0}          (single label)
-    #   "3,4"     → {3: 1.0, 4: 1.0}  (multi-label, hard)
-    #   "3:0.9,4:0.8" → {3: 0.9, 4: 0.8}  (soft labels)
+    # Load extra data directories with per-song stratified val split.
+    # Notebook-aligned behavior: parse meter classes, ignore soft weights.
     if args.extra_data:
         import random
         import re
@@ -648,7 +531,7 @@ def main():
             )
             for tab_file in tab_files:
                 import csv as _csv
-                extra_entries: list[tuple[Path, dict[int, float]]] = []
+                extra_entries: list[tuple[Path, list[int]]] = []
                 with open(tab_file, newline="", encoding="utf-8") as fh:
                     reader = _csv.DictReader(fh, delimiter="\t")
                     for row in reader:
@@ -656,30 +539,29 @@ def main():
                         raw_meter = row.get("meter", "").strip().strip('"')
                         if not raw_fname or not raw_meter:
                             continue
-                        meter_weights: dict[int, float] = {}
+                        meters: list[int] = []
                         try:
                             for part in raw_meter.split(","):
                                 part = part.strip()
                                 if ":" in part:
-                                    m_str, w_str = part.split(":", 1)
-                                    m, w = int(m_str), float(w_str)
+                                    m = int(part.split(":", 1)[0])
                                 else:
-                                    m, w = int(part), 1.0
+                                    m = int(part)
                                 if m in valid_meters:
-                                    meter_weights[m] = w
+                                    meters.append(m)
                         except ValueError:
                             continue
-                        if not meter_weights:
+                        if not meters:
                             continue
                         audio_path = _resolve(raw_fname, extra_dir)
                         if audio_path is not None:
-                            extra_entries.append((audio_path, meter_weights))
+                            extra_entries.append((audio_path, meters))
 
                 if not extra_entries:
                     continue
 
                 # Per-song stratified split (no segment leakage)
-                song_segments: dict[str, list[tuple[Path, dict[int, float]]]] = defaultdict(list)
+                song_segments: dict[str, list[tuple[Path, list[int]]]] = defaultdict(list)
                 for path, meters in extra_entries:
                     song_stem = re.sub(r"_seg\d+$", "", path.stem)
                     song_segments[song_stem].append((path, meters))
@@ -687,7 +569,7 @@ def main():
                 # Group songs by primary meter for stratified split
                 meter_songs: dict[int, list[str]] = defaultdict(list)
                 for song_stem, segs in song_segments.items():
-                    primary = max(segs[0][1], key=segs[0][1].get)
+                    primary = segs[0][1][0]
                     meter_songs[primary].append(song_stem)
 
                 # Pick ~val_ratio songs per meter for val
@@ -718,8 +600,8 @@ def main():
     # Show distribution
     all_entries = train_entries + val_entries + test_entries
     meter_counts: Counter = Counter()
-    for _, meter_weights in all_entries:
-        for m in meter_weights:
+    for _, meters in all_entries:
+        for m in meters:
             meter_counts[m] += 1
     print(f"\nTotal: {len(all_entries)} entries")
     for m in CLASS_METERS:
@@ -809,20 +691,21 @@ def main():
 
     optimizer = torch.optim.AdamW(param_groups, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", patience=5, factor=0.5,
+        optimizer, mode="max", patience=5, factor=0.5, min_lr=1e-6,
     )
 
-    # Resume from checkpoint
+    # Resume from checkpoint (explicit --resume wins; else auto-resume from --checkpoint)
     start_epoch = 1
-    best_val_acc = 0.0
+    best_val_acc = -1.0
     best_val_loss = float("inf")
-    best_head_state = None
-    best_lora_state = None
+    checkpoint_path = args.checkpoint.resolve()
+    resume_path = args.resume.resolve() if args.resume else checkpoint_path
 
-    if args.resume and args.resume.exists():
-        print(f"\nResuming from {args.resume}")
-        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        head.load_state_dict(ckpt["head_state_dict"])
+    if resume_path.exists():
+        print(f"\nResuming from {resume_path}")
+        ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        if "head_state_dict" in ckpt:
+            head.load_state_dict(ckpt["head_state_dict"])
         if use_lora and ckpt.get("lora_state_dict"):
             for name, param_data in ckpt["lora_state_dict"].items():
                 parts = name.split(".")
@@ -835,11 +718,11 @@ def main():
         if "scheduler_state_dict" in ckpt:
             scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
-        best_val_acc = ckpt.get("val_accuracy", 0.0)
+        best_val_acc = ckpt.get("val_accuracy", -1.0)
         best_val_loss = ckpt.get("val_loss", float("inf"))
-        print(f"  Resuming from epoch {start_epoch}, best val acc: {best_val_acc:.1%}")
+        print(f"  Epoch {start_epoch}, best val: {best_val_acc:.1%}")
 
-    # Training loop
+    # Training loop (notebook-aligned)
     patience_counter = 0
 
     print(f"\n{'Epoch':>5s}  {'TrainLoss':>10s}  {'TrainAcc':>9s}  "
@@ -871,20 +754,10 @@ def main():
             best_val_acc = val_acc
             best_val_loss = val_loss
             patience_counter = 0
-            best_head_state = {k: v.cpu().clone() for k, v in head.state_dict().items()}
-            if use_lora:
-                lora_sd = {}
-                for name, param in mert_model.named_parameters():
-                    if param.requires_grad:
-                        lora_sd[name] = param.cpu().clone()
-                best_lora_state = lora_sd
         else:
             patience_counter += 1
-            if patience_counter >= args.patience:
-                print(f"\nEarly stopping at epoch {epoch}")
-                break
 
-        # Save checkpoint every epoch (for resume)
+        # Save checkpoint every epoch
         ckpt_data = {
             "head_state_dict": {k: v.cpu().clone() for k, v in head.state_dict().items()},
             "lora_state_dict": {n: p.cpu().clone() for n, p in mert_model.named_parameters() if p.requires_grad} if use_lora else None,
@@ -905,34 +778,31 @@ def main():
             "lora_alpha": args.lora_alpha if use_lora else 0,
             "model_type": "MERTFineTuned",
         }
-        torch.save(ckpt_data, args.checkpoint.resolve())
+        torch.save(ckpt_data, checkpoint_path)
 
-    # Show learned layer weights
-    if best_head_state is not None:
-        layer_logits = best_head_state.get("layer_logits")
-        if layer_logits is not None:
-            weights = torch.softmax(layer_logits, dim=0)
-            print(f"\nLearned layer weights:")
-            for i, w in enumerate(weights.tolist()):
-                bar = "#" * int(w * 100)
-                print(f"  Layer {i:2d}: {w:.4f} {bar}")
+        if patience_counter >= args.patience:
+            print(f"\nEarly stopping at epoch {epoch}")
+            break
 
     # Test evaluation
     print("\n" + "=" * 60)
-    print("Test set evaluation (best model by val accuracy)")
+    print("Test set evaluation")
     print("=" * 60)
 
-    if best_head_state is not None:
-        head.load_state_dict(best_head_state)
-        head = head.to(device)
-    if best_lora_state is not None:
-        for name, param_data in best_lora_state.items():
-            # Navigate to the parameter by name
-            parts = name.split(".")
-            obj = mert_model
-            for part in parts[:-1]:
-                obj = getattr(obj, part)
-            getattr(obj, parts[-1]).data.copy_(param_data.to(device))
+    # Notebook behavior: evaluate from last saved checkpoint.
+    if checkpoint_path.exists():
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        if "head_state_dict" in ckpt:
+            head.load_state_dict(ckpt["head_state_dict"])
+            head = head.to(device)
+        if use_lora and ckpt.get("lora_state_dict"):
+            for name, param_data in ckpt["lora_state_dict"].items():
+                parts = name.split(".")
+                obj = mert_model
+                for part in parts[:-1]:
+                    obj = getattr(obj, part)
+                getattr(obj, parts[-1]).data.copy_(param_data.to(device))
+        print(f"Loaded: epoch {ckpt.get('epoch', '?')}, val {ckpt.get('val_accuracy', 0):.1%}")
 
     test_loss, test_acc, test_labels, test_preds, test_probs, test_labels_mh = evaluate(
         mert_model, head, processor, test_loader, criterion,
@@ -944,30 +814,36 @@ def main():
 
     print_eval_metrics(test_labels, test_preds, test_probs, test_labels_mh)
 
-    # Save final best checkpoint with test results
-    checkpoint_path = args.checkpoint.resolve()
+    # Persist test accuracy into checkpoint.
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    if checkpoint_path.exists():
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        ckpt["test_accuracy"] = test_acc
+        torch.save(ckpt, checkpoint_path)
+    else:
+        torch.save(
+            {
+                "head_state_dict": {k: v.cpu().clone() for k, v in head.state_dict().items()},
+                "lora_state_dict": {n: p.cpu().clone() for n, p in mert_model.named_parameters() if p.requires_grad} if use_lora else None,
+                "class_map": IDX_TO_METER,
+                "model_name": model_name,
+                "num_layers": num_layers,
+                "hidden_dim": hidden_dim,
+                "pooled_dim": pooled_dim,
+                "head_dim": args.head_dim,
+                "num_classes": len(CLASS_METERS),
+                "dropout": args.dropout,
+                "val_accuracy": best_val_acc,
+                "test_accuracy": test_acc,
+                "epoch": max(start_epoch - 1, 0),
+                "lora_rank": args.lora_rank if use_lora else 0,
+                "lora_alpha": args.lora_alpha if use_lora else 0,
+                "model_type": "MERTFineTuned",
+            },
+            checkpoint_path,
+        )
 
-    checkpoint = {
-        "head_state_dict": best_head_state if best_head_state else head.state_dict(),
-        "lora_state_dict": best_lora_state,
-        "class_map": IDX_TO_METER,
-        "model_name": model_name,
-        "num_layers": num_layers,
-        "hidden_dim": hidden_dim,
-        "pooled_dim": pooled_dim,
-        "head_dim": args.head_dim,
-        "num_classes": len(CLASS_METERS),
-        "dropout": args.dropout,
-        "val_accuracy": best_val_acc,
-        "test_accuracy": test_acc,
-        "lora_rank": args.lora_rank if use_lora else 0,
-        "lora_alpha": args.lora_alpha if use_lora else 0,
-        "model_type": "MERTFineTuned",
-    }
-
-    torch.save(checkpoint, checkpoint_path)
-    print(f"\nBest checkpoint saved to {checkpoint_path}")
+    print(f"\nCheckpoint saved to {checkpoint_path}")
     print(f"  Model: {model_name}")
     print(f"  LoRA: {'rank=' + str(args.lora_rank) if use_lora else 'none'}")
     print(f"  Val accuracy:  {best_val_acc:.1%}")
