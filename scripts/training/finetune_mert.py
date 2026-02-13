@@ -263,18 +263,31 @@ def _detect_delimiter(path: Path) -> str:
     return "\t" if "\t" in first_line else ","
 
 
-def _format_per_class_primary_accuracy(labels_idx: list[int], preds_idx: list[int]) -> str:
+def _format_per_class_watchdog(
+    labels_idx: list[int],
+    preds_idx: list[int],
+    probs: np.ndarray,
+    labels_multihot: np.ndarray,
+) -> str:
+    from sklearn.metrics import average_precision_score
+
     labels_arr = np.array(labels_idx)
     preds_arr = np.array(preds_idx)
+    labels_binary = (labels_multihot > 0.5).astype(np.float32)
+
     chunks: list[str] = []
     for idx, meter in enumerate(CLASS_METERS):
         mask = labels_arr == idx
-        total = int(mask.sum())
-        if total == 0:
-            chunks.append(f"{meter}/x=—")
+        support = int(mask.sum())
+        if support == 0:
+            chunks.append(f"{meter}/x n=0 acc=— ap=—")
             continue
         correct = int((preds_arr[mask] == idx).sum())
-        chunks.append(f"{meter}/x={correct}/{total} ({correct/total:.0%})")
+        acc = correct / support
+        ap_text = "—"
+        if labels_binary[:, idx].sum() > 0:
+            ap_text = f"{average_precision_score(labels_binary[:, idx], probs[:, idx]):.3f}"
+        chunks.append(f"{meter}/x n={support} acc={acc:.0%} ap={ap_text}")
     return " | ".join(chunks)
 
 
@@ -465,6 +478,8 @@ def main():
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=2,
+                        help="DataLoader workers per split (default: 2)")
     parser.add_argument("--grad-accum", type=int, default=8,
                         help="Gradient accumulation steps (effective batch = batch-size * grad-accum)")
     parser.add_argument("--lr", type=float, default=None,
@@ -687,12 +702,30 @@ def main():
     test_ds = MERTAudioDataset(test_entries, augment=False)
     print(f"\nDatasets: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test", flush=True)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              collate_fn=simple_collate)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False,
-                            collate_fn=simple_collate)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False,
-                             collate_fn=simple_collate)
+    loader_workers = max(0, args.num_workers)
+    loader_kwargs: dict = {
+        "num_workers": loader_workers,
+        "pin_memory": device.type == "cuda",
+    }
+    if loader_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+    print(
+        f"DataLoader: workers={loader_workers}, pin_memory={loader_kwargs['pin_memory']}, "
+        f"persistent_workers={loader_kwargs.get('persistent_workers', False)}"
+    )
+
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch_size, shuffle=True,
+        collate_fn=simple_collate, **loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=args.batch_size, shuffle=False,
+        collate_fn=simple_collate, **loader_kwargs,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=args.batch_size, shuffle=False,
+        collate_fn=simple_collate, **loader_kwargs,
+    )
 
     # Pos weights for BCEWithLogitsLoss (sigmoid multi-label)
     pos_weights = compute_pos_weights(
@@ -765,7 +798,7 @@ def main():
             mert_model, head, processor, train_loader, criterion, optimizer,
             device, num_layers, hidden_dim, args.grad_accum, use_lora,
         )
-        val_loss, val_acc, val_labels_idx, val_preds_idx, _, _ = evaluate(
+        val_loss, val_acc, val_labels_idx, val_preds_idx, val_probs, val_labels_mh = evaluate(
             mert_model, head, processor, val_loader, criterion,
             device, num_layers, hidden_dim,
         )
@@ -778,7 +811,11 @@ def main():
         marker = " *" if improved else ""
         print(f"{epoch:5d}  {train_loss:10.4f}  {train_acc:8.1%}  "
               f"{val_loss:10.4f}  {val_acc:8.1%}  {current_lr:10.1e}  {elapsed:5.0f}s{marker}", flush=True)
-        print(f"        Val class acc: {_format_per_class_primary_accuracy(val_labels_idx, val_preds_idx)}", flush=True)
+        print(
+            "        Val class: "
+            + _format_per_class_watchdog(val_labels_idx, val_preds_idx, val_probs, val_labels_mh),
+            flush=True,
+        )
 
         if improved:
             best_val_acc = val_acc

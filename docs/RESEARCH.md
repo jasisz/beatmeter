@@ -360,6 +360,8 @@ We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) class
 
 Notebook-aligned diagnostics now focus on compact outputs: per-class accuracy/AP, macro-F1, and confidence gap.
 
+**Release gate**: classes **9/x**, **11/x**, and **poly** are currently **experimental** — there is no dedicated holdout test set for these classes yet.
+
 #### First Training Run: MERT-330M + WIKIMETER on Colab Pro A100
 
 | Epoch | Train Loss | Train Acc | Val Loss | Val Acc | Time |
