@@ -699,6 +699,9 @@ def main():
     best_val_acc = -1.0
     best_val_loss = float("inf")
     checkpoint_path = args.checkpoint.resolve()
+    best_checkpoint_path = checkpoint_path.with_name(
+        f"{checkpoint_path.stem}.best{checkpoint_path.suffix}"
+    )
     resume_path = args.resume.resolve() if args.resume else checkpoint_path
 
     if resume_path.exists():
@@ -779,6 +782,8 @@ def main():
             "model_type": "MERTFineTuned",
         }
         torch.save(ckpt_data, checkpoint_path)
+        if improved:
+            torch.save(ckpt_data, best_checkpoint_path)
 
         if patience_counter >= args.patience:
             print(f"\nEarly stopping at epoch {epoch}")
@@ -789,9 +794,10 @@ def main():
     print("Test set evaluation")
     print("=" * 60)
 
-    # Notebook behavior: evaluate from last saved checkpoint.
-    if checkpoint_path.exists():
-        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    # Evaluate from best checkpoint when available.
+    eval_ckpt_path = best_checkpoint_path if best_checkpoint_path.exists() else checkpoint_path
+    if eval_ckpt_path.exists():
+        ckpt = torch.load(eval_ckpt_path, map_location=device, weights_only=False)
         if "head_state_dict" in ckpt:
             head.load_state_dict(ckpt["head_state_dict"])
             head = head.to(device)
@@ -802,7 +808,10 @@ def main():
                 for part in parts[:-1]:
                     obj = getattr(obj, part)
                 getattr(obj, parts[-1]).data.copy_(param_data.to(device))
-        print(f"Loaded: epoch {ckpt.get('epoch', '?')}, val {ckpt.get('val_accuracy', 0):.1%}")
+        print(
+            f"Loaded: {eval_ckpt_path.name} "
+            f"(epoch {ckpt.get('epoch', '?')}, val {ckpt.get('val_accuracy', 0):.1%})"
+        )
 
     test_loss, test_acc, test_labels, test_preds, test_probs, test_labels_mh = evaluate(
         mert_model, head, processor, test_loader, criterion,
@@ -814,7 +823,7 @@ def main():
 
     print_eval_metrics(test_labels, test_preds, test_probs, test_labels_mh)
 
-    # Persist test accuracy into checkpoint.
+    # Persist test accuracy into latest and best checkpoints (if available).
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     if checkpoint_path.exists():
         ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -842,8 +851,13 @@ def main():
             },
             checkpoint_path,
         )
+    if best_checkpoint_path.exists():
+        best_ckpt = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
+        best_ckpt["test_accuracy"] = test_acc
+        torch.save(best_ckpt, best_checkpoint_path)
 
     print(f"\nCheckpoint saved to {checkpoint_path}")
+    print(f"Best checkpoint saved to {best_checkpoint_path}")
     print(f"  Model: {model_name}")
     print(f"  LoRA: {'rank=' + str(args.lora_rank) if use_lora else 'none'}")
     print(f"  Val accuracy:  {best_val_acc:.1%}")
