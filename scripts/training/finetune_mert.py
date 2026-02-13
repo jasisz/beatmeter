@@ -257,6 +257,27 @@ def compute_pos_weights(entries: list[tuple[Path, list[int]]], num_classes: int)
     return torch.tensor(weights, dtype=torch.float32)
 
 
+def _detect_delimiter(path: Path) -> str:
+    with open(path, "r", encoding="utf-8") as fh:
+        first_line = fh.readline()
+    return "\t" if "\t" in first_line else ","
+
+
+def _format_per_class_primary_accuracy(labels_idx: list[int], preds_idx: list[int]) -> str:
+    labels_arr = np.array(labels_idx)
+    preds_arr = np.array(preds_idx)
+    chunks: list[str] = []
+    for idx, meter in enumerate(CLASS_METERS):
+        mask = labels_arr == idx
+        total = int(mask.sum())
+        if total == 0:
+            chunks.append(f"{meter}/x=—")
+            continue
+        correct = int((preds_arr[mask] == idx).sum())
+        chunks.append(f"{meter}/x={correct}/{total} ({correct/total:.0%})")
+    return " | ".join(chunks)
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -532,8 +553,9 @@ def main():
             for tab_file in tab_files:
                 import csv as _csv
                 extra_entries: list[tuple[Path, list[int]]] = []
+                delimiter = _detect_delimiter(tab_file)
                 with open(tab_file, newline="", encoding="utf-8") as fh:
-                    reader = _csv.DictReader(fh, delimiter="\t")
+                    reader = _csv.DictReader(fh, delimiter=delimiter)
                     for row in reader:
                         raw_fname = row.get("filename", "").strip().strip('"')
                         raw_meter = row.get("meter", "").strip().strip('"')
@@ -576,7 +598,11 @@ def main():
                 val_songs: set[str] = set()
                 for meter, songs in sorted(meter_songs.items()):
                     random.shuffle(songs)
-                    n_val = max(1, int(len(songs) * args.extra_val_ratio))
+                    if len(songs) <= 1:
+                        n_val = 0
+                    else:
+                        n_val = max(1, int(len(songs) * args.extra_val_ratio))
+                        n_val = min(n_val, len(songs) - 1)  # keep at least one song in train
                     val_songs.update(songs[:n_val])
 
                 extra_train, extra_val = [], []
@@ -739,7 +765,7 @@ def main():
             mert_model, head, processor, train_loader, criterion, optimizer,
             device, num_layers, hidden_dim, args.grad_accum, use_lora,
         )
-        val_loss, val_acc, _, _, _, _ = evaluate(
+        val_loss, val_acc, val_labels_idx, val_preds_idx, _, _ = evaluate(
             mert_model, head, processor, val_loader, criterion,
             device, num_layers, hidden_dim,
         )
@@ -752,6 +778,7 @@ def main():
         marker = " *" if improved else ""
         print(f"{epoch:5d}  {train_loss:10.4f}  {train_acc:8.1%}  "
               f"{val_loss:10.4f}  {val_acc:8.1%}  {current_lr:10.1e}  {elapsed:5.0f}s{marker}", flush=True)
+        print(f"        Val class acc: {_format_per_class_primary_accuracy(val_labels_idx, val_preds_idx)}", flush=True)
 
         if improved:
             best_val_acc = val_acc
