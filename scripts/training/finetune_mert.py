@@ -655,8 +655,8 @@ def main():
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--num-workers", type=int, default=2,
-                        help="DataLoader workers per split (default: 2)")
+    parser.add_argument("--num-workers", type=int, default=3,
+                        help="DataLoader workers per split (default: 3)")
     parser.add_argument("--cache-audio-dir", type=Path, default=None,
                         help="Directory for cached decoded/resampled audio (.npy). Defaults to /content/audio_cache_24k on Colab.")
     parser.add_argument("--chunk-batch-size", type=int, default=0,
@@ -739,7 +739,14 @@ def main():
     elif device.type == "cuda":
         cuda_index = device.index if device.index is not None else torch.cuda.current_device()
         total_vram_gb = torch.cuda.get_device_properties(cuda_index).total_memory / (1024 ** 3)
-        chunk_batch_size = 4 if total_vram_gb >= 30 else 2
+        if total_vram_gb >= 30:
+            chunk_batch_size = 6
+        elif total_vram_gb >= 20:
+            chunk_batch_size = 4
+        elif total_vram_gb >= 12:
+            chunk_batch_size = 3
+        else:
+            chunk_batch_size = 2
     else:
         chunk_batch_size = 1
 
