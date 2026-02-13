@@ -565,8 +565,8 @@ def evaluate(
         total += len(audios)
         all_labels_idx.extend(true_primary.cpu().tolist())
         all_preds_idx.extend(preds.cpu().tolist())
-        all_probs.append(probs.cpu().numpy())
-        all_labels_raw.append(labels.cpu().numpy())
+        all_probs.append(probs.detach().float().cpu().numpy())
+        all_labels_raw.append(labels.detach().float().cpu().numpy())
 
     probs_arr = np.concatenate(all_probs, axis=0)      # (N, num_classes)
     labels_arr = np.concatenate(all_labels_raw, axis=0)  # (N, num_classes)
