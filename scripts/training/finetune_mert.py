@@ -17,6 +17,8 @@ Usage:
 """
 
 import argparse
+import hashlib
+import os
 import sys
 import time
 from collections import Counter
@@ -29,6 +31,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+
+try:
+    import torchaudio
+    _HAS_TORCHAUDIO = True
+except Exception:
+    torchaudio = None
+    _HAS_TORCHAUDIO = False
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,6 +63,32 @@ MODEL_CONFIGS = {
 # ---------------------------------------------------------------------------
 
 
+def _audio_cache_key(path: Path) -> str:
+    st = path.stat()
+    raw = f"{path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{MERT_SR}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _decode_audio_resampled(path: Path) -> np.ndarray:
+    """Decode + resample to 24 kHz mono using torchaudio when available."""
+    if _HAS_TORCHAUDIO:
+        try:
+            wave, sr = torchaudio.load(str(path))
+            if wave.ndim == 2 and wave.shape[0] > 1:
+                wave = wave.mean(dim=0, keepdim=True)
+            if sr != MERT_SR:
+                wave = torchaudio.functional.resample(wave, sr, MERT_SR)
+            return wave.squeeze(0).cpu().numpy().astype(np.float32, copy=False)
+        except Exception:
+            pass
+
+    try:
+        audio, _ = librosa.load(str(path), sr=MERT_SR, mono=True)
+        return audio.astype(np.float32, copy=False)
+    except Exception:
+        return np.zeros(MERT_SR, dtype=np.float32)
+
+
 class MERTAudioDataset(Dataset):
     """Dataset that loads audio files and returns resampled+cropped waveforms.
 
@@ -66,10 +101,15 @@ class MERTAudioDataset(Dataset):
         entries: list[tuple[Path, list[int]]],
         augment: bool = False,
         noise_std: float = 0.01,
+        cache_dir: Path | None = None,
     ):
         self.entries: list[tuple[Path, list[int]]] = []
+        self.cache_paths: list[Path | None] = []
         self.augment = augment
         self.noise_std = noise_std
+        self.cache_dir = cache_dir.resolve() if cache_dir is not None else None
+        if self.cache_dir is not None:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         skipped = 0
         for audio_path, meters in entries:
@@ -79,6 +119,10 @@ class MERTAudioDataset(Dataset):
             valid = [m for m in meters if m in METER_TO_IDX]
             if valid:
                 self.entries.append((audio_path, valid))
+                if self.cache_dir is not None:
+                    self.cache_paths.append(self.cache_dir / f"{_audio_cache_key(audio_path)}.npy")
+                else:
+                    self.cache_paths.append(None)
 
         if skipped > 0:
             print(f"  WARNING: skipped {skipped} files (not found)")
@@ -88,14 +132,31 @@ class MERTAudioDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
         path, meters = self.entries[idx]
+        cache_path = self.cache_paths[idx]
         label = np.full(len(CLASS_METERS), LABEL_SMOOTH_NEG, dtype=np.float32)
         for m in meters:
             label[METER_TO_IDX[m]] = 1.0
 
-        try:
-            audio, _ = librosa.load(str(path), sr=MERT_SR, mono=True)
-        except Exception:
-            audio = np.zeros(MERT_SR, dtype=np.float32)
+        audio = None
+        if cache_path is not None and cache_path.exists():
+            try:
+                audio = np.load(cache_path, allow_pickle=False).astype(np.float32, copy=False)
+            except Exception:
+                audio = None
+        if audio is None:
+            audio = _decode_audio_resampled(path)
+            if cache_path is not None:
+                tmp_name = f"{cache_path.name}.tmp-{os.getpid()}-{time.time_ns()}"
+                tmp_path = cache_path.with_name(tmp_name)
+                try:
+                    with open(tmp_path, "wb") as fh:
+                        np.save(fh, audio.astype(np.float32, copy=False))
+                    os.replace(tmp_path, cache_path)
+                except Exception:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         # Crop to MAX_DURATION_S
         max_samples = MAX_DURATION_S * MERT_SR
@@ -596,6 +657,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=2,
                         help="DataLoader workers per split (default: 2)")
+    parser.add_argument("--cache-audio-dir", type=Path, default=None,
+                        help="Directory for cached decoded/resampled audio (.npy). Defaults to /content/audio_cache_24k on Colab.")
     parser.add_argument("--chunk-batch-size", type=int, default=0,
                         help="MERT chunk batch size (0=auto; higher can be faster but uses more VRAM)")
     parser.add_argument("--amp", dest="amp", action="store_true",
@@ -851,9 +914,27 @@ def main():
     print(f"  Head parameters: {head_params:,}")
 
     # Datasets + DataLoaders
-    train_ds = MERTAudioDataset(train_entries, augment=True, noise_std=args.noise_std)
-    val_ds = MERTAudioDataset(val_entries, augment=False)
-    test_ds = MERTAudioDataset(test_entries, augment=False)
+    if args.cache_audio_dir is not None:
+        cache_audio_dir = args.cache_audio_dir.resolve()
+    elif Path("/content").exists():
+        cache_audio_dir = Path("/content/audio_cache_24k")
+    else:
+        cache_audio_dir = None
+    if cache_audio_dir is not None:
+        cache_audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_backend = "torchaudio" if _HAS_TORCHAUDIO else "librosa"
+    print(f"Audio decode backend: {audio_backend}")
+    print(f"Audio cache: {cache_audio_dir if cache_audio_dir is not None else 'disabled'}")
+
+    train_ds = MERTAudioDataset(
+        train_entries, augment=True, noise_std=args.noise_std, cache_dir=cache_audio_dir,
+    )
+    val_ds = MERTAudioDataset(
+        val_entries, augment=False, cache_dir=cache_audio_dir,
+    )
+    test_ds = MERTAudioDataset(
+        test_entries, augment=False, cache_dir=cache_audio_dir,
+    )
     print(f"\nDatasets: {len(train_ds)} train, {len(val_ds)} val, {len(test_ds)} test", flush=True)
 
     loader_workers = max(0, args.num_workers)
