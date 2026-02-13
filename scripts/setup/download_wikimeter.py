@@ -28,6 +28,7 @@ from typing import Any
 
 from wikimeter_tools import (
     DEFAULT_CATALOG,
+    get_split,
     load_catalog,
     parse_youtube_video_id,
 )
@@ -295,17 +296,40 @@ def download_and_segment(
     return [], None
 
 
-def write_tab_file(entries: list[tuple[str, Meters]], tab_path: Path) -> None:
+def _write_tab_entries(entries: list[tuple[str, Meters]], fh) -> None:
+    for stem, meters in entries:
+        meter_list = meters_to_list(meters)
+        primary = meter_list[0]
+        label = METER_LABELS.get(primary, str(primary))
+        meter_str = meters_to_tab_str(meters)
+        alt = primary * 2
+        fh.write(f'"/WIKIMETER/{stem}.mp3"\t"{label}"\t{meter_str}\t{alt}\n')
+
+
+def write_tab_file(
+    entries: list[tuple[str, Meters]],
+    tab_path: Path,
+    song_splits: dict[str, str] | None = None,
+) -> None:
+    """Write .tab file(s). If song_splits maps song_stem->split, also writes per-split files."""
     tab_path.parent.mkdir(parents=True, exist_ok=True)
     with open(tab_path, "w", encoding="utf-8") as f:
         f.write("filename\tlabel\tmeter\talt_meter\n")
+        _write_tab_entries(entries, f)
+
+    if song_splits:
+        split_entries: dict[str, list[tuple[str, Meters]]] = {"train": [], "val": [], "test": []}
         for stem, meters in entries:
-            meter_list = meters_to_list(meters)
-            primary = meter_list[0]
-            label = METER_LABELS.get(primary, str(primary))
-            meter_str = meters_to_tab_str(meters)
-            alt = primary * 2
-            f.write(f'"/WIKIMETER/{stem}.mp3"\t"{label}"\t{meter_str}\t{alt}\n')
+            song_stem = re.sub(r"_seg\d+$", "", stem)
+            split = song_splits.get(song_stem, "train")
+            split_entries[split].append((stem, meters))
+
+        for split_name, split_data in split_entries.items():
+            split_path = tab_path.with_name(f"data_wikimeter_{split_name}.tab")
+            with open(split_path, "w", encoding="utf-8") as f:
+                f.write("filename\tlabel\tmeter\talt_meter\n")
+                _write_tab_entries(split_data, f)
+            print(f"  {split_name}: {len(split_data)} segments → {split_path.name}")
 
 
 def parse_meters_arg(s: str) -> list[int]:
@@ -386,6 +410,12 @@ def main() -> None:
             print(f"  {i:3d}. [{meters_str}] {song['artist']} — {song['title']}{tag}  {src_preview}")
         return
 
+    # Build song_stem -> split mapping using hash-based get_split()
+    song_splits: dict[str, str] = {}
+    for song in songs:
+        stem = sanitize_filename(song["artist"], song["title"])
+        song_splits[stem] = get_split(song["artist"], song["title"])
+
     if args.tab_only:
         successful: list[tuple[str, Meters]] = []
         for song in songs:
@@ -393,7 +423,7 @@ def main() -> None:
             existing = sorted(f for f in audio_dir.glob(f"{stem}_seg*.mp3") if f.stat().st_size > 1000)
             for f in existing[:MAX_SEGMENTS]:
                 successful.append((f.stem, song["meters"]))
-        write_tab_file(successful, tab_path)
+        write_tab_file(successful, tab_path, song_splits=song_splits)
         print(f"  {len(successful)} segments → {tab_path}")
         return
 
@@ -440,7 +470,7 @@ def main() -> None:
             print(f" — FAILED (tried: {tried})")
             stats["fail"] += 1
 
-    write_tab_file(successful, tab_path)
+    write_tab_file(successful, tab_path, song_splits=song_splits)
 
     print(f"\nDone: {stats['ok']} downloaded, {stats['skip']} skipped, {stats['fail']} failed")
     print(f"Segments: {len(successful)} → {tab_path}")

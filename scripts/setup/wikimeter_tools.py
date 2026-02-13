@@ -62,7 +62,7 @@ def parse_youtube_video_id(url: str) -> str:
     return ""
 
 
-def source_from_youtube(video_id: str, url: str | None = None, priority: int = 100) -> Source:
+def source_from_youtube(video_id: str, url: str | None = None) -> Source:
     video_id = str(video_id).strip()
     if not video_id and url:
         video_id = parse_youtube_video_id(url)
@@ -73,21 +73,18 @@ def source_from_youtube(video_id: str, url: str | None = None, priority: int = 1
         "type": "youtube",
         "video_id": video_id,
         "url": url_s or f"https://www.youtube.com/watch?v={video_id}",
-        "priority": int(priority),
     }
 
 
-def normalize_source(raw: Source, index: int = 0) -> Source:
+def normalize_source(raw: Source) -> Source:
     source_type = str(raw.get("type", "")).strip().lower()
     if not source_type:
         source_type = "youtube" if raw.get("video_id") else "url"
-    priority = int(raw.get("priority", 100 + index))
 
     if source_type == "youtube":
         src = source_from_youtube(
             video_id=str(raw.get("video_id", "")).strip(),
             url=_clean_url(raw.get("url", "")) or None,
-            priority=priority,
         )
     else:
         url = _clean_url(raw.get("url", ""))
@@ -96,7 +93,6 @@ def normalize_source(raw: Source, index: int = 0) -> Source:
         src = {
             "type": source_type,
             "url": url,
-            "priority": priority,
         }
 
     for key in ("license", "note", "provider"):
@@ -123,10 +119,10 @@ def normalize_sources(
     out: list[Source] = []
     seen: set[str] = set()
 
-    for idx, raw in enumerate(seq):
+    for raw in seq:
         if not isinstance(raw, dict):
             continue
-        src = normalize_source(raw, index=idx)
+        src = normalize_source(raw)
         key = source_key(src)
         if key in seen:
             continue
@@ -137,22 +133,17 @@ def normalize_sources(
         src = source_from_youtube(
             video_id=fallback_video_id,
             url=fallback_url or None,
-            priority=100,
         )
         out.append(src)
 
-    out.sort(key=lambda s: (int(s.get("priority", 9999)), source_key(s)))
     return out
 
 
 def sources_for_save(sources: list[Source]) -> list[Source]:
     out: list[Source] = []
-    for src in sorted(sources, key=lambda s: (int(s.get("priority", 9999)), source_key(s))):
+    for src in sources:
         normalized = normalize_source(src)
-        item: Source = {
-            "type": normalized["type"],
-            "priority": int(normalized["priority"]),
-        }
+        item: Source = {"type": normalized["type"]}
         if normalized["type"] == "youtube":
             item["video_id"] = normalized["video_id"]
         item["url"] = normalized["url"]
@@ -165,20 +156,22 @@ def sources_for_save(sources: list[Source]) -> list[Source]:
 
 def merge_sources(existing: list[Source], incoming: list[Source]) -> list[Source]:
     merged: dict[str, Source] = {}
+    order: list[str] = []
     for src in normalize_sources(existing):
-        merged[source_key(src)] = dict(src)
+        key = source_key(src)
+        merged[key] = dict(src)
+        order.append(key)
     for src in normalize_sources(incoming):
         key = source_key(src)
         if key in merged:
             base = merged[key]
-            # Keep lower priority number (higher importance) and fill missing metadata.
-            base["priority"] = min(int(base.get("priority", 9999)), int(src.get("priority", 9999)))
             for meta_key in ("license", "note", "provider"):
                 if meta_key not in base and meta_key in src:
                     base[meta_key] = src[meta_key]
         else:
             merged[key] = dict(src)
-    return sorted(merged.values(), key=lambda s: (int(s.get("priority", 9999)), source_key(s)))
+            order.append(key)
+    return [merged[k] for k in order if k in merged]
 
 
 def source_to_candidate(source: Source) -> Source:
@@ -282,6 +275,32 @@ def normalize_text(text: str) -> str:
     return text
 
 
+import hashlib
+
+
+def get_split(
+    artist: str,
+    title: str,
+    train_pct: int = 80,
+    val_pct: int = 10,
+) -> str:
+    """Deterministic hash-based split assignment.
+
+    Uses SHA-256 of song_key to assign each song to train/val/test.
+    The split is fully deterministic: same artist+title always maps
+    to the same split, regardless of when songs are added.
+
+    Default proportions: 80/10/10 (train/val/test).
+    """
+    key = song_key(artist, title)
+    h = int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100
+    if h < train_pct:
+        return "train"
+    if h < train_pct + val_pct:
+        return "val"
+    return "test"
+
+
 def parse_meters(s: str) -> dict[int, float]:
     """Parse meter string like '5', '7:1.0', '3:0.8,4:0.7'."""
     meters: dict[int, float] = {}
@@ -381,7 +400,6 @@ def ytsearch(query: str, limit: int = 5, timeout_s: int = 45) -> list[dict[str, 
                     source_from_youtube(
                         video_id=video_id,
                         url=f"https://www.youtube.com/watch?v={video_id}",
-                        priority=100 + idx,
                     )
                 ),
             }
