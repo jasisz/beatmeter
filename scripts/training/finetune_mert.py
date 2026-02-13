@@ -198,7 +198,14 @@ def mert_forward_pool(
         chunk_layer_maxes = [[] for _ in range(num_layers)]
 
         for chunk in chunks:
-            inputs = processor(chunk, sampling_rate=MERT_SR, return_tensors="pt")
+            # We use fixed-length chunks without padding; attention_mask is unnecessary
+            # and triggers unstable code paths on some MPS backends.
+            inputs = processor(
+                chunk,
+                sampling_rate=MERT_SR,
+                return_tensors="pt",
+                return_attention_mask=False,
+            )
             inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
             outputs = mert_model(**inputs)
 
