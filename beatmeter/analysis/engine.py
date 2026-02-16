@@ -516,6 +516,7 @@ class AnalysisEngine:
                     skip_bar_tracking=True,
                     skip_resnet=True,
                     skip_mert=True,
+                    skip_onset_mlp=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]

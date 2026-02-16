@@ -33,6 +33,7 @@ from beatmeter.analysis.signals import (
 )
 import beatmeter.analysis.signals.resnet_meter as _resnet_mod
 import beatmeter.analysis.signals.mert_meter as _mert_mod
+import beatmeter.analysis.signals.onset_mlp_meter as _onset_mlp_mod
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ W_PERIODICITY_CAPPED = 0.16  # used when all NNs untrusted
 W_BAR_TRACKING = 0.12
 W_RESNET = 0.0           # disabled pending better model
 W_MERT = 0.0             # disabled until orthogonality verified
+W_ONSET_MLP = 0.12       # onset MLP signal (gate PASS: complementarity 2.68)
 
 # Consensus bonus: meters supported by multiple signals
 CONSENSUS_SUPPORT_THRESHOLD = 0.3   # min signal score to count as "supporting"
@@ -163,6 +165,7 @@ def _compute_weights(
     w_bar_tracking = W_BAR_TRACKING
     w_resnet = W_RESNET
     w_mert = W_MERT
+    w_onset_mlp = W_ONSET_MLP
 
     total_nn_trust = beatnet_trust + beat_this_trust + madmom_trust
     if total_nn_trust < 0.01:
@@ -172,7 +175,8 @@ def _compute_weights(
         w_periodicity = W_PERIODICITY
 
     total_w = (w_beatnet + w_beat_this + w_madmom + w_autocorr
-               + w_accent + w_periodicity + w_bar_tracking + w_resnet + w_mert)
+               + w_accent + w_periodicity + w_bar_tracking + w_resnet + w_mert
+               + w_onset_mlp)
     if total_w > 0:
         weights = {
             "beatnet": w_beatnet / total_w,
@@ -184,9 +188,10 @@ def _compute_weights(
             "bar_tracking": w_bar_tracking / total_w,
             "resnet": w_resnet / total_w,
             "mert": w_mert / total_w,
+            "onset_mlp": w_onset_mlp / total_w,
         }
     else:
-        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1, "mert": 0}
+        weights = {"beatnet": 0, "beat_this": 0, "madmom": 0, "autocorr": 0.2, "accent": 0.25, "periodicity": 0.35, "bar_tracking": 0.1, "resnet": 0.1, "mert": 0, "onset_mlp": 0}
 
     logger.debug(f"Meter weights: {weights}")
     return weights, beatnet_trust, beat_this_trust, madmom_trust
@@ -206,11 +211,12 @@ def _collect_signal_scores(
     skip_bar_tracking: bool,
     skip_resnet: bool,
     skip_mert: bool = False,
+    skip_onset_mlp: bool = False,
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
 ) -> dict[str, dict[tuple[int, int], float]]:
-    """Collect scores from signals 1a, 1b, 2, 3, 7, 8a, 8b."""
+    """Collect scores from signals 1a, 1b, 2, 3, 7, 8a, 8b, 9."""
     from beatmeter.analysis.cache import str_to_meter_key
 
     signal_results: dict[str, dict[tuple[int, int], float]] = {}
@@ -299,6 +305,16 @@ def _collect_signal_scores(
             signal_results["mert"] = s8b
             logger.debug(f"MERT signal: {s8b}")
 
+    # Signal 9: Onset MLP meter classifier
+    if not skip_onset_mlp and weights.get("onset_mlp", 0) > 0.01 and audio is not None:
+        s9 = _try_cache("onset_mlp_meter")
+        if s9 is None:
+            s9 = _onset_mlp_mod.signal_onset_mlp_meter(audio, sr)
+            _save_cache("onset_mlp_meter", s9)
+        if s9:
+            signal_results["onset_mlp"] = s9
+            logger.debug(f"Onset MLP signal: {s9}")
+
     return signal_results
 
 
@@ -365,7 +381,7 @@ def _collect_accent_scores(
             logger.debug(f"Flat dynamics (max CV={_max_cv:.4f}): suppressing accent/periodicity signals")
             weights["accent"] = 0.0
             weights["periodicity"] = 0.0
-            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"] + weights.get("mert", 0)
+            remaining_w = weights["beatnet"] + weights["beat_this"] + weights["madmom"] + weights["autocorr"] + weights["bar_tracking"] + weights["resnet"] + weights.get("mert", 0) + weights.get("onset_mlp", 0)
             if remaining_w > 0:
                 scale = 1.0 / remaining_w
                 weights["beatnet"] *= scale
@@ -376,6 +392,8 @@ def _collect_accent_scores(
                 weights["resnet"] *= scale
                 if "mert" in weights:
                     weights["mert"] *= scale
+                if "onset_mlp" in weights:
+                    weights["onset_mlp"] *= scale
 
         for name, beats in accent_trackers:
             # Skip trackers whose tempo deviates >25% from consensus.
@@ -642,6 +660,7 @@ def generate_hypotheses(
     skip_bar_tracking: bool = False,
     skip_resnet: bool = False,
     skip_mert: bool = False,
+    skip_onset_mlp: bool = False,
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
@@ -668,12 +687,13 @@ def generate_hypotheses(
         beatnet_alignment, beat_this_alignment, madmom_alignment,
     )
 
-    # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8, 8b
+    # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8, 8b, 9
     signal_results = _collect_signal_scores(
         weights, beatnet_beats, madmom_results,
         onset_times, onset_strengths, beat_interval, beat_times,
         sr, audio, beat_this_beats, skip_bar_tracking, skip_resnet,
-        skip_mert, cache=cache, audio_hash=audio_hash, tmp_path=tmp_path,
+        skip_mert, skip_onset_mlp,
+        cache=cache, audio_hash=audio_hash, tmp_path=tmp_path,
     )
 
     # Step 3: Collect accent and periodicity scores (signals 4 & 5)

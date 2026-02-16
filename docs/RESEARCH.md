@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 7 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, and bar tracking via GRU-RNN with Viterbi decoding -- with trust-gated weighting and consensus bonuses. Trust gating disables unreliable neural signals based on onset alignment quality, while consensus bonuses reward cross-signal agreement. On the METER2800 dataset (700-file hold-out test split), we achieve 76% overall meter accuracy and 88.2% on binary 3/4 vs 4/4 classification (comparable to the ResNet18 paper's 88%). We identify three root failure patterns and propose specific mitigations for each. We report two negative results on adding spectrogram/embedding classifiers: (1) a ResNet18 MFCC classifier at 75% standalone accuracy, and (2) a MERT-v1-95M foundation model with MLP at 80.7% accuracy. Neither provides sufficient orthogonal information for ensemble benefit, though MERT shows promise for classical 3/4 detection.
+We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 8 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, bar tracking via GRU-RNN with Viterbi decoding, and a multi-tempo onset MLP classifier -- with trust-gated weighting and consensus bonuses. Trust gating disables unreliable neural signals based on onset alignment quality, while consensus bonuses reward cross-signal agreement. On the METER2800 dataset (700-file hold-out test split), we achieve 76% overall meter accuracy and 88.2% on binary 3/4 vs 4/4 classification (comparable to the ResNet18 paper's 88%). The newly integrated Onset MLP signal achieves 87.1% standalone accuracy on METER2800 test with strong complementarity (2.68 ratio, 118 gains vs 44 losses), becoming the first classifier signal to pass the orthogonality gate. We identify three root failure patterns and propose specific mitigations for each. We report two negative results on adding spectrogram/embedding classifiers: (1) a ResNet18 MFCC classifier at 75% standalone accuracy, and (2) a MERT-v1-95M foundation model with MLP at 80.7% accuracy. Neither provides sufficient orthogonal information for ensemble benefit, though MERT shows promise for classical 3/4 detection.
 
 ## 1. System Architecture
 
@@ -19,7 +19,7 @@ The BeatMeter pipeline processes audio through a sequence of stages:
    - **librosa** (`trackers/librosa_tracker.py`) -- Dynamic programming beat tracker.
 4. **Primary beat selection** -- Trackers are ranked by onset alignment F1 score; the best-aligned tracker's beats are used as the primary beat grid.
 5. **Tempo estimation** -- Multi-method tempo consensus with octave error normalization (`beatmeter/analysis/tempo.py`).
-6. **Meter hypothesis generation** -- Seven active signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 6/8, 7/4, 12/8). Scores are combined via weighted addition with consensus bonuses (`beatmeter/analysis/meter.py`).
+6. **Meter hypothesis generation** -- Eight active signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 5/8, 6/8, 7/4, 7/8, 9/8, 11/8, 12/8). Scores are combined via weighted addition with consensus bonuses (`beatmeter/analysis/meter.py`).
 
 Trust gating controls the influence of neural-network-based signals. Each tracker receives a trust score derived from its onset alignment quality:
 
@@ -44,6 +44,7 @@ All signal implementations live in `beatmeter/analysis/signals/`.
 | **bar_tracking** | `bar_tracking` | 0.12 | audio + beats | Uses madmom's GRU-RNN activation function with Viterbi decoding to track bar boundaries for each candidate meter. Quality-gated: skipped on sparse/synthetic audio (non_silent < 0.15). |
 | **resnet_meter** | `resnet` | **0.0 (disabled)** | MFCC spectrogram | Direct 4-class CNN classification. Trained on METER2800 (75.4% test). **Disabled**: not orthogonal to existing signals (see Section 4.6). |
 | **mert_meter** | `mert` | **0.0 (disabled)** | MERT embeddings | Music foundation model (95M params) as frozen feature extractor with MLP (80.7% test). **Disabled**: gate FAIL, 31 gains vs 68 losses (see Section 4.8). |
+| **onset_mlp_meter** | `onset_mlp` | 0.12 | multi-tempo autocorrelation + tempogram + MFCC + spectral contrast | 6-class MLP (876-dim features) trained on METER2800 + WIKIMETER. 87.1% standalone on METER2800 test. **Gate PASS**: complementarity 2.68, 118 gains vs 44 losses (see Section 4.11). |
 
 **Note**: HCDF (Harmonic Change Detection Function) was evaluated but not integrated due to regression issues (see Section 4.4).
 
@@ -390,6 +391,90 @@ Notebook-aligned diagnostics now focus on compact outputs: per-class accuracy/AP
 
 Full architecture and diagnostic details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
+### 4.11 onset_mlp_meter Signal (Round 13 — first classifier to pass gate)
+
+The onset_mlp_meter signal takes a fundamentally different approach from resnet_meter and mert_meter: instead of operating on raw spectrograms or learned embeddings, it classifies meter from hand-crafted rhythmic features designed to capture beat-relative periodicity at multiple tempos.
+
+#### Architecture
+
+```
+Audio (22050 Hz) --> center crop 30s
+Feature extraction (876 dims):
+  Part 1: Autocorrelation features (768 dims, tempo-dependent)
+    4 signals × 3 tempo candidates × 64 beat-relative lags
+    Signals: onset envelope, RMS energy, spectral flux, chroma energy
+    Tempos: T (librosa estimate), T/2, T×2
+  Part 2: Tempo-independent features (108 dims)
+    Tempogram profile: 64 log-spaced BPM bins (30-300)
+    MFCC statistics: 13 coefficients × (mean + std) = 26
+    Spectral contrast: 7 rows × (mean + std) = 14
+    Onset rate: mean/std/median interval + onsets/sec = 4
+MLP Classifier:
+  Linear(876, 512) --> BN --> ReLU --> Dropout(0.3)
+  Linear(512, 256) --> BN --> ReLU --> Dropout(0.25)
+  Linear(256, 128) --> BN --> ReLU --> Dropout(0.2)
+  Linear(128, 6)
+  --> softmax --> {3: prob, 4: prob, 5: prob, 7: prob, 9: prob, 11: prob}
+```
+
+#### Training (v4)
+
+- **Dataset**: METER2800 (train+val) + WIKIMETER (806 songs, 6 classes).
+- **Classes**: 6 (3, 4, 5, 7, 9, 11) — single-label classification.
+- **Loss**: Focal loss (γ=2.0) with class weights and label smoothing (0.1). Mixup augmentation (α=0.2).
+- **Optimizer**: Adam (lr=5e-4), cosine annealing, early stopping (patience=40).
+- **Feature standardization**: z-score normalization (mean/std from training set, stored in checkpoint).
+- **Feature caching**: Per-file cache keyed by `feature_version + audio_hash`.
+
+#### Results
+
+| Version | Features | Model | Loss | Val | Test | 3/x | 4/x | 5/x | 7/x | 9/x | 11/x |
+|---------|----------|-------|------|-----|------|-----|-----|-----|-----|-----|------|
+| v3 | 768 (autocorr only) | 256→128→6 | CE | 73.9% | 73.6% | 84.8% | 78.1% | 54.8% | 72.0% | 35.1% | 42.9% |
+| **v4** | **876 (autocorr + tempo-indep)** | **512→256→128→6** | **Focal** | **78.4%** | **79.5%** | **88.4%** | **85.9%** | **58.9%** | **75.3%** | **47.3%** | **52.4%** |
+
+Key improvements from v3→v4:
+- Tempogram profile (+64 dims): provides tempo-independent rhythmic energy — model no longer depends solely on librosa.feature.tempo accuracy.
+- MFCC stats (+26 dims): timbral context helps distinguish genres.
+- Focal loss: focuses training on hard examples (ambiguous 4/x files), reducing 4/x loss rate by half.
+- Larger model: 3 hidden layers (512→256→128) vs 2 (256→128) — more capacity for 876-dim input.
+
+#### Orthogonality Evaluation
+
+Compared against saved engine run on METER2800 test split (700 files):
+
+| Metric | v3 | v4 |
+|--------|-----|-----|
+| Engine accuracy | 76.6% (536/700) | 76.6% (536/700) |
+| Onset MLP accuracy | 79.1% (554/700) | **87.1% (610/700)** |
+| Agreement rate | 75.7% | 76.9% (target 65-80% ✅) |
+| Complementarity ratio | 1.24 (❌) | **2.68** (target >1.5 ✅) |
+| Gains (MLP right, engine wrong) | 94 | **118** |
+| Losses (engine right, MLP wrong) | 76 | **44** |
+| **Gate check** | **FAIL** | **PASS** |
+
+Per-class orthogonality (v4):
+
+| Meter | Engine | MLP | Gains | Losses |
+|-------|--------|-----|-------|--------|
+| 3/x | 253/300 (84.3%) | 267/300 (89.0%) | +42 | -21 |
+| 4/x | 277/300 (92.3%) | 274/300 (91.3%) | +17 | -23 |
+| 5/x | 3/50 (6.0%) | 25/50 (50.0%) | +24 | 0 |
+| 7/x | 3/50 (6.0%) | 44/50 (88.0%) | +35 | 0 |
+
+**Critical finding**: The onset MLP has zero losses on 5/x and 7/x — it correctly identifies odd meters that the engine completely misses (engine: 6% on both). This is the orthogonal information we've been seeking since Round 6.
+
+#### Why This Signal Succeeded Where Others Failed
+
+1. **87.1% > 76.6%** — The onset MLP is significantly more accurate than the engine, unlike resnet_meter (75%) and mert_meter (67.6% on fixtures). Corrections outnumber errors.
+2. **Qualitatively different features** — Autocorrelation at beat-relative lags captures periodicity structure that the engine's signal-level approach cannot. Tempo-independent features (tempogram, MFCC) provide backup when tempo estimation fails.
+3. **6-class training** — Training on 6 classes (including 9/x, 11/x from WIKIMETER) gives the model exposure to odd meters that the 4-class resnet/mert models lacked.
+4. **Focal loss** — Down-weighting easy 4/x examples and focusing on hard cases reduced 4/x losses from 49 (v3) to 23 (v4).
+
+#### Integration
+
+Integrated as Signal 9 in `meter.py` with weight W_ONSET_MLP=0.12. The weight is taken from the NN signal budget (resnet/mert are disabled at 0.0). Feature extraction adds ~5-10s per file on first run (cached thereafter via AnalysisCache).
+
 ## 5. Failure Analysis
 
 We analyzed incorrectly classified files and identified three recurring failure patterns.
@@ -473,11 +558,11 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **MERT-330M LoRA multi-label results** -- First run (WIKIMETER) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. Key metrics to evaluate: per-class AP/accuracy, macro-F1, confidence gap. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+1. **Onset MLP weight tuning** -- Integrated at W=0.12, pending full eval on METER2800 tuning split (2100 files). Need to find optimal weight and evaluate potential interaction with existing NN 3/4 penalty and rarity penalties. The onset MLP's strong odd meter performance (5/x: 50%, 7/x: 88%) may warrant reducing rarity penalties.
 
-2. **MERT confidence gating** -- Only use mert_meter predictions when softmax confidence exceeds 0.8. Could eliminate many false 7/4 and 5/4 predictions while preserving gains on classical 3/4.
+2. **Onset MLP + rarity penalty interaction** -- With the onset MLP providing reliable odd meter detection, the current heavy rarity penalties (5: 0.65, 7: 0.55) may be suppressing correct onset MLP predictions. Evaluate reducing/removing these.
 
-3. **Odd meter improvement** -- 5/4 at 2% and 7/4 at 4% on METER2800 test split is essentially broken. Requires both model improvements and reduced rarity penalties.
+3. **MERT-330M LoRA multi-label results** -- First run (WIKIMETER) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
 4. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
 
