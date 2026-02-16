@@ -5,7 +5,7 @@ Audio tempo and time signature analyzer. Detects BPM, meter (time signature), an
 ## Features
 
 - **Multi-algorithm beat tracking** — combines BeatNet, Beat This! (ISMIR 2024), madmom, and librosa for robust beat detection
-- **Meter detection** — identifies time signatures (4/4, 3/4, 6/8, 7/8, etc.) using 7 independent signals with weighted voting
+- **Meter detection** — identifies time signatures (4/4, 3/4, 6/8, 7/8, etc.) using 10 independent signals with weighted voting
 - **Variable tempo detection** — tracks tempo changes over time, classifies stability (steady / rubato)
 - **Live analysis** — real-time rhythm analysis via microphone (WebSocket)
 - **Web UI** — drag-and-drop file upload, waveform visualization, metronome, i18n (PL/EN)
@@ -75,7 +75,7 @@ Four beat trackers run in parallel (`beatmeter/analysis/trackers/`):
 
 ### Meter Detection
 
-Seven active signals vote on meter hypotheses (`beatmeter/analysis/signals/`):
+Ten signals vote on meter hypotheses (`beatmeter/analysis/signals/`):
 
 | Signal | Weight | Description |
 |---|---|---|
@@ -85,9 +85,12 @@ Seven active signals vote on meter hypotheses (`beatmeter/analysis/signals/`):
 | `accent_pattern` | 0.18 | RMS energy accent grouping |
 | `beat_periodicity` | 0.20 | Beat strength periodicity analysis |
 | `bar_tracking` | 0.12 | DBNBarTrackingProcessor bar-level inference |
+| `onset_mlp` | 0.12 | Multi-tempo onset MLP classifier (87.1% standalone) |
+| `resnet_meter` | 0.0 | ResNet18 MFCC classifier (arbiter input only) |
+| `hcdf_meter` | 0.0 | Harmonic change detection (arbiter input only) |
 | `sub_beat_division` | — | Compound meter detection (6/8, 12/8) |
 
-Trust weighting adjusts neural network signals based on beat tracker agreement. Consensus bonuses reward convergence across multiple signals.
+Trust weighting adjusts neural network signals based on beat tracker agreement. Consensus bonuses reward convergence across multiple signals. A learned arbiter MLP is in development to replace the hand-tuned combination with data-driven fusion (see `docs/RESEARCH.md` Section 4.12).
 
 ## Development
 

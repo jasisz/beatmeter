@@ -37,6 +37,10 @@ import beatmeter.analysis.signals.onset_mlp_meter as _onset_mlp_mod
 
 logger = logging.getLogger(__name__)
 
+# Module-level capture for arbiter training.
+# After generate_hypotheses() runs, this holds the last signal details.
+last_signal_details: dict | None = None
+
 # Meter descriptions for musicians
 METER_DESCRIPTIONS = {
     (2, 4): "Marsz, polka",
@@ -664,10 +668,13 @@ def generate_hypotheses(
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
-) -> tuple[list[MeterHypothesis], float]:
+    return_signal_details: bool = False,
+) -> tuple[list[MeterHypothesis], float] | tuple[list[MeterHypothesis], float, dict]:
     """Generate meter hypotheses from all signals.
 
     Merges and normalizes scores, returns (top N with confidence, meter_ambiguity).
+    When return_signal_details=True, also returns a dict with signal_results,
+    weights, and trust values for arbiter training.
     """
     # Beat interval from tempo
     beat_interval = None
@@ -728,10 +735,22 @@ def generate_hypotheses(
         all_scores[meter] = score
 
     if not all_scores:
-        return ([MeterHypothesis(
+        fallback = ([MeterHypothesis(
             numerator=4, denominator=4, confidence=0.3,
             description=_get_description(4, 4),
         )], 1.0)
+        if return_signal_details:
+            return fallback[0], fallback[1], {
+                "signal_results": signal_results,
+                "weights": weights,
+                "trust": {
+                    "beatnet": beatnet_trust,
+                    "beat_this": beat_this_trust,
+                    "madmom": madmom_trust,
+                },
+                "tempo_bpm": tempo_bpm,
+            }
+        return fallback
 
     # Step 5: Apply adjustments (priors, rarity, compound, NN penalties)
     _apply_score_adjustments(
@@ -739,8 +758,29 @@ def generate_hypotheses(
         onset_event_times, sr, beatnet_beats, beat_this_beats,
     )
 
+    # Capture signal details for arbiter training (always, lightweight)
+    global last_signal_details
+    last_signal_details = {
+        "signal_results": {
+            sig: {f"{k[0]}_{k[1]}": v for k, v in scores.items()}
+            for sig, scores in signal_results.items()
+        },
+        "weights": weights,
+        "trust": {
+            "beatnet": beatnet_trust,
+            "beat_this": beat_this_trust,
+            "madmom": madmom_trust,
+        },
+        "tempo_bpm": tempo_bpm,
+    }
+
     # Step 6: Filter, normalize, and format hypotheses
-    return _format_hypotheses(all_scores, max_hypotheses)
+    hypotheses, ambiguity = _format_hypotheses(all_scores, max_hypotheses)
+
+    if return_signal_details:
+        return hypotheses, ambiguity, last_signal_details
+
+    return hypotheses, ambiguity
 
 
 def _disambiguate_compound(

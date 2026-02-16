@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 8 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, bar tracking via GRU-RNN with Viterbi decoding, and a multi-tempo onset MLP classifier -- with trust-gated weighting and consensus bonuses. Trust gating disables unreliable neural signals based on onset alignment quality, while consensus bonuses reward cross-signal agreement. On the METER2800 dataset (700-file hold-out test split), we achieve 76% overall meter accuracy and 88.2% on binary 3/4 vs 4/4 classification (comparable to the ResNet18 paper's 88%). The newly integrated Onset MLP signal achieves 87.1% standalone accuracy on METER2800 test with strong complementarity (2.68 ratio, 118 gains vs 44 losses), becoming the first classifier signal to pass the orthogonality gate. We identify three root failure patterns and propose specific mitigations for each. We report two negative results on adding spectrogram/embedding classifiers: (1) a ResNet18 MFCC classifier at 75% standalone accuracy, and (2) a MERT-v1-95M foundation model with MLP at 80.7% accuracy. Neither provides sufficient orthogonal information for ensemble benefit, though MERT shows promise for classical 3/4 detection.
+We present BeatMeter, a multi-signal ensemble system for automatic meter detection from audio. The system combines 10 analysis signals -- neural beat trackers (BeatNet, Beat This!, madmom), onset autocorrelation, accent pattern analysis, beat strength periodicity, bar tracking via GRU-RNN with Viterbi decoding, a multi-tempo onset MLP classifier, a ResNet18 MFCC classifier, and harmonic change detection (HCDF) -- currently fused via hand-tuned trust-gated weighting and consensus bonuses. On the METER2800 dataset (700-file hold-out test split), we achieve 76% overall meter accuracy and 88.2% on binary 3/4 vs 4/4 classification (comparable to the ResNet18 paper's 88%). The Onset MLP signal achieves 87.1% standalone accuracy with strong complementarity (2.68 ratio, 118 gains vs 44 losses), becoming the first classifier signal to pass the orthogonality gate. We are developing a learned arbiter MLP to replace the hand-tuned combination logic: a tiny multi-label network (124→64→32→6) that takes all 10 signal scores as input and predicts meter with sigmoid outputs, trained on METER2800 + WIKIMETER (806 songs, 6 meter classes including 9/x and 11/x). This allows previously rejected signals (ResNet, HCDF) to contribute in contexts where the arbiter learns they are useful.
 
 ## 1. System Architecture
 
@@ -19,7 +19,7 @@ The BeatMeter pipeline processes audio through a sequence of stages:
    - **librosa** (`trackers/librosa_tracker.py`) -- Dynamic programming beat tracker.
 4. **Primary beat selection** -- Trackers are ranked by onset alignment F1 score; the best-aligned tracker's beats are used as the primary beat grid.
 5. **Tempo estimation** -- Multi-method tempo consensus with octave error normalization (`beatmeter/analysis/tempo.py`).
-6. **Meter hypothesis generation** -- Eight active signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 5/8, 6/8, 7/4, 7/8, 9/8, 11/8, 12/8). Scores are combined via weighted addition with consensus bonuses (`beatmeter/analysis/meter.py`).
+6. **Meter hypothesis generation** -- Ten signals produce scores for candidate meters (2/4, 3/4, 4/4, 5/4, 5/8, 6/8, 7/4, 7/8, 9/8, 11/8, 12/8). Currently combined via hand-tuned weighted addition with consensus bonuses (`beatmeter/analysis/meter.py`). A learned arbiter MLP (`scripts/training/train_arbiter.py`) is in development to replace this with data-driven fusion (Section 4.12).
 
 Trust gating controls the influence of neural-network-based signals. Each tracker receives a trust score derived from its onset alignment quality:
 
@@ -46,7 +46,7 @@ All signal implementations live in `beatmeter/analysis/signals/`.
 | **mert_meter** | `mert` | **0.0 (disabled)** | MERT embeddings | Music foundation model (95M params) as frozen feature extractor with MLP (80.7% test). **Disabled**: gate FAIL, 31 gains vs 68 losses (see Section 4.8). |
 | **onset_mlp_meter** | `onset_mlp` | 0.12 | multi-tempo autocorrelation + tempogram + MFCC + spectral contrast | 6-class MLP (876-dim features) trained on METER2800 + WIKIMETER. 87.1% standalone on METER2800 test. **Gate PASS**: complementarity 2.68, 118 gains vs 44 losses (see Section 4.11). |
 
-**Note**: HCDF (Harmonic Change Detection Function) was evaluated but not integrated due to regression issues (see Section 4.4).
+**Note**: HCDF (Harmonic Change Detection Function) was evaluated but not integrated into the hand-tuned ensemble due to regression issues (see Section 4.4). However, it is included as an arbiter input signal (see Section 4.12), as the learned arbiter can determine when HCDF is useful without manual weight tuning.
 
 ### 1.3 Combination Strategy
 
@@ -475,6 +475,58 @@ Per-class orthogonality (v4):
 
 Integrated as Signal 9 in `meter.py` with weight W_ONSET_MLP=0.12. The weight is taken from the NN signal budget (resnet/mert are disabled at 0.0). Feature extraction adds ~5-10s per file on first run (cached thereafter via AnalysisCache).
 
+### 4.12 Arbiter MLP (Round 13, In Progress)
+
+#### Motivation
+
+The hand-tuned combination logic in `meter.py` (~200 lines of weights, consensus bonuses, NN penalties, rarity adjustments, compound transfer) is increasingly difficult to maintain. Each new signal requires careful weight tuning and interaction testing. Furthermore, signals that failed the hand-tuned gate check (ResNet, HCDF) may still provide useful information in specific contexts — the arbiter can learn *when* to use them.
+
+#### Architecture
+
+A small MLP replaces the entire weighted combination pipeline:
+
+```
+Input: 10 signals × 12 meter candidates + 4 extra features = 124 dims
+  Signals: beatnet, beat_this, madmom, autocorr, accent,
+           periodicity, bar_tracking, onset_mlp, resnet, hcdf
+  Extra: beatnet_trust, beat_this_trust, madmom_trust, tempo_bpm
+
+MLP:
+  Linear(124, 64) → BN → ReLU → Dropout(0.2)
+  Linear(64, 32) → BN → ReLU → Dropout(0.15)
+  Linear(32, 6) → sigmoid
+
+Output: 6 sigmoids for meters [3, 4, 5, 7, 9, 11] (multi-label)
+Loss: BCEWithLogitsLoss with pos_weight
+```
+
+Key design decisions:
+- **Multi-label output** (sigmoid + BCE) instead of single-label (softmax + CE), matching the WIKIMETER multi-label annotations for polymetric songs.
+- **10 signals including previously rejected ones**: ResNet (75% standalone, failed hand-tuned gate) and HCDF (pure DSP, correlated with accent_pattern) are included because the arbiter can learn context-dependent weighting — something hand-tuning cannot do.
+- **MERT excluded**: Risk of shortcut learning (recognizing genres/instruments rather than meter patterns). ResNet is simpler and HCDF is pure DSP, both safer for the arbiter.
+- **Trust values as features**: The arbiter sees raw trust scores and can learn its own gating strategy, potentially improving on the hard threshold (0.4) in the hand-tuned system.
+
+#### Training Data
+
+- **METER2800** (tuning split, 2100 files): 4 classes (3, 4, 5, 7), single-label.
+- **WIKIMETER** (2906 segments from 806 songs): 6 classes (3, 4, 5, 7, 9, 11), multi-label with confidence weights (e.g., "3:0.7,4:0.8" for polymetric songs).
+- **Combined**: ~5000 training examples across 6 classes.
+
+#### Infrastructure
+
+The arbiter requires cached signal scores for all 2800+ METER2800 files. To avoid loading all beat tracker models simultaneously (3GB+ RAM, GPU contention), we built a cache warming script (`scripts/setup/warm_cache.py`) that processes files one tracker/signal at a time:
+
+1. Load BeatNet → process all files → free memory
+2. Load Beat This! → process all files → free memory (GPU, 1 worker)
+3. Load madmom → process all files → free memory
+4. Continue for librosa, onsets, onset_mlp, resnet, hcdf
+
+This reduces peak memory from ~3GB to ~600MB and eliminates GPU contention deadlocks. Supports `--workers N` for CPU-bound phases with `mp.get_context("spawn")` and `maxtasksperchild=50` for worker recycling.
+
+#### Status
+
+Infrastructure complete, cache warming in progress. Training pending.
+
 ## 5. Failure Analysis
 
 We analyzed incorrectly classified files and identified three recurring failure patterns.
@@ -558,17 +610,15 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **Onset MLP weight tuning** -- Integrated at W=0.12, pending full eval on METER2800 tuning split (2100 files). Need to find optimal weight and evaluate potential interaction with existing NN 3/4 penalty and rarity penalties. The onset MLP's strong odd meter performance (5/x: 50%, 7/x: 88%) may warrant reducing rarity penalties.
+1. **Arbiter MLP training and evaluation** -- Cache warming in progress. Once complete: extract signal features for all METER2800 + WIKIMETER files, train multi-label arbiter MLP, and compare against hand-tuned engine on METER2800 test (700 files). Key question: does the arbiter outperform hand-tuned weights, especially on odd meters? After training, perform ablation analysis to determine which signals the arbiter finds most useful and whether any can be dropped.
 
-2. **Onset MLP + rarity penalty interaction** -- With the onset MLP providing reliable odd meter detection, the current heavy rarity penalties (5: 0.65, 7: 0.55) may be suppressing correct onset MLP predictions. Evaluate reducing/removing these.
+2. **Onset MLP weight tuning** -- Currently integrated at W=0.12, may be superseded by arbiter which learns weights automatically. If arbiter succeeds, the hand-tuned weight becomes irrelevant.
 
-3. **MERT-330M LoRA multi-label results** -- First run (WIKIMETER) reached val 14.7% at epoch 9 before crash. Second run (WIKIMETER, balanced dataset, L4 GPU) pending. See [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
+3. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
 
-4. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
+4. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters (3/4, 5/4, 7/4) from abundant 4/4 data.
 
-5. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters (3/4, 5/4, 7/4) from abundant 4/4 data.
-
-6. **Real-time meter tracking** -- Extending to real-time streaming analysis with adaptive meter tracking (potentially integrating BEAST-style streaming architectures) for live performance applications.
+5. **Real-time meter tracking** -- Extending to real-time streaming analysis with adaptive meter tracking (potentially integrating BEAST-style streaming architectures) for live performance applications.
 
 ## References
 

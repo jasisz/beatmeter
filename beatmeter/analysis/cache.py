@@ -78,6 +78,12 @@ SIGNAL_DEPS: dict[str, list[str]] = {
     "mert_meter": [
         "beatmeter/analysis/signals/mert_meter.py",
     ],
+    "onset_mlp_meter": [
+        "beatmeter/analysis/signals/onset_mlp_meter.py",
+    ],
+    "hcdf_meter": [
+        "beatmeter/analysis/signals/hcdf_meter.py",
+    ],
     "tempo_librosa": [
         "beatmeter/analysis/tempo.py",
     ],

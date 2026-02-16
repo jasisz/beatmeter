@@ -16,12 +16,24 @@ _beat_this_model = None
 _beat_this_lock = threading.Lock()
 
 
+def _select_device() -> str:
+    """Pick best available device: MPS > CUDA > CPU."""
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def _get_beat_this_model():
     """Get or create singleton Beat This! model."""
     global _beat_this_model
     if _beat_this_model is None:
         from beat_this.inference import File2Beats
-        _beat_this_model = File2Beats(device="cpu", dbn=False)
+        device = _select_device()
+        _beat_this_model = File2Beats(device=device, dbn=False)
+        logger.info(f"Beat This! using device: {device}")
     return _beat_this_model
 
 
