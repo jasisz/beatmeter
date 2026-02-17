@@ -4,6 +4,10 @@ Provides an orthogonal meter signal that classifies time signature from onset,
 RMS, spectral flux, and chroma autocorrelation features at multiple tempos,
 combined with tempogram, MFCC, spectral contrast, and onset rate statistics.
 
+v5: 1361-dim features (4 tempo candidates + beat-position histograms +
+autocorrelation ratios + tempogram meter salience). Residual MLP architecture.
+Backward compatible: loads v4 (876-dim, Sequential) or v5 (1361-dim, Residual).
+
 The model is trained on METER2800 + WIKIMETER (6 classes: 3, 4, 5, 7, 9, 11)
 and loaded lazily on first use. If the model file is not found, the signal
 returns an empty dict (graceful degradation — zero weight in ensemble).
@@ -28,6 +32,7 @@ _feat_mean: np.ndarray | None = None
 _feat_std: np.ndarray | None = None
 _input_dim: int | None = None
 _n_classes: int | None = None
+_arch_version: str | None = None  # "v4" or "v5"
 _lock = threading.Lock()
 
 # Search paths for the model checkpoint (checked in priority order)
@@ -35,21 +40,6 @@ MODEL_PATHS = [
     Path("data/meter_onset_mlp.pt"),  # local development
     Path.home() / ".beatmeter" / "meter_onset_mlp.pt",  # user install
 ]
-
-# ---------------------------------------------------------------------------
-# Feature extraction constants (must match train_onset_mlp.py v4)
-# ---------------------------------------------------------------------------
-SR = 22050
-HOP_LENGTH = 512
-MAX_DURATION_S = 30
-N_BEAT_FEATURES = 64
-BEAT_RANGE = (0.5, 16.0)
-WINDOW_PCT = 0.05
-N_TEMPO_CANDIDATES = 3
-N_SIGNALS = 4
-N_TEMPOGRAM_BINS = 64
-N_MFCC = 13
-N_CONTRAST_BANDS = 6
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +52,7 @@ def _load_model() -> bool:
     Returns True if the model is ready, False if no checkpoint was found.
     """
     global _model, _device, _idx_to_meter, _feat_mean, _feat_std
-    global _input_dim, _n_classes
+    global _input_dim, _n_classes, _arch_version
 
     if _model is not None:
         return True
@@ -76,7 +66,7 @@ def _load_model() -> bool:
 def _load_model_locked() -> bool:
     """Inner model loading (called under lock)."""
     global _model, _device, _idx_to_meter, _feat_mean, _feat_std
-    global _input_dim, _n_classes
+    global _input_dim, _n_classes, _arch_version
 
     try:
         import torch
@@ -109,35 +99,24 @@ def _load_model_locked() -> bool:
         meter_to_idx = checkpoint["meter_to_idx"]
         feat_mean = checkpoint.get("feat_mean")
         feat_std = checkpoint.get("feat_std")
+        arch_version = checkpoint.get("arch_version", "v4")
 
-        # Reconstruct model (must match OnsetMLP from train_onset_mlp.py)
-        hidden = 512
-        model = nn.Sequential(
-            nn.Linear(input_dim, hidden),
-            nn.BatchNorm1d(hidden),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden, hidden // 2),
-            nn.BatchNorm1d(hidden // 2),
-            nn.ReLU(),
-            nn.Dropout(0.25),
-            nn.Linear(hidden // 2, hidden // 4),
-            nn.BatchNorm1d(hidden // 4),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden // 4, n_classes),
-        )
+        if arch_version == "v5":
+            model = _build_v5_model(input_dim, n_classes)
+            model.load_state_dict(checkpoint["model_state"])
+        else:
+            # v4 fallback: nn.Sequential(512→256→128)
+            model = _build_v4_model(input_dim, n_classes)
+            # Strip "net." prefix from state dict keys
+            state_dict = checkpoint["model_state"]
+            stripped = {}
+            for k, v in state_dict.items():
+                if k.startswith("net."):
+                    stripped[k[4:]] = v
+                else:
+                    stripped[k] = v
+            model.load_state_dict(stripped)
 
-        # The checkpoint stores state for OnsetMLP.net (nn.Sequential)
-        # Map keys from "net.0.weight" → "0.weight" etc.
-        state_dict = checkpoint["model_state"]
-        stripped = {}
-        for k, v in state_dict.items():
-            if k.startswith("net."):
-                stripped[k[4:]] = v
-            else:
-                stripped[k] = v
-        model.load_state_dict(stripped)
         model.to(device)
         model.eval()
 
@@ -149,10 +128,11 @@ def _load_model_locked() -> bool:
         _feat_std = feat_std
         _input_dim = input_dim
         _n_classes = n_classes
+        _arch_version = arch_version
 
         logger.info(
-            "Loaded Onset MLP model from %s (device=%s, dim=%d, classes=%d)",
-            model_path, device, input_dim, n_classes,
+            "Loaded Onset MLP model from %s (arch=%s, device=%s, dim=%d, classes=%d)",
+            model_path, arch_version, device, input_dim, n_classes,
         )
         return True
 
@@ -161,143 +141,106 @@ def _load_model_locked() -> bool:
         return False
 
 
+def _build_v5_model(input_dim: int, n_classes: int):
+    """Build v5 Residual MLP (must match OnsetMLPv5 in train_onset_mlp.py)."""
+    import torch.nn as nn
+
+    class ResidualBlock(nn.Module):
+        def __init__(self, dim: int, dropout: float = 0.25):
+            super().__init__()
+            self.block = nn.Sequential(
+                nn.Linear(dim, dim),
+                nn.BatchNorm1d(dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            )
+
+        def forward(self, x):
+            return x + self.block(x)
+
+    class OnsetMLPv5(nn.Module):
+        def __init__(self, input_dim: int, n_classes: int):
+            super().__init__()
+            self.input_proj = nn.Sequential(
+                nn.Linear(input_dim, 640),
+                nn.BatchNorm1d(640),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+            )
+            self.residual = ResidualBlock(640, dropout=0.25)
+            self.head = nn.Sequential(
+                nn.Linear(640, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(0.15),
+                nn.Linear(128, n_classes),
+            )
+
+        def forward(self, x):
+            x = self.input_proj(x)
+            x = self.residual(x)
+            return self.head(x)
+
+    return OnsetMLPv5(input_dim, n_classes)
+
+
+def _build_v4_model(input_dim: int, n_classes: int):
+    """Build v4 Sequential MLP (backward compatibility)."""
+    import torch.nn as nn
+
+    hidden = 512
+    return nn.Sequential(
+        nn.Linear(input_dim, hidden),
+        nn.BatchNorm1d(hidden),
+        nn.ReLU(),
+        nn.Dropout(0.3),
+        nn.Linear(hidden, hidden // 2),
+        nn.BatchNorm1d(hidden // 2),
+        nn.ReLU(),
+        nn.Dropout(0.25),
+        nn.Linear(hidden // 2, hidden // 4),
+        nn.BatchNorm1d(hidden // 4),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        nn.Linear(hidden // 4, n_classes),
+    )
+
+
 # ---------------------------------------------------------------------------
-# Feature extraction (mirrors train_onset_mlp.py v4 exactly)
+# Feature extraction — delegates to shared module
 # ---------------------------------------------------------------------------
-
-def _normalized_autocorrelation(signal: np.ndarray) -> np.ndarray:
-    if len(signal) < 10:
-        return np.zeros(1)
-    signal = signal - signal.mean()
-    norm = np.sum(signal ** 2)
-    if norm < 1e-10:
-        return np.zeros(len(signal))
-    autocorr = np.correlate(signal, signal, mode="full")
-    autocorr = autocorr[len(autocorr) // 2:]
-    autocorr = autocorr / autocorr[0]
-    return autocorr
-
-
-def _sample_autocorr_at_tempo(
-    autocorr: np.ndarray, tempo_bpm: float, sr: int = SR
-) -> np.ndarray:
-    beat_period_frames = (60.0 / tempo_bpm) * (sr / HOP_LENGTH)
-    beat_multiples = np.linspace(BEAT_RANGE[0], BEAT_RANGE[1], N_BEAT_FEATURES)
-    features = np.zeros(N_BEAT_FEATURES)
-    for i, k in enumerate(beat_multiples):
-        lag = int(k * beat_period_frames)
-        if 0 < lag < len(autocorr):
-            window = max(1, int(lag * WINDOW_PCT))
-            start = max(0, lag - window)
-            end = min(len(autocorr), lag + window + 1)
-            features[i] = float(np.max(autocorr[start:end]))
-    return features
-
 
 def _extract_features_from_audio(audio: np.ndarray, sr: int) -> np.ndarray | None:
-    """Extract v4 features from audio array (876 dims).
+    """Extract features from audio array, version-aware.
 
-    Same pipeline as train_onset_mlp.extract_features but takes array instead of path.
+    Uses v5 features for v5 models, v4 for v4 models.
     """
-    try:
-        import librosa
+    from beatmeter.analysis.signals.onset_mlp_features import (
+        SR, MAX_DURATION_S, extract_features_v4, extract_features_v5,
+    )
+    import librosa
 
-        if len(audio) < sr * 2:
-            return None
-
-        # Trim to MAX_DURATION_S from center
-        max_samples = sr * MAX_DURATION_S
-        if len(audio) > max_samples:
-            start = (len(audio) - max_samples) // 2
-            audio = audio[start : start + max_samples]
-
-        # Resample if needed
-        if sr != SR:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=SR)
-            sr = SR
-
-        # Part 1: autocorrelation features (768 dims)
-        onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=HOP_LENGTH)
-        ac_onset = _normalized_autocorrelation(onset_env)
-
-        rms = librosa.feature.rms(y=audio, hop_length=HOP_LENGTH)[0]
-        ac_rms = _normalized_autocorrelation(rms)
-
-        S = np.abs(librosa.stft(audio, hop_length=HOP_LENGTH))
-        flux = np.sqrt(np.sum(np.diff(S, axis=1) ** 2, axis=0))
-        ac_flux = _normalized_autocorrelation(flux)
-
-        chroma = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=HOP_LENGTH)
-        chroma_energy = np.sum(chroma, axis=0)
-        ac_chroma = _normalized_autocorrelation(chroma_energy)
-
-        autocorrs = [ac_onset, ac_rms, ac_flux, ac_chroma]
-        if any(len(ac) < 10 for ac in autocorrs):
-            return None
-
-        # Estimate tempos: T, T/2, T×2
-        tempo = librosa.feature.tempo(y=audio, sr=sr, hop_length=HOP_LENGTH)
-        t = float(tempo[0]) if len(tempo) > 0 else 120.0
-        if t < 30 or t > 300:
-            t = 120.0
-        tempos = [t, max(30.0, t / 2), min(300.0, t * 2)]
-
-        parts = []
-        for tp in tempos:
-            for ac in autocorrs:
-                parts.append(_sample_autocorr_at_tempo(ac, tp, sr))
-
-        # Part 2: tempo-independent features (108 dims)
-        # Tempogram profile (64 dims)
-        tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=HOP_LENGTH)
-        avg_tg = tg.mean(axis=1)
-        bpm_bins = np.logspace(np.log10(30), np.log10(300), N_TEMPOGRAM_BINS)
-        profile = np.zeros(N_TEMPOGRAM_BINS)
-        for i, bpm in enumerate(bpm_bins):
-            lag = int((60.0 / bpm) * (sr / HOP_LENGTH))
-            if 0 < lag < len(avg_tg):
-                w = max(1, lag // 20)
-                s = max(0, lag - w)
-                e = min(len(avg_tg), lag + w + 1)
-                profile[i] = float(np.max(avg_tg[s:e]))
-        pmax = profile.max()
-        if pmax > 1e-10:
-            profile /= pmax
-        parts.append(profile)
-
-        # MFCC stats (26 dims)
-        mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=N_MFCC, hop_length=HOP_LENGTH)
-        parts.append(np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)]))
-
-        # Spectral contrast stats (14 dims)
-        contrast = librosa.feature.spectral_contrast(
-            y=audio, sr=sr, hop_length=HOP_LENGTH, n_bands=N_CONTRAST_BANDS,
-        )
-        parts.append(np.concatenate([contrast.mean(axis=1), contrast.std(axis=1)]))
-
-        # Onset rate stats (4 dims)
-        onset_frames = librosa.onset.onset_detect(y=audio, sr=sr, hop_length=HOP_LENGTH)
-        if len(onset_frames) < 3:
-            parts.append(np.zeros(4))
-        else:
-            onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=HOP_LENGTH)
-            intervals = np.diff(onset_times)
-            if len(intervals) == 0:
-                parts.append(np.zeros(4))
-            else:
-                duration = len(audio) / sr
-                parts.append(np.array([
-                    float(np.mean(intervals)),
-                    float(np.std(intervals)),
-                    float(np.median(intervals)),
-                    float(len(onset_frames) / max(duration, 1.0)),
-                ]))
-
-        return np.concatenate(parts)
-
-    except Exception as e:
-        logger.warning("Onset MLP feature extraction failed: %s", e)
+    if len(audio) < sr * 2:
         return None
+
+    # Trim to MAX_DURATION_S from center
+    max_samples = sr * MAX_DURATION_S
+    if len(audio) > max_samples:
+        start = (len(audio) - max_samples) // 2
+        audio = audio[start:start + max_samples]
+
+    # Resample if needed
+    if sr != SR:
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=SR)
+        sr = SR
+
+    if _arch_version == "v5":
+        return extract_features_v5(audio, sr)
+    return extract_features_v4(audio, sr)
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +278,7 @@ def signal_onset_mlp_meter(audio: np.ndarray, sr: int) -> dict[tuple[int, int], 
             probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("Onset MLP meter inference: %.1f ms", elapsed_ms)
+        logger.debug("Onset MLP meter inference: %.1f ms (arch=%s)", elapsed_ms, _arch_version)
 
         # Map class probabilities to meter hypotheses
         scores: dict[tuple[int, int], float] = {}

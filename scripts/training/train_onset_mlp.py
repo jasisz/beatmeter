@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """Train MLP on multi-tempo, multi-signal autocorrelation features for meter classification.
 
-v4: Multi-tempo autocorrelation (768) + tempogram profile (64) + MFCC stats (26)
-    + spectral contrast (14) + onset rate stats (4) = 876-dim features.
-+ focal loss, larger model (512→256→128), z-score, mixup, label smoothing.
-
-The idea: autocorrelation features capture beat-relative periodicity but depend on
-tempo estimation. Tempogram/MFCC/spectral features provide tempo-independent context.
-Focal loss focuses training on hard examples (e.g. ambiguous 4/x).
-
-Feature vector: 768 (autocorr) + 64 (tempogram) + 26 (MFCC) + 14 (contrast) + 4 (onset) = 876 dims.
+v5: All v4 features (876) + 4th tempo candidate (+256) + beat-position histograms (+160)
+    + autocorrelation ratios (+60) + tempogram meter salience (+9) = 1361-dim features.
++ Residual MLP (640→640 with skip), CutMix, AdamW, CosineAnnealingWarmRestarts.
++ Audio-level augmentation (--augment N): random crop, time stretch, pitch shift, noise.
 
 Usage:
     # METER2800 only (4 classes: 3,4,5,7)
@@ -17,6 +12,9 @@ Usage:
 
     # METER2800 + WIKIMETER (6 classes: 3,4,5,7,9,11)
     uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --extra-data data/wikimeter
+
+    # With audio augmentation (4 augmented copies per rare-class file)
+    uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --extra-data data/wikimeter --augment 4
 
     # Quick test
     uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --limit 20
@@ -35,225 +33,153 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from beatmeter.analysis.signals.onset_mlp_features import (
+    SR,
+    MAX_DURATION_S,
+    FEATURE_VERSION_V5,
+    TOTAL_FEATURES_V5,
+    extract_features_v5,
+    extract_features_from_path,
+)
 from scripts.utils import resolve_audio_path
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-SR = 22050
-HOP_LENGTH = 512
-MAX_DURATION_S = 30
-N_BEAT_FEATURES = 64       # autocorrelation sampled at 64 beat-relative lags
-BEAT_RANGE = (0.5, 16.0)   # from 0.5 to 16 beats
-WINDOW_PCT = 0.05           # ±5% window around expected lag
-N_TEMPO_CANDIDATES = 3     # primary, half, double
-N_SIGNALS = 4              # onset + RMS + spectral flux + chroma
-N_AUTOCORR_FEATURES = N_BEAT_FEATURES * N_TEMPO_CANDIDATES * N_SIGNALS  # 768
+FEATURE_VERSION = FEATURE_VERSION_V5
+TOTAL_FEATURES = TOTAL_FEATURES_V5
 
-# Tempo-independent features (v4)
-N_TEMPOGRAM_BINS = 64      # tempogram profile sampled at log-spaced BPMs
-N_MFCC = 13               # MFCC coefficients → mean + std = 26 dims
-N_CONTRAST_BANDS = 6      # spectral contrast bands (librosa returns n_bands+1 rows incl. valley)
-N_CONTRAST_DIMS = (N_CONTRAST_BANDS + 1) * 2  # 7 rows × (mean + std) = 14 dims
-N_ONSET_STATS = 4          # onset rate: mean/std/median interval + count
-N_EXTRA_FEATURES = N_TEMPOGRAM_BINS + N_MFCC * 2 + N_CONTRAST_DIMS + N_ONSET_STATS  # 108
-TOTAL_FEATURES = N_AUTOCORR_FEATURES + N_EXTRA_FEATURES  # 876
-
-FEATURE_VERSION = "v4"     # bump when feature extraction changes (invalidates cache)
-LABEL_SMOOTHING = 0.1      # soften hard targets
-MIXUP_ALPHA = 0.2          # mixup interpolation parameter
-FOCAL_GAMMA = 2.0          # focal loss focusing parameter
+LABEL_SMOOTHING = 0.1
+MIXUP_ALPHA = 0.2
+CUTMIX_ALPHA = 1.0
+FOCAL_GAMMA = 2.0
 
 CLASS_METERS_4 = [3, 4, 5, 7]
 CLASS_METERS_6 = [3, 4, 5, 7, 9, 11]
 
+# Rare meters that get more augmentation
+RARE_METERS = {5, 7, 9, 11}
+
 # ---------------------------------------------------------------------------
-# Feature extraction
+# Audio augmentation
 # ---------------------------------------------------------------------------
 
 
-def _normalized_autocorrelation(signal: np.ndarray) -> np.ndarray:
-    """Compute normalized autocorrelation of a 1-D signal."""
-    if len(signal) < 10:
-        return np.zeros(1)
-    signal = signal - signal.mean()
-    norm = np.sum(signal ** 2)
-    if norm < 1e-10:
-        return np.zeros(len(signal))
-    autocorr = np.correlate(signal, signal, mode="full")
-    autocorr = autocorr[len(autocorr) // 2:]
-    autocorr = autocorr / autocorr[0]
-    return autocorr
+def _augment_audio(y: np.ndarray, sr: int, aug_type: str, rng: np.random.Generator) -> np.ndarray:
+    """Apply a single audio augmentation.
 
+    All augmentations are fast (no STFT). Designed for meter/rhythm features:
+    - random_crop: changes beat phase alignment (most useful)
+    - noise: simulates recording quality variation
+    - gain: random volume scaling per segment
+    - time_mask: zeros random segments, simulates dropouts
 
-def _onset_autocorrelation(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute normalized autocorrelation of onset strength envelope."""
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP_LENGTH)
-    return _normalized_autocorrelation(onset_env)
+    Args:
+        y: Audio signal.
+        sr: Sample rate.
+        aug_type: One of "random_crop", "noise", "gain", "time_mask".
+        rng: Random number generator.
 
-
-def _rms_autocorrelation(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute normalized autocorrelation of RMS energy envelope."""
-    rms = librosa.feature.rms(y=y, hop_length=HOP_LENGTH)[0]
-    return _normalized_autocorrelation(rms)
-
-
-def _spectral_flux_autocorrelation(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute normalized autocorrelation of spectral flux (timbral change rate)."""
-    S = np.abs(librosa.stft(y, hop_length=HOP_LENGTH))
-    flux = np.sqrt(np.sum(np.diff(S, axis=1) ** 2, axis=0))
-    return _normalized_autocorrelation(flux)
-
-
-def _chroma_autocorrelation(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute normalized autocorrelation of chroma energy (harmonic periodicity)."""
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=HOP_LENGTH)
-    # Sum across pitch classes → single energy curve per frame
-    chroma_energy = np.sum(chroma, axis=0)
-    return _normalized_autocorrelation(chroma_energy)
-
-
-def _estimate_tempos(y: np.ndarray, sr: int = SR) -> list[float]:
-    """Estimate tempo and return 3 candidates: T, T/2, T×2."""
-    tempo = librosa.feature.tempo(y=y, sr=sr, hop_length=HOP_LENGTH)
-    t = float(tempo[0]) if len(tempo) > 0 else 120.0
-    if t < 30 or t > 300:
-        t = 120.0
-    return [t, max(30.0, t / 2), min(300.0, t * 2)]
-
-
-def _sample_autocorr_at_tempo(
-    autocorr: np.ndarray, tempo_bpm: float, sr: int = SR
-) -> np.ndarray:
-    """Sample autocorrelation at beat-relative lags for a given tempo."""
-    beat_period_frames = (60.0 / tempo_bpm) * (sr / HOP_LENGTH)
-    beat_multiples = np.linspace(BEAT_RANGE[0], BEAT_RANGE[1], N_BEAT_FEATURES)
-    features = np.zeros(N_BEAT_FEATURES)
-
-    for i, k in enumerate(beat_multiples):
-        lag = int(k * beat_period_frames)
-        if 0 < lag < len(autocorr):
-            window = max(1, int(lag * WINDOW_PCT))
-            start = max(0, lag - window)
-            end = min(len(autocorr), lag + window + 1)
-            features[i] = float(np.max(autocorr[start:end]))
-
-    return features
-
-
-def _tempogram_profile(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute averaged tempogram profile at log-spaced BPMs (tempo-independent).
-
-    Returns N_TEMPOGRAM_BINS values representing rhythmic energy at different tempi.
+    Returns:
+        Augmented audio array (same sr).
     """
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP_LENGTH)
-    # Compute tempogram (autocorrelation-based)
-    tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=HOP_LENGTH)
-    # Average across time → 1D profile
-    avg_tg = tg.mean(axis=1)
-    # Sample at log-spaced BPM values (30-300 BPM)
-    bpm_bins = np.logspace(np.log10(30), np.log10(300), N_TEMPOGRAM_BINS)
-    # Convert BPM to lag in frames, then index into avg_tg
-    profile = np.zeros(N_TEMPOGRAM_BINS)
-    for i, bpm in enumerate(bpm_bins):
-        lag = int((60.0 / bpm) * (sr / HOP_LENGTH))
-        if 0 < lag < len(avg_tg):
-            # Take max in small window around target lag
-            w = max(1, lag // 20)
-            start = max(0, lag - w)
-            end = min(len(avg_tg), lag + w + 1)
-            profile[i] = float(np.max(avg_tg[start:end]))
-    # Normalize
-    pmax = profile.max()
-    if pmax > 1e-10:
-        profile /= pmax
-    return profile
+    if aug_type == "random_crop":
+        max_samples = sr * MAX_DURATION_S
+        if len(y) > max_samples:
+            max_start = len(y) - max_samples
+            start = rng.integers(0, max_start)
+            y = y[start:start + max_samples]
+        return y
+
+    elif aug_type == "noise":
+        snr_db = rng.uniform(20.0, 30.0)
+        signal_power = np.mean(y ** 2)
+        noise_power = signal_power / (10 ** (snr_db / 10))
+        noise = rng.normal(0, np.sqrt(max(noise_power, 1e-10)), size=len(y))
+        return y + noise.astype(y.dtype)
+
+    elif aug_type == "gain":
+        # Random gain per ~2s segment — changes RMS/onset strength patterns
+        seg_len = sr * 2
+        n_segs = max(1, len(y) // seg_len)
+        gains = rng.uniform(0.5, 1.5, size=n_segs)
+        for i, g in enumerate(gains):
+            start = i * seg_len
+            end = min(start + seg_len, len(y))
+            y[start:end] = y[start:end] * g
+        return y
+
+    elif aug_type == "time_mask":
+        # Zero out 1-3 random segments of 0.2-0.8s — simulates dropouts
+        n_masks = rng.integers(1, 4)
+        for _ in range(n_masks):
+            mask_len = int(rng.uniform(0.2, 0.8) * sr)
+            start = rng.integers(0, max(1, len(y) - mask_len))
+            y[start:start + mask_len] = 0.0
+        return y
+
+    return y
 
 
-def _mfcc_statistics(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute mean and std of MFCC coefficients (tempo-independent timbral context).
+def _file_rng(audio_path: Path, aug_idx: int) -> np.random.Generator:
+    """Deterministic RNG per (file, augmentation index).
 
-    Returns 2 × N_MFCC = 26 values.
+    Same file + same index always produces the same augmentation,
+    regardless of processing order or number of workers.
     """
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=N_MFCC, hop_length=HOP_LENGTH)
-    return np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1)])
+    seed_str = f"{audio_path.resolve()}::aug_{aug_idx}"
+    seed = int(hashlib.sha1(seed_str.encode()).hexdigest(), 16) % (2**32)
+    return np.random.default_rng(seed)
 
 
-def _spectral_contrast_statistics(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute mean and std of spectral contrast (tempo-independent timbral texture).
+def _augment_and_extract(
+    audio_path: Path,
+    indices: list[int],
+) -> dict[int, np.ndarray]:
+    """Generate augmented feature vectors for specific indices.
 
-    Returns 2 × N_CONTRAST_BANDS = 14 values.
+    Args:
+        audio_path: Path to audio file.
+        indices: Which augmentation indices to generate (e.g. [2, 3]).
+
+    Returns:
+        Dict mapping aug index → feature array. Missing indices = extraction failed.
     """
-    contrast = librosa.feature.spectral_contrast(
-        y=y, sr=sr, hop_length=HOP_LENGTH, n_bands=N_CONTRAST_BANDS,
-    )
-    return np.concatenate([contrast.mean(axis=1), contrast.std(axis=1)])
+    if not indices:
+        return {}
 
-
-def _onset_rate_statistics(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """Compute onset timing statistics (tempo-independent rhythmic density).
-
-    Returns 4 values: mean interval, std interval, median interval, onset rate.
-    """
-    onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=HOP_LENGTH)
-    if len(onset_frames) < 3:
-        return np.zeros(N_ONSET_STATS)
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=HOP_LENGTH)
-    intervals = np.diff(onset_times)
-    if len(intervals) == 0:
-        return np.zeros(N_ONSET_STATS)
-    duration = len(y) / sr
-    return np.array([
-        float(np.mean(intervals)),
-        float(np.std(intervals)),
-        float(np.median(intervals)),
-        float(len(onset_frames) / max(duration, 1.0)),  # onsets per second
-    ])
-
-
-def extract_features(audio_path: Path) -> np.ndarray | None:
-    """Extract v4 features: autocorrelation + tempogram + MFCC + contrast + onset stats.
-
-    Returns 876-dim vector: 768 (autocorr) + 64 (tempogram) + 26 (MFCC) + 14 (contrast) + 4 (onset),
-    or None on failure.
-    """
     try:
-        y, sr = librosa.load(str(audio_path), sr=SR, duration=MAX_DURATION_S, mono=True)
+        y_full, sr = librosa.load(str(audio_path), sr=SR, mono=True)
     except Exception:
-        return None
+        return {}
 
-    if len(y) < sr * 2:  # minimum 2 seconds
-        return None
+    if len(y_full) < sr * 2:
+        return {}
 
-    # --- Part 1: autocorrelation features (768 dims, tempo-dependent) ---
-    autocorrs = [
-        _onset_autocorrelation(y, sr),
-        _rms_autocorrelation(y, sr),
-        _spectral_flux_autocorrelation(y, sr),
-        _chroma_autocorrelation(y, sr),
-    ]
-    if any(len(ac) < 10 for ac in autocorrs):
-        return None
+    aug_types = ["random_crop", "noise", "gain", "time_mask"]
+    results = {}
 
-    tempos = _estimate_tempos(y, sr)
+    for i in indices:
+        aug_type = aug_types[i % len(aug_types)]
+        rng = _file_rng(audio_path, i)
+        try:
+            y_aug = _augment_audio(y_full.copy(), sr, aug_type, rng)
+            max_samples = sr * MAX_DURATION_S
+            if len(y_aug) > max_samples:
+                start = (len(y_aug) - max_samples) // 2
+                y_aug = y_aug[start:start + max_samples]
+            feat = extract_features_v5(y_aug, sr)
+            if feat is not None:
+                results[i] = feat
+        except Exception:
+            continue
 
-    parts = []
-    for t in tempos:
-        for ac in autocorrs:
-            parts.append(_sample_autocorr_at_tempo(ac, t, sr))
-
-    # --- Part 2: tempo-independent features (108 dims) ---
-    parts.append(_tempogram_profile(y, sr))           # 64 dims
-    parts.append(_mfcc_statistics(y, sr))              # 26 dims
-    parts.append(_spectral_contrast_statistics(y, sr)) # 14 dims
-    parts.append(_onset_rate_statistics(y, sr))        # 4 dims
-
-    return np.concatenate(parts)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +222,6 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[tuple[Path, i
         for row in reader:
             fname = row["filename"].strip('"')
             meter_str = row["meter"].strip('"')
-            # Parse primary meter: "3:0.7,4:0.8" → take highest weight
             best_meter, best_weight = None, -1.0
             for part in meter_str.split(","):
                 part = part.strip()
@@ -310,7 +235,6 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[tuple[Path, i
             if best_meter is None:
                 continue
 
-            # Resolve audio path
             stem = Path(fname).stem
             audio_path = audio_dir / f"{stem}.mp3"
             if not audio_path.exists():
@@ -326,55 +250,174 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[tuple[Path, i
 # ---------------------------------------------------------------------------
 
 
-def _cache_key(audio_path: Path) -> str:
+def _cache_key(audio_path: Path, suffix: str = "") -> str:
     st = audio_path.stat()
-    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{FEATURE_VERSION}"
+    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{FEATURE_VERSION}{suffix}"
     return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def _process_one_uncached(args_tuple):
+    """Extract base features and/or missing augmentations for a single file.
+
+    Called from ProcessPoolExecutor or sequentially.
+    """
+    audio_path_str, meter, cache_dir_str, need_base, missing_aug_indices, base_key, aug_key_map = args_tuple
+    audio_path = Path(audio_path_str)
+    cache_dir = Path(cache_dir_str)
+
+    result = {"meter": meter, "feat": None, "aug_results": {}}
+
+    if need_base:
+        feat = extract_features_from_path(audio_path, version="v5")
+        if feat is None:
+            return result
+        np.save(cache_dir / f"{base_key}.npy", feat)
+        result["feat"] = feat
+
+    if missing_aug_indices:
+        aug_results = _augment_and_extract(audio_path, missing_aug_indices)
+        for ai, af in aug_results.items():
+            if ai in aug_key_map:
+                np.save(cache_dir / f"{aug_key_map[ai]}.npy", af)
+        result["aug_results"] = aug_results
+
+    return result
 
 
 def extract_with_cache(
     entries: list[tuple[Path, int]],
     cache_dir: Path,
     label: str = "",
+    n_augment: int = 0,
+    workers: int = 1,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Extract features for all entries, with disk caching."""
+    """Extract features for all entries, with disk caching and optional parallelism.
+
+    Incremental: loads what's cached, extracts only what's missing.
+    --augment 1 then --augment 4 will reuse aug_0 and only compute aug_1..3.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
+
     features_list = []
     labels_list = []
     skipped = 0
+    aug_count = 0
+    uncached_work = []
 
-    desc = f"Extracting {label}" if label else "Extracting"
+    # Phase 1: load cached, identify gaps
+    desc = f"Loading {label}" if label else "Loading"
     for audio_path, meter in _progress(entries, desc):
         key = _cache_key(audio_path)
         cache_path = cache_dir / f"{key}.npy"
 
-        if cache_path.exists():
-            feat = np.load(cache_path)
+        n_aug = 0
+        if n_augment > 0:
+            n_aug = n_augment if meter in RARE_METERS else max(1, n_augment // 3)
+
+        need_base = not cache_path.exists()
+        base_feat = None
+        if not need_base:
+            base_feat = np.load(cache_path)
+            if base_feat.shape[0] != TOTAL_FEATURES:
+                base_feat = None
+                need_base = True
+
+        # Check which augmentations are cached
+        cached_augs = {}  # index → feat
+        missing_aug_indices = []
+        aug_key_map = {}  # index → cache key
+        for ai in range(n_aug):
+            ak = _cache_key(audio_path, f"::aug_{ai}")
+            aug_key_map[ai] = ak
+            aug_cache = cache_dir / f"{ak}.npy"
+            if aug_cache.exists():
+                af = np.load(aug_cache)
+                if af.shape[0] == TOTAL_FEATURES:
+                    cached_augs[ai] = af
+                else:
+                    missing_aug_indices.append(ai)
+            else:
+                missing_aug_indices.append(ai)
+
+        if need_base or missing_aug_indices:
+            uncached_work.append((
+                str(audio_path), meter, str(cache_dir),
+                need_base, missing_aug_indices, key, aug_key_map,
+            ))
+            # Store what we already have — will merge after extraction
+            if base_feat is not None:
+                features_list.append(base_feat)
+                labels_list.append(meter)
+            for ai in sorted(cached_augs.keys()):
+                features_list.append(cached_augs[ai])
+                labels_list.append(meter)
+                aug_count += 1
         else:
-            feat = extract_features(audio_path)
-            if feat is not None:
-                np.save(cache_path, feat)
+            # Fully cached
+            features_list.append(base_feat)
+            labels_list.append(meter)
+            for ai in sorted(cached_augs.keys()):
+                features_list.append(cached_augs[ai])
+                labels_list.append(meter)
+                aug_count += 1
 
-        if feat is None:
+    n_cached = len(entries) - len(uncached_work)
+    if uncached_work:
+        n_need_base = sum(1 for _, _, _, nb, _, _, _ in uncached_work if nb)
+        n_need_aug = sum(len(mai) for _, _, _, _, mai, _, _ in uncached_work)
+        print(f"  {n_cached} fully cached, {n_need_base} base + {n_need_aug} aug to extract")
+    elif aug_count:
+        print(f"  ({aug_count} augmented samples from cache)")
+
+    if not uncached_work:
+        X = np.stack(features_list).astype(np.float32)
+        y = np.array(labels_list, dtype=np.int64)
+        return X, y
+
+    # Phase 2: extract missing (parallel if workers > 1)
+    desc2 = f"Extracting {label}" if label else "Extracting"
+
+    def _handle_result(result):
+        nonlocal skipped, aug_count
+        meter = result["meter"]
+        if result["feat"] is not None:
+            features_list.append(result["feat"])
+            labels_list.append(meter)
+        elif result["feat"] is None and not result["aug_results"]:
+            # Base extraction failed and no augs
             skipped += 1
-            continue
+            return
+        for ai in sorted(result["aug_results"].keys()):
+            features_list.append(result["aug_results"][ai])
+            labels_list.append(meter)
+            aug_count += 1
 
-        features_list.append(feat)
-        labels_list.append(meter)
+    if workers > 1 and len(uncached_work) > 2:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_process_one_uncached, item): item for item in uncached_work}
+            for future in _progress(as_completed(futures), desc2, total=len(futures)):
+                _handle_result(future.result())
+    else:
+        for item in _progress(uncached_work, desc2):
+            _handle_result(_process_one_uncached(item))
 
     if skipped:
         print(f"  ({skipped} files skipped — extraction failed)")
+    if aug_count:
+        print(f"  ({aug_count} augmented samples)")
 
     X = np.stack(features_list).astype(np.float32)
     y = np.array(labels_list, dtype=np.int64)
     return X, y
 
 
-def _progress(iterable, desc=""):
+def _progress(iterable, desc="", total=None):
     """tqdm wrapper."""
     try:
         from tqdm import tqdm
-        return tqdm(iterable, desc=desc, leave=False)
+        return tqdm(iterable, desc=desc, leave=False, total=total)
     except ImportError:
         return iterable
 
@@ -384,8 +427,58 @@ def _progress(iterable, desc=""):
 # ---------------------------------------------------------------------------
 
 
+class ResidualBlock(nn.Module):
+    """Single residual block: Linear → BN → ReLU → Dropout → Linear → BN + skip."""
+
+    def __init__(self, dim: int, dropout: float = 0.25):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.BatchNorm1d(dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.block(x)
+
+
+class OnsetMLPv5(nn.Module):
+    """Residual MLP for meter classification (v5).
+
+    Architecture: input → 640 → 640 (residual) → 256 → 128 → n_classes
+    """
+
+    def __init__(self, input_dim: int, n_classes: int):
+        super().__init__()
+        self.input_proj = nn.Sequential(
+            nn.Linear(input_dim, 640),
+            nn.BatchNorm1d(640),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+        )
+        self.residual = ResidualBlock(640, dropout=0.25)
+        self.head = nn.Sequential(
+            nn.Linear(640, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.15),
+            nn.Linear(128, n_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.input_proj(x)
+        x = self.residual(x)
+        return self.head(x)
+
+
+# Keep v4 model for backward compatibility in loading
 class OnsetMLP(nn.Module):
-    """MLP for meter classification from multi-tempo autocorrelation features."""
+    """v4 MLP (kept for loading old checkpoints)."""
 
     def __init__(self, input_dim: int, n_classes: int, hidden: int = 512):
         super().__init__()
@@ -415,40 +508,18 @@ def _focal_loss(
     class_weights: torch.Tensor,
     gamma: float = FOCAL_GAMMA,
 ) -> torch.Tensor:
-    """Focal loss with soft targets (for mixup) and class weights.
-
-    Focuses training on hard examples by down-weighting well-classified ones.
-    """
+    """Focal loss with soft targets (for mixup/cutmix) and class weights."""
     log_probs = F.log_softmax(logits, dim=1)
     probs = torch.exp(log_probs)
-    # Focal modulation: (1 - p_t)^gamma
     focal_weight = (1.0 - (probs * targets_soft).sum(dim=1)) ** gamma
-    # Soft cross-entropy
     ce = -(targets_soft * log_probs).sum(dim=1)
-    # Apply class weights via target distribution
     sample_weight = (targets_soft * class_weights).sum(dim=1)
     return (focal_weight * ce * sample_weight).mean()
 
 
 # ---------------------------------------------------------------------------
-# Training
+# Training augmentation (feature-level)
 # ---------------------------------------------------------------------------
-
-
-def _standardize(
-    X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Z-score standardization fitted on train set."""
-    mean = X_train.mean(axis=0)
-    std = X_train.std(axis=0)
-    std[std < 1e-8] = 1.0  # avoid division by zero
-    return (
-        (X_train - mean) / std,
-        (X_val - mean) / std,
-        (X_test - mean) / std,
-        mean,
-        std,
-    )
 
 
 def _mixup_batch(
@@ -474,6 +545,60 @@ def _mixup_batch(
     return mixed_x, mixed_y
 
 
+def _cutmix_batch(
+    xb: torch.Tensor, yb: torch.Tensor, n_classes: int, alpha: float = CUTMIX_ALPHA
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """CutMix augmentation: replace a contiguous segment of features with another sample's."""
+    if alpha <= 0:
+        one_hot = torch.zeros(yb.size(0), n_classes, device=yb.device)
+        one_hot.scatter_(1, yb.unsqueeze(1), 1.0)
+        return xb, one_hot
+
+    lam = np.random.beta(alpha, alpha)
+    idx = torch.randperm(xb.size(0), device=xb.device)
+
+    # For 1D features, "cut" is a contiguous range of feature indices
+    feat_dim = xb.size(1)
+    cut_len = int(feat_dim * (1 - lam))
+    cut_start = np.random.randint(0, max(1, feat_dim - cut_len))
+    cut_end = cut_start + cut_len
+
+    mixed_x = xb.clone()
+    mixed_x[:, cut_start:cut_end] = xb[idx, cut_start:cut_end]
+
+    # Actual lambda after cut
+    actual_lam = 1 - cut_len / feat_dim
+
+    y_onehot = torch.zeros(yb.size(0), n_classes, device=yb.device)
+    y_onehot.scatter_(1, yb.unsqueeze(1), 1.0)
+    y_onehot_shuf = torch.zeros(yb.size(0), n_classes, device=yb.device)
+    y_onehot_shuf.scatter_(1, yb[idx].unsqueeze(1), 1.0)
+    mixed_y = actual_lam * y_onehot + (1 - actual_lam) * y_onehot_shuf
+
+    return mixed_x, mixed_y
+
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+
+
+def _standardize(
+    X_train: np.ndarray, X_val: np.ndarray, X_test: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Z-score standardization fitted on train set."""
+    mean = X_train.mean(axis=0)
+    std = X_train.std(axis=0)
+    std[std < 1e-8] = 1.0
+    return (
+        (X_train - mean) / std,
+        (X_val - mean) / std,
+        (X_test - mean) / std,
+        mean,
+        std,
+    )
+
+
 def train_model(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -482,18 +607,17 @@ def train_model(
     meter_to_idx: dict[int, int],
     epochs: int = 200,
     batch_size: int = 64,
-    lr: float = 1e-3,
+    lr: float = 8e-4,
     device: str = "cpu",
-) -> tuple[OnsetMLP, dict]:
-    """Train the OnsetMLP model."""
+) -> tuple[OnsetMLPv5, dict]:
+    """Train the OnsetMLPv5 model."""
     n_classes = len(meter_to_idx)
     input_dim = X_train.shape[1]
 
-    # Map meter labels to class indices
     y_train_idx = np.array([meter_to_idx[m] for m in y_train])
     y_val_idx = np.array([meter_to_idx[m] for m in y_val])
 
-    # Class weights for imbalanced data
+    # Class weights for focal loss
     counts = Counter(y_train_idx)
     total = len(y_train_idx)
     class_weights = torch.tensor(
@@ -501,7 +625,16 @@ def train_model(
         dtype=torch.float32,
     ).to(device)
 
-    # Datasets
+    # WeightedRandomSampler — oversample rare classes
+    sample_weights = np.array([
+        total / (n_classes * counts[c]) for c in y_train_idx
+    ], dtype=np.float64)
+    sampler = WeightedRandomSampler(
+        weights=torch.from_numpy(sample_weights),
+        num_samples=len(y_train_idx),
+        replacement=True,
+    )
+
     train_ds = TensorDataset(
         torch.tensor(X_train, dtype=torch.float32),
         torch.tensor(y_train_idx, dtype=torch.long),
@@ -510,28 +643,24 @@ def train_model(
         torch.tensor(X_val, dtype=torch.float32),
         torch.tensor(y_val_idx, dtype=torch.long),
     )
-    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
 
-    # Model
-    model = OnsetMLP(input_dim, n_classes).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=15, factor=0.5, min_lr=1e-6
+    model = OnsetMLPv5(input_dim, n_classes).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=50, T_mult=2,
     )
-    # Focal loss replaces CrossEntropyLoss — focuses on hard examples
-    # criterion is not used directly; _focal_loss is called in training loop
 
     best_val_acc = 0.0
     best_state = None
     best_epoch = 0
     patience_counter = 0
-    patience_limit = 40
+    patience_limit = 50
 
     idx_to_meter = {v: k for k, v in meter_to_idx.items()}
 
     for epoch in range(1, epochs + 1):
-        # Train
         model.train()
         train_loss = 0.0
         train_correct = 0
@@ -542,19 +671,24 @@ def train_model(
             noise = torch.randn_like(xb) * 0.02
             scale = 1.0 + (torch.rand(xb.size(0), 1, device=device) - 0.5) * 0.1
             xb = xb * scale + noise
-            # Mixup augmentation
-            xb_mixed, yb_mixed = _mixup_batch(xb, yb, n_classes)
+            # 50/50 Mixup vs CutMix
+            if np.random.random() < 0.5:
+                xb_mixed, yb_mixed = _mixup_batch(xb, yb, n_classes)
+            else:
+                xb_mixed, yb_mixed = _cutmix_batch(xb, yb, n_classes)
+
             optimizer.zero_grad()
             logits = model(xb_mixed)
             loss = _focal_loss(logits, yb_mixed, class_weights)
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * xb.size(0)
-            # Accuracy on original (unmixed) labels for logging
             with torch.no_grad():
                 preds = model(xb).argmax(1)
             train_correct += (preds == yb).sum().item()
             train_total += xb.size(0)
+
+        scheduler.step()
 
         # Validate
         model.eval()
@@ -576,7 +710,6 @@ def train_model(
 
         train_acc = train_correct / max(train_total, 1)
         val_acc = val_correct / max(val_total, 1)
-        scheduler.step(1 - val_acc)
 
         if epoch % 10 == 0 or epoch <= 5 or val_acc > best_val_acc:
             per_class_str = "  ".join(
@@ -612,7 +745,7 @@ def train_model(
 
 
 def evaluate(
-    model: OnsetMLP,
+    model: nn.Module,
     X_test: np.ndarray,
     y_test: np.ndarray,
     meter_to_idx: dict[int, int],
@@ -663,28 +796,34 @@ def evaluate(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train onset autocorrelation MLP")
+    parser = argparse.ArgumentParser(description="Train onset MLP v5")
     parser.add_argument("--data-dir", type=Path, default=Path("data/meter2800"))
     parser.add_argument("--extra-data", type=Path, default=None,
                         help="WIKIMETER data dir for 6-class training")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=8e-4)
     parser.add_argument("--limit", type=int, default=0,
                         help="Limit entries per split (0=all)")
+    parser.add_argument("--augment", type=int, default=0,
+                        help="N augmented copies per file (0=off). Rare classes get N, common get N//3.")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Parallel workers for feature extraction (default: 1)")
     parser.add_argument("--save", type=Path, default=None,
                         help="Save model to this path")
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
-    # Determine class set
     use_6_classes = args.extra_data is not None
     class_meters = CLASS_METERS_6 if use_6_classes else CLASS_METERS_4
     meter_to_idx = {m: i for i, m in enumerate(class_meters)}
     valid_meters = set(class_meters)
 
+    print(f"Onset MLP v5 (features={TOTAL_FEATURES})")
     print(f"Classes: {class_meters}")
     print(f"Data: {args.data_dir}" + (f" + {args.extra_data}" if args.extra_data else ""))
+    if args.augment:
+        print(f"Augmentation: {args.augment}x rare, {max(1, args.augment // 3)}x common")
 
     # Load entries
     print("\nLoading data...")
@@ -717,7 +856,6 @@ def main():
 
     print(f"  Train: {len(train_entries)}, Val: {len(val_entries)}, Test: {len(test_entries)}")
 
-    # Distribution
     for name, entries in [("Train", train_entries), ("Val", val_entries), ("Test", test_entries)]:
         dist = Counter(m for _, m in entries)
         dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
@@ -725,20 +863,26 @@ def main():
 
     # Extract features
     cache_dir = Path(f"data/onset_features_cache_{FEATURE_VERSION}")
-    print("\nExtracting features...")
+    print(f"\nExtracting features (cache: {cache_dir})...")
     t0 = time.time()
-    X_train, y_train = extract_with_cache(train_entries, cache_dir, "train")
-    X_val, y_val = extract_with_cache(val_entries, cache_dir, "val")
-    X_test, y_test = extract_with_cache(test_entries, cache_dir, "test")
+    X_train, y_train = extract_with_cache(train_entries, cache_dir, "train", n_augment=args.augment, workers=args.workers)
+    X_val, y_val = extract_with_cache(val_entries, cache_dir, "val", workers=args.workers)
+    X_test, y_test = extract_with_cache(test_entries, cache_dir, "test", workers=args.workers)
     print(f"  Feature extraction: {time.time() - t0:.1f}s")
     print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
 
-    # Z-score standardization (fit on train)
+    # Post-augmentation distribution
+    if args.augment:
+        dist = Counter(y_train)
+        dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist))
+        print(f"  Train (with aug): {dist_str}")
+
+    # Z-score standardization
     X_train, X_val, X_test, feat_mean, feat_std = _standardize(X_train, X_val, X_test)
     print("  Features standardized (z-score, fit on train)")
 
     # Train
-    print(f"\nTraining MLP (input={X_train.shape[1]}, classes={len(class_meters)})...")
+    print(f"\nTraining Residual MLP (input={X_train.shape[1]}, classes={len(class_meters)})...")
     model, info = train_model(
         X_train, y_train, X_val, y_val,
         meter_to_idx,
@@ -752,8 +896,14 @@ def main():
     # Test
     results = evaluate(model, X_test, y_test, meter_to_idx, args.device)
 
-    # Save
-    save_path = args.save or Path("data/meter_onset_mlp.pt")
+    # Save (skip auto-save for --limit runs to avoid overwriting production checkpoint)
+    if args.save:
+        save_path = args.save
+    elif args.limit:
+        save_path = Path(f"data/meter_onset_mlp_test.pt")
+        print(f"  (--limit active, saving to {save_path} instead of production checkpoint)")
+    else:
+        save_path = Path("data/meter_onset_mlp.pt")
     torch.save(
         {
             "model_state": model.state_dict(),
@@ -767,6 +917,7 @@ def main():
             "feat_mean": feat_mean,
             "feat_std": feat_std,
             "feature_version": FEATURE_VERSION,
+            "arch_version": "v5",
         },
         save_path,
     )
