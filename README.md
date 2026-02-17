@@ -83,10 +83,10 @@ Six signals provide independent meter hypotheses, fused by a learned **Arbiter M
 | `beat_this` | Downbeat spacing from Beat This! (ISMIR 2024) |
 | `autocorr` | Multi-signal onset/RMS/flux/chroma autocorrelation periodicity |
 | `bar_tracking` | madmom DBNBarTrackingProcessor bar-level inference |
-| `onset_mlp` | Multi-tempo autocorrelation MLP classifier (dominant signal) |
+| `onset_mlp` | 1361-dim Residual MLP on multi-tempo autocorrelation + beat-position histograms (dominant signal) |
 | `hcdf` | Harmonic Change Detection Function meter discrimination |
 
-The Arbiter MLP (72→64→32→6) learns optimal signal fusion from data, trained on METER2800 + WIKIMETER. A hand-tuned weighted voting fallback is used when no arbiter checkpoint is available. See `docs/RESEARCH.md` for full details.
+The Arbiter MLP (72→64→32→6) learns optimal signal fusion from data, trained on METER2800 + WIKIMETER (683 songs, 2937 segments, 6 meter classes). A hand-tuned weighted voting fallback is used when no arbiter checkpoint is available. See `docs/RESEARCH.md` for full details.
 
 ## Development
 

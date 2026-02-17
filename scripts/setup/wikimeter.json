@@ -9489,5 +9489,232 @@
         "url": "https://www.youtube.com/watch?v=uj9BihmugmI"
       }
     ]
+  },
+  {
+    "artist": "Blodwyn Pig",
+    "title": "Same Old Story",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "PEreW_xpEiI",
+        "url": "https://www.youtube.com/watch?v=PEreW_xpEiI"
+      }
+    ]
+  },
+  {
+    "artist": "Mastodon",
+    "title": "Aqua Dementia",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "6hGXQEXSVgk",
+        "url": "https://www.youtube.com/watch?v=6hGXQEXSVgk"
+      }
+    ]
+  },
+  {
+    "artist": "Porcupine Tree",
+    "title": "Harridan",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "AW5v4Ohxk5k",
+        "url": "https://www.youtube.com/watch?v=AW5v4Ohxk5k"
+      }
+    ]
+  },
+  {
+    "artist": "Minus The Bear",
+    "title": "Walk on Air",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "9kRV1Gqd7y0",
+        "url": "https://www.youtube.com/watch?v=9kRV1Gqd7y0"
+      }
+    ]
+  },
+  {
+    "artist": "Joshua Redman",
+    "title": "Eleanor Rigby",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "euTD5BR8vSk",
+        "url": "https://www.youtube.com/watch?v=euTD5BR8vSk"
+      }
+    ]
+  },
+  {
+    "artist": "Kurt Elling",
+    "title": "A Time For Love",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "9euZqJkXKqM",
+        "url": "https://www.youtube.com/watch?v=9euZqJkXKqM"
+      }
+    ]
+  },
+  {
+    "artist": "Brad Mehldau",
+    "title": "Anything Goes",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "jaF3znfkZuw",
+        "url": "https://www.youtube.com/watch?v=jaF3znfkZuw"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Castilian Blues",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "ncL4sOPgv_o",
+        "url": "https://www.youtube.com/watch?v=ncL4sOPgv_o"
+      }
+    ]
+  },
+  {
+    "artist": "Dave Brubeck",
+    "title": "Castilian Drums",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "0LBZJk5Kfgw",
+        "url": "https://www.youtube.com/watch?v=0LBZJk5Kfgw"
+      }
+    ]
+  },
+  {
+    "artist": "Ravel",
+    "title": "Daphnis et Chloe - Danse Generale",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "CtA7KTN_554",
+        "url": "https://www.youtube.com/watch?v=CtA7KTN_554"
+      }
+    ]
+  },
+  {
+    "artist": "Shostakovich",
+    "title": "Prelude and Fugue No 12 Op 87",
+    "meters": {
+      "5": 1.0
+    },
+    "trim": {"start": 240},
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "V3A-jAltFH0",
+        "url": "https://www.youtube.com/watch?v=V3A-jAltFH0"
+      }
+    ]
+  },
+  {
+    "artist": "Shostakovich",
+    "title": "Prelude and Fugue No 17 Op 87",
+    "meters": {
+      "5": 1.0
+    },
+    "trim": {"start": 110},
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "9Sbkcqtxf5E",
+        "url": "https://www.youtube.com/watch?v=9Sbkcqtxf5E"
+      }
+    ]
+  },
+  {
+    "artist": "Shostakovich",
+    "title": "Prelude and Fugue No 19 Op 87",
+    "meters": {
+      "5": 1.0
+    },
+    "trim": {"start": 100},
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "1stblviLi_c",
+        "url": "https://www.youtube.com/watch?v=1stblviLi_c"
+      }
+    ]
+  },
+  {
+    "artist": "Hindemith",
+    "title": "Ludus Tonalis - Fuga secunda in G",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "d84mZgyeR84",
+        "url": "https://www.youtube.com/watch?v=d84mZgyeR84"
+      }
+    ]
+  },
+  {
+    "artist": "Hovhaness",
+    "title": "Mysterious Mountain Symphony No 2 - Movement 3",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "8tKbfYp2tic",
+        "url": "https://www.youtube.com/watch?v=8tKbfYp2tic"
+      }
+    ]
+  },
+  {
+    "artist": "Bela Fleck",
+    "title": "Flight of the Cosmic Hippo",
+    "meters": {
+      "5": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "Tt_22fXoDYs",
+        "url": "https://www.youtube.com/watch?v=Tt_22fXoDYs"
+      }
+    ]
   }
 ]

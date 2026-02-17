@@ -39,7 +39,7 @@ All signal implementations live in `beatmeter/analysis/signals/`.
 | **downbeat_spacing** (Beat This!) | `beat_this` | **Yes** | Beat This! beats | Same approach but using the SOTA conv-transformer downbeat tracker, which provides higher-quality downbeat estimates on most genres. |
 | **onset_autocorrelation** | `autocorr` | **Yes** | onset envelope | Computes autocorrelation of the onset strength envelope at lags corresponding to expected bar durations for each candidate meter. Higher autocorrelation at a given lag indicates stronger periodicity at that bar length. |
 | **bar_tracking** | `bar_tracking` | **Yes** | audio + beats | Uses madmom's GRU-RNN activation function with Viterbi decoding to track bar boundaries for each candidate meter. Quality-gated: skipped on sparse/synthetic audio (non_silent < 0.15). |
-| **onset_mlp_meter** | `onset_mlp` | **Yes** | multi-tempo autocorrelation + tempogram + MFCC + spectral contrast | 6-class MLP (876-dim features) trained on METER2800 + WIKIMETER. 87.1% standalone on METER2800 test. **Gate PASS**: complementarity 2.68, 118 gains vs 44 losses (see Section 4.11). |
+| **onset_mlp_meter** | `onset_mlp` | **Yes** | multi-tempo autocorrelation + beat-position histograms + tempogram + MFCC + spectral contrast | 6-class Residual MLP (1361-dim features, v5) trained on METER2800 + WIKIMETER. 80.2% standalone on METER2800 test (5/x: 63.9%). **Gate PASS**: complementarity 2.68, 118 gains vs 44 losses (see Section 4.11). |
 | **hcdf** | `hcdf` | **Yes** | chromagram | Harmonic Change Detection Function. Discriminates duple/triple in isolation but causes regressions in hand-tuned ensemble (see Section 4.4). Included as arbiter input because the learned arbiter can determine when HCDF is useful. |
 | **madmom_activation** | `madmom` | No (dropped) | madmom beats | Evaluates whether predicted downbeat positions align with louder onsets. **Dropped by arbiter ablation** — 0pp contribution (Section 4.12). |
 | **accent_pattern** | `accent` | No (dropped) | raw audio RMS | Groups beats into bars of each candidate meter size and measures accent consistency. **Dropped by arbiter ablation** — 0pp contribution (Section 4.12). |
@@ -139,7 +139,8 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 9 | 303 | 253/303 (83%) | Multi-layer 95M: 79.9% test (no improvement), LoRA scripts ready |
 | 12a | 303 | -- | Multi-label sigmoid, 6 classes, WIKIMETER, LoRA 330M (val 14.7% @ ep9, crashed) |
 | 12b | 303 | -- | WIKIMETER dataset (250 songs, all meters + poly), disk checkpointing, L4 GPU |
-| **13** | **700** | **614/700 (87.7%)** | **Arbiter MLP replaces hand-tuned combination. 6 signals, 72 features. +11.7pp over hand-tuned.** |
+| 13 | 700 | 614/700 (87.7%) | Arbiter MLP replaces hand-tuned combination. 6 signals, 72 features. +11.7pp over hand-tuned. |
+| **14** | **700** | **615/700 (87.9%)\*** | **onset_mlp v5 (1361-dim Residual MLP) + WIKIMETER expansion (683 songs, 126 5/x). onset_mlp 5/x: 50%→63.9%. Arbiter retrain pending.** |
 
 ### 2.4 Confidence Calibration
 
@@ -376,7 +377,7 @@ Despite being 5.3pp more accurate than resnet_meter on METER2800, mert_meter ach
 We transitioned from single-label (softmax) to multi-label (sigmoid + BCE) classification to enable polyrhythm detection, expanded classes from 4 to 6 (adding 9/8, 11/8), and curated two external datasets from YouTube:
 
 1. **WIKIMETER** (Round 12a): odd-meter-only subset (5/x, 7/x, 9/x, 11/x + poly)
-2. **WIKIMETER** (Round 12b): full catalog with all classes, currently 250 songs. Song catalog in `scripts/setup/wikimeter.json` (single source of truth).
+2. **WIKIMETER** (Round 12b, expanded Round 14): full catalog with all classes, currently 683 songs / 2937 segments. Song catalog in `scripts/setup/wikimeter.json` (single source of truth).
 
 Notebook-aligned diagnostics now focus on compact outputs: per-class accuracy/AP, macro-F1, and confidence gap.
 
@@ -410,53 +411,76 @@ Notebook-aligned diagnostics now focus on compact outputs: per-class accuracy/AP
 
 Full architecture and diagnostic details in [MERT-LORA-MULTILABEL.md](MERT-LORA-MULTILABEL.md).
 
-### 4.11 onset_mlp_meter Signal (Round 13 — first classifier to pass gate)
+### 4.11 onset_mlp_meter Signal (Rounds 13--14 — first classifier to pass gate)
 
 The onset_mlp_meter signal takes a fundamentally different approach from resnet_meter and mert_meter: instead of operating on raw spectrograms or learned embeddings, it classifies meter from hand-crafted rhythmic features designed to capture beat-relative periodicity at multiple tempos.
 
 #### Architecture
 
+**v5 (current)**:
+
 ```
 Audio (22050 Hz) --> center crop 30s
-Feature extraction (876 dims):
-  Part 1: Autocorrelation features (768 dims, tempo-dependent)
-    4 signals × 3 tempo candidates × 64 beat-relative lags
+Feature extraction (1361 dims):
+  Part 1: Autocorrelation features (1024 dims, tempo-dependent)
+    4 signals × 4 tempo candidates × 64 beat-relative lags
     Signals: onset envelope, RMS energy, spectral flux, chroma energy
-    Tempos: T (librosa estimate), T/2, T×2
+    Tempos: top-2 tempogram peaks, T/2 (sub-harmonic), T×3/2 (compound)
   Part 2: Tempo-independent features (108 dims)
     Tempogram profile: 64 log-spaced BPM bins (30-300)
     MFCC statistics: 13 coefficients × (mean + std) = 26
     Spectral contrast: 7 rows × (mean + std) = 14
     Onset rate: mean/std/median interval + onsets/sec = 4
-MLP Classifier:
-  Linear(876, 512) --> BN --> ReLU --> Dropout(0.3)
-  Linear(512, 256) --> BN --> ReLU --> Dropout(0.25)
-  Linear(256, 128) --> BN --> ReLU --> Dropout(0.2)
+  Part 3: v5-only features (229 dims)
+    Beat-position histograms: 5 bar lengths (2,3,4,5,7) × 32 bins = 160
+    Autocorrelation ratios: 4 signals × (6 absolute + 9 discriminative) = 60
+    Tempogram meter salience: 9 candidate meters = 9
+Residual MLP Classifier:
+  Linear(1361, 640) --> BN --> ReLU --> Dropout(0.3)
+  ResidualBlock(640) --> BN --> ReLU --> Dropout(0.25) + skip connection
+  Linear(640, 256) --> BN --> ReLU --> Dropout(0.2)
+  Linear(256, 128) --> BN --> ReLU --> Dropout(0.15)
   Linear(128, 6)
   --> softmax --> {3: prob, 4: prob, 5: prob, 7: prob, 9: prob, 11: prob}
 ```
 
-#### Training (v4)
+v5 improvements over v4:
+- **4th tempo candidate** (+256 dims): top-2 peaks from tempogram + compound T×3/2. Fixes garbage-in when librosa tempo estimate is wrong.
+- **Beat-position histograms** (+160 dims): onset times folded modulo bar_duration for 5 hypothetical bar lengths. Captures accent patterns like 3+2 or 2+3 in 5/4.
+- **Autocorrelation ratios** (+60 dims): explicit encoding of "is peak@5 > peak@4?", which the model otherwise has to learn from raw values.
+- **Tempogram meter salience** (+9 dims): tempo-independent peak strength for each candidate meter.
+- **Residual MLP**: ResidualBlock(640) with skip connection replaces plain sequential MLP. Dropout 0.3→0.25→0.2→0.15 (decreasing).
 
-- **Dataset**: METER2800 (train+val) + WIKIMETER (806 songs, 6 classes).
+**v4 (historical)**:
+
+```
+Feature extraction (876 dims):
+  768 (autocorrelation: 3 tempos × 4 signals × 64 lags) + 108 (tempogram + MFCC + spectral contrast + onset stats)
+MLP: Linear(876, 512) → BN → ReLU → Dropout(0.3) → 256 → 128 → 6
+```
+
+#### Training
+
+- **Dataset**: METER2800 (train+val) + WIKIMETER (683 songs, 2937 segments, 6 classes).
 - **Classes**: 6 (3, 4, 5, 7, 9, 11) — single-label classification.
-- **Loss**: Focal loss (γ=2.0) with class weights and label smoothing (0.1). Mixup augmentation (α=0.2).
-- **Optimizer**: Adam (lr=5e-4), cosine annealing, early stopping (patience=40).
+- **Loss**: Focal loss (γ=2.0) with class weights. Mixup (α=0.2) and CutMix (α=1.0, 50/50 per batch).
+- **Optimizer**: AdamW (lr=8e-4, weight_decay=1e-3), CosineAnnealingWarmRestarts (T_0=50, T_mult=2), early stopping (patience=50).
+- **WeightedRandomSampler**: oversamples rare classes (5/x, 7/x, 9/x, 11/x).
 - **Feature standardization**: z-score normalization (mean/std from training set, stored in checkpoint).
 - **Feature caching**: Per-file cache keyed by `feature_version + audio_hash`.
+- **Audio augmentation** (optional, `--augment N`): random crop, noise injection, gain variation, time masking. Tested but found marginally negative (79.6% vs 80.0% without), not used in production checkpoint.
 
 #### Results
 
 | Version | Features | Model | Loss | Val | Test | 3/x | 4/x | 5/x | 7/x | 9/x | 11/x |
 |---------|----------|-------|------|-----|------|-----|-----|-----|-----|-----|------|
 | v3 | 768 (autocorr only) | 256→128→6 | CE | 73.9% | 73.6% | 84.8% | 78.1% | 54.8% | 72.0% | 35.1% | 42.9% |
-| **v4** | **876 (autocorr + tempo-indep)** | **512→256→128→6** | **Focal** | **78.4%** | **79.5%** | **88.4%** | **85.9%** | **58.9%** | **75.3%** | **47.3%** | **52.4%** |
+| v4 | 876 (autocorr + tempo-indep) | 512→256→128→6 | Focal | 78.4% | 79.5% | 88.4% | 85.9% | 58.9% | 75.3% | 47.3% | 52.4% |
+| **v5** | **1361 (v4 + histograms + ratios + salience)** | **Residual 640→640→256→128→6** | **Focal + CutMix** | **81.1%** | **80.2%** | -- | -- | **63.9%** | -- | -- | -- |
 
-Key improvements from v3→v4:
-- Tempogram profile (+64 dims): provides tempo-independent rhythmic energy — model no longer depends solely on librosa.feature.tempo accuracy.
-- MFCC stats (+26 dims): timbral context helps distinguish genres.
-- Focal loss: focuses training on hard examples (ambiguous 4/x files), reducing 4/x loss rate by half.
-- Larger model: 3 hidden layers (512→256→128) vs 2 (256→128) — more capacity for 876-dim input.
+Key improvements across versions:
+- v3→v4: Tempogram profile, MFCC stats, focal loss, larger model.
+- v4→v5: 4th tempo candidate, beat-position histograms, autocorrelation ratios, tempogram salience, Residual MLP, CutMix, AdamW. **5/x accuracy jumped from 50% to 63.9%** (+13.9pp) thanks to beat-position histograms and expanded WIKIMETER (126 5/x songs, up from 110).
 
 #### Orthogonality Evaluation
 
@@ -490,9 +514,13 @@ Per-class orthogonality (v4):
 3. **6-class training** — Training on 6 classes (including 9/x, 11/x from WIKIMETER) gives the model exposure to odd meters that the 4-class resnet/mert models lacked.
 4. **Focal loss** — Down-weighting easy 4/x examples and focusing on hard cases reduced 4/x losses from 49 (v3) to 23 (v4).
 
+#### Code Organization
+
+Feature extraction is shared between training (`scripts/training/train_onset_mlp.py`) and inference (`beatmeter/analysis/signals/onset_mlp_meter.py`) via `beatmeter/analysis/signals/onset_mlp_features.py`. The inference module loads v4 or v5 models transparently based on the `arch_version` field in the checkpoint.
+
 #### Integration
 
-Integrated as Signal 9 in `meter.py` with weight W_ONSET_MLP=0.12. The weight is taken from the NN signal budget (resnet/mert are disabled at 0.0). Feature extraction adds ~5-10s per file on first run (cached thereafter via AnalysisCache).
+Integrated as Signal 9 in `meter.py` with weight W_ONSET_MLP=0.12. The weight is taken from the NN signal budget (resnet/mert are disabled at 0.0). Feature extraction adds ~5-10s per file on first run (cached thereafter via AnalysisCache). Cache invalidation keys on the checkpoint file (`data/meter_onset_mlp.pt`) and the shared feature module (`onset_mlp_features.py`), ensuring retraining automatically invalidates cached results.
 
 ### 4.12 Arbiter MLP (Round 13)
 
@@ -526,7 +554,7 @@ Key design decisions:
 #### Training Data
 
 - **METER2800** (tuning split, 2100 files): 4 classes (3, 4, 5, 7), single-label.
-- **WIKIMETER** (2906 segments from 806 songs): 6 classes (3, 4, 5, 7, 9, 11), multi-label with confidence weights (e.g., "3:0.7,4:0.8" for polymetric songs).
+- **WIKIMETER** (2937 segments from 683 songs): 6 classes (3, 4, 5, 7, 9, 11), multi-label with confidence weights (e.g., "3:0.7,4:0.8" for polymetric songs). Per-meter: 3/x:129, 4/x:112, 5/x:126, 7/x:128, 9/x:136, 11/x:83.
 - **Combined**: ~5000 training examples across 6 classes.
 
 #### Infrastructure
@@ -698,7 +726,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 ## 8. Future Work
 
-1. **WIKIMETER expansion for arbiter retraining** -- The arbiter's odd meter accuracy (5/x: 66%, 7/x: 70%) is limited by training data. Expanding WIKIMETER (currently 806 songs) with more 5/x, 9/x, and 11/x examples and retraining should improve further. WIKIMETER currently has gaps: 5/x needs +8, 11/x needs +26 songs.
+1. **WIKIMETER expansion for arbiter retraining** -- The arbiter's odd meter accuracy (5/x: 66%, 7/x: 70%) is limited by training data. WIKIMETER has 683 songs (3/x:129, 4/x:112, 5/x:126, 7/x:128, 9/x:136, 11/x:83). The 11/x class remains the weakest (83 songs); expanding it should improve further. The 5/x class was recently expanded from 110→126 songs, which improved onset_mlp 5/x accuracy from 50%→63.9%.
 
 2. **Remove unused signals from pipeline** -- The 4 dropped signals (periodicity, madmom, resnet, accent) are still computed when hand-tuned fallback is used. Removing their computation entirely would save ~2-3s per file.
 
