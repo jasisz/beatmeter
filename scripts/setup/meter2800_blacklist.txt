@@ -1,0 +1,6 @@
+# METER2800 blacklist — files excluded from training and evaluation.
+# One filename stem per line (without extension). Lines starting with # are comments.
+# These files contain speech, not music.
+0143
+0144
+00361
