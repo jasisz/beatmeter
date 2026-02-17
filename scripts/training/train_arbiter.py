@@ -407,6 +407,8 @@ def train_arbiter(
     epochs: int = 200,
     lr: float = 1e-3,
     patience: int = 30,
+    boost_rare: float = 1.0,
+    seed: int = 42,
 ):
     """Train the arbiter MLP (multi-label with BCE loss)."""
     import torch
@@ -438,11 +440,17 @@ def train_arbiter(
     X_val = (X_val - feat_mean) / feat_std
 
     # pos_weight: balance classes (cap at 10 to avoid instability)
+    raw_pw = neg_counts / np.maximum(pos_counts, 1)
+    if boost_rare > 1.0:
+        # Boost rare classes: 5, 7, 9, 11 (indices 2, 3, 4, 5)
+        for idx in range(2, len(CLASS_METERS)):
+            raw_pw[idx] *= boost_rare
     pos_weight = torch.tensor(
-        np.clip(neg_counts / np.maximum(pos_counts, 1), 0.5, 10.0),
+        np.clip(raw_pw, 0.5, 10.0),
         dtype=torch.float32,
     )
-    print(f"  pos_weight: {[f'{w:.1f}' for w in pos_weight.tolist()]}", flush=True)
+    print(f"  pos_weight: {[f'{w:.1f}' for w in pos_weight.tolist()]}"
+          f"  (boost_rare={boost_rare})", flush=True)
 
     # Tensors
     train_ds = TensorDataset(
@@ -451,6 +459,10 @@ def train_arbiter(
     val_ds = TensorDataset(
         torch.tensor(X_val), torch.tensor(y_val),
     )
+    # Set seed for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
     batch_size = min(64, len(X_train))
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=len(X_train) > batch_size)
     val_dl = DataLoader(val_ds, batch_size=256, shuffle=False)
@@ -629,6 +641,11 @@ def main():
     parser.add_argument("--limit", type=int, default=0, help="Limit files (0=all)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--boost-rare", type=float, default=1.0,
+                        help="Multiply pos_weight for rare classes (5,7,9,11)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seeds", type=int, default=1,
+                        help="Number of seeds to try (picks best val)")
     args = parser.parse_args()
 
     data_dir = args.data_dir.resolve()
@@ -701,7 +718,18 @@ def main():
         meter_dist = Counter(e["expected"] for e in train_data)
         print(f"Train meters: {dict(sorted(meter_dist.items()))}", flush=True)
 
-        train_arbiter(train_data, val_data, test_data, epochs=args.epochs)
+        if args.seeds > 1:
+            print(f"\nMulti-seed training ({args.seeds} seeds)...", flush=True)
+            for s in range(args.seeds):
+                seed = 42 + s * 7
+                print(f"\n{'='*60}", flush=True)
+                print(f"  Seed {s+1}/{args.seeds} (seed={seed})", flush=True)
+                print(f"{'='*60}", flush=True)
+                train_arbiter(train_data, val_data, test_data, epochs=args.epochs,
+                              boost_rare=args.boost_rare, seed=seed)
+        else:
+            train_arbiter(train_data, val_data, test_data, epochs=args.epochs,
+                          boost_rare=args.boost_rare, seed=args.seed)
 
 
 if __name__ == "__main__":
