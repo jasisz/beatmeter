@@ -83,6 +83,7 @@ def _load_arbiter():
             "signal_names": ckpt["signal_names"],
             "meter_keys": ckpt["meter_keys"],
             "class_meters": ckpt["class_meters"],
+            "sharpening": ckpt.get("sharpening", {}),
         }
         logger.info(f"Arbiter loaded: {n_feat} features, {n_cls} classes")
         return _arbiter_model, _arbiter_meta
@@ -104,6 +105,7 @@ def _arbiter_predict(signal_results: dict) -> dict[tuple[int, int], float] | Non
     class_meters = meta["class_meters"]
     feat_mean = meta["feat_mean"]
     feat_std = meta["feat_std"]
+    sharpening = meta.get("sharpening", {})
 
     n_signals = len(sig_names)
     n_meters = len(meter_keys)
@@ -113,12 +115,23 @@ def _arbiter_predict(signal_results: dict) -> dict[tuple[int, int], float] | Non
     for s_idx, sig_name in enumerate(sig_names):
         if sig_name in signal_results:
             sig_scores = signal_results[sig_name]
+            alpha = sharpening.get(sig_name, 1.0)
+            raw = []
             for m_idx, meter_key in enumerate(meter_keys):
-                # signal_results uses tuple keys like (3, 4), meter_keys are "3_4"
                 num, den = meter_key.split("_")
                 tup_key = (int(num), int(den))
-                if tup_key in sig_scores:
-                    x[s_idx * n_meters + m_idx] = sig_scores[tup_key]
+                raw.append(sig_scores.get(tup_key, 0.0))
+
+            if alpha != 1.0:
+                arr = np.array(raw)
+                if arr.max() > 0:
+                    arr = arr ** alpha
+                    arr /= arr.max()
+                for m_idx, val in enumerate(arr):
+                    x[s_idx * n_meters + m_idx] = val
+            else:
+                for m_idx, val in enumerate(raw):
+                    x[s_idx * n_meters + m_idx] = val
 
     # Standardize
     x = (x - feat_mean) / feat_std

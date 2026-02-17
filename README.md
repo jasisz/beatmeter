@@ -126,11 +126,11 @@ Current accuracy on the METER2800 test split (700 files):
 
 | Metric | Accuracy |
 |---|---|
-| **Overall (4-class)** | **87.7%** (614/700) |
-| Binary 3/4 vs 4/4 | 91.0% (546/600) |
-| Meter 3 | 89.7% (269/300) |
-| Meter 4 | 92.3% (277/300) |
-| Meter 5 | 66.0% (33/50) |
+| **Overall (4-class)** | **88.1%** (617/700) |
+| Binary 3/4 vs 4/4 | 92.2% (553/600) |
+| Meter 3 | 93.0% (279/300) |
+| Meter 4 | 91.3% (274/300) |
+| Meter 5 | 58.0% (29/50) |
 | Meter 7 | 70.0% (35/50) |
 
 Binary 3/4 vs 4/4 surpasses the ResNet18 MFCC baseline (88%) from [Abimbola et al., EURASIP 2024](https://doi.org/10.1186/s13636-024-00364-0) on the same dataset.

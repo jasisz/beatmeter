@@ -359,11 +359,16 @@ def extract_dataset(
 
 def build_feature_matrix(
     dataset: list[dict],
+    sharpening: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Convert dataset dicts to (X, y) numpy arrays.
 
     X: (n_samples, TOTAL_FEATURES) — signal scores only (6 signals × 12 meters)
     y: (n_samples, N_CLASSES) — multi-hot label vector with weights
+
+    sharpening: optional dict mapping signal name to power alpha (>1 = sharper).
+        Example: {"onset_mlp": 2.0} raises onset_mlp scores to power 2
+        then re-normalizes max=1. Equivalent to temperature T=1/alpha on softmax.
     """
     X = np.zeros((len(dataset), TOTAL_FEATURES), dtype=np.float32)
     y = np.zeros((len(dataset), N_CLASSES), dtype=np.float32)
@@ -374,9 +379,19 @@ def build_feature_matrix(
         # Signal scores: 6 signals × 12 meters = 72 features
         for s_idx, sig_name in enumerate(SIGNAL_NAMES):
             if sig_name in sig_results:
-                for m_idx, meter_key in enumerate(METER_KEYS):
-                    feat_idx = s_idx * N_METERS + m_idx
-                    X[i, feat_idx] = sig_results[sig_name].get(meter_key, 0.0)
+                alpha = sharpening.get(sig_name, 1.0) if sharpening else 1.0
+                raw = [sig_results[sig_name].get(mk, 0.0) for mk in METER_KEYS]
+
+                if alpha != 1.0:
+                    arr = np.array(raw)
+                    if arr.max() > 0:
+                        arr = arr ** alpha
+                        arr /= arr.max()  # re-normalize max=1
+                    for m_idx, val in enumerate(arr):
+                        X[i, s_idx * N_METERS + m_idx] = val
+                else:
+                    for m_idx, val in enumerate(raw):
+                        X[i, s_idx * N_METERS + m_idx] = val
 
         # Multi-hot labels from "meters" dict
         meters = entry.get("meters")
@@ -409,14 +424,15 @@ def train_arbiter(
     patience: int = 30,
     boost_rare: float = 1.0,
     seed: int = 42,
+    sharpening: dict[str, float] | None = None,
 ):
     """Train the arbiter MLP (multi-label with BCE loss)."""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
 
-    X_train, y_train = build_feature_matrix(train_data)
-    X_val, y_val = build_feature_matrix(val_data)
+    X_train, y_train = build_feature_matrix(train_data, sharpening=sharpening)
+    X_val, y_val = build_feature_matrix(val_data, sharpening=sharpening)
 
     if len(train_data) < 4:
         print(f"\nToo few training samples ({len(train_data)}), need at least 4", flush=True)
@@ -426,6 +442,8 @@ def train_arbiter(
     print(f"  Features: {TOTAL_FEATURES} ({N_SIGNALS} signals × {N_METERS} meters)", flush=True)
     print(f"  Classes: {CLASS_METERS}", flush=True)
     print(f"  Train: {len(X_train)}, Val: {len(X_val)}", flush=True)
+    if sharpening:
+        print(f"  Sharpening: {sharpening}", flush=True)
 
     # Per-class positive counts (for pos_weight)
     pos_counts = y_train.sum(axis=0)
@@ -509,20 +527,32 @@ def train_arbiter(
             train_total += len(xb)
         scheduler.step()
 
-        # Validate: primary accuracy (argmax of sigmoid == argmax of labels)
+        # Validate: balanced accuracy (macro per-class accuracy)
+        # This prevents the model from sacrificing rare classes (5/x, 7/x)
+        # for common classes (3/x, 4/x) that dominate overall accuracy.
         model.eval()
-        val_primary_correct = 0
-        val_total = 0
+        val_correct_per_class = Counter()
+        val_total_per_class = Counter()
         with torch.no_grad():
             for xb, yb in val_dl:
                 xb, yb = xb.to(device), yb.to(device)
                 probs = torch.sigmoid(model(xb))
                 pred_primary = probs.argmax(1)
                 true_primary = yb.argmax(1)
-                val_primary_correct += (pred_primary == true_primary).sum().item()
-                val_total += len(xb)
+                for p, t in zip(pred_primary.cpu(), true_primary.cpu()):
+                    val_total_per_class[t.item()] += 1
+                    if p.item() == t.item():
+                        val_correct_per_class[t.item()] += 1
 
-        val_acc = val_primary_correct / val_total
+        # Balanced accuracy = mean of per-class accuracies
+        per_class_accs = []
+        for cls_idx in range(N_CLASSES):
+            t = val_total_per_class.get(cls_idx, 0)
+            c = val_correct_per_class.get(cls_idx, 0)
+            if t > 0:
+                per_class_accs.append(c / t)
+        val_acc = np.mean(per_class_accs) if per_class_accs else 0.0
+        val_overall = sum(val_correct_per_class.values()) / max(sum(val_total_per_class.values()), 1)
 
         is_best = val_acc > best_val_metric
         if is_best:
@@ -536,13 +566,17 @@ def train_arbiter(
         if epoch % 10 == 0 or is_best:
             marker = " *" if is_best else ""
             print(f"  ep {epoch:3d}  loss {train_loss_sum/train_total:.4f}  "
-                  f"val_primary {val_acc:.1%}{marker}", flush=True)
+                  f"val_balanced {val_acc:.1%}  val_overall {val_overall:.1%}{marker}", flush=True)
 
         if no_improve >= patience:
             print(f"  Early stopping at epoch {epoch} (best was ep {best_epoch})", flush=True)
             break
 
-    print(f"\nBest val primary acc: {best_val_metric:.1%} at epoch {best_epoch}", flush=True)
+    print(f"\nBest val balanced acc: {best_val_metric:.1%} at epoch {best_epoch}", flush=True)
+
+    if best_state is None:
+        print("WARNING: No improvement during training, using final model state", flush=True)
+        best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
     # Evaluate with per-class breakdown
     model.load_state_dict(best_state)
@@ -603,7 +637,7 @@ def train_arbiter(
     _evaluate(X_val, y_val, "Val")
 
     if test_data:
-        X_test, y_test = build_feature_matrix(test_data)
+        X_test, y_test = build_feature_matrix(test_data, sharpening=sharpening)
         _evaluate(X_test, y_test, "Test")
 
     # Save checkpoint
@@ -621,6 +655,7 @@ def train_arbiter(
         "multi_label": True,
         "best_val_acc": best_val_metric,
         "best_epoch": best_epoch,
+        "sharpening": sharpening or {},
     }, ckpt_path)
     print(f"\nModel saved to {ckpt_path}", flush=True)
 
@@ -646,6 +681,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--seeds", type=int, default=1,
                         help="Number of seeds to try (picks best val)")
+    parser.add_argument("--sharpen", type=str, default="",
+                        help="Per-signal sharpening power, e.g. 'onset_mlp:2.0,beatnet:1.5'")
     args = parser.parse_args()
 
     data_dir = args.data_dir.resolve()
@@ -718,6 +755,14 @@ def main():
         meter_dist = Counter(e["expected"] for e in train_data)
         print(f"Train meters: {dict(sorted(meter_dist.items()))}", flush=True)
 
+        # Parse sharpening
+        sharpening = {}
+        if args.sharpen:
+            for part in args.sharpen.split(","):
+                sig, alpha = part.strip().split(":")
+                sharpening[sig.strip()] = float(alpha.strip())
+            print(f"Sharpening: {sharpening}", flush=True)
+
         if args.seeds > 1:
             print(f"\nMulti-seed training ({args.seeds} seeds)...", flush=True)
             for s in range(args.seeds):
@@ -726,10 +771,12 @@ def main():
                 print(f"  Seed {s+1}/{args.seeds} (seed={seed})", flush=True)
                 print(f"{'='*60}", flush=True)
                 train_arbiter(train_data, val_data, test_data, epochs=args.epochs,
-                              boost_rare=args.boost_rare, seed=seed)
+                              boost_rare=args.boost_rare, seed=seed,
+                              sharpening=sharpening or None)
         else:
             train_arbiter(train_data, val_data, test_data, epochs=args.epochs,
-                          boost_rare=args.boost_rare, seed=args.seed)
+                          boost_rare=args.boost_rare, seed=args.seed,
+                          sharpening=sharpening or None)
 
 
 if __name__ == "__main__":
