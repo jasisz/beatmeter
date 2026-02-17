@@ -38,7 +38,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.utils import resolve_audio_path
+from scripts.utils import resolve_audio_path, split_by_stem
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -47,10 +47,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # ---------------------------------------------------------------------------
 
 # Canonical signal names (order matters for feature vector)
+# Ablation (10 runs, ±std) showed periodicity, madmom, resnet, accent
+# contribute 0pp — safely dropped.
 SIGNAL_NAMES = [
-    "beatnet", "beat_this", "madmom", "autocorr",
-    "accent", "periodicity", "bar_tracking", "onset_mlp",
-    "resnet", "hcdf",
+    "beatnet", "beat_this", "autocorr",
+    "bar_tracking", "onset_mlp", "hcdf",
 ]
 
 # Canonical meter keys (order matters for feature vector)
@@ -61,9 +62,8 @@ METER_KEYS = [
 
 N_SIGNALS = len(SIGNAL_NAMES)
 N_METERS = len(METER_KEYS)
-N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 10 × 12 = 120
-N_EXTRA = 4  # beatnet_trust, beat_this_trust, madmom_trust, tempo_bpm
-TOTAL_FEATURES = N_SIGNAL_FEATURES + N_EXTRA  # 124
+N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 6 × 12 = 72
+TOTAL_FEATURES = N_SIGNAL_FEATURES  # 72 (signal scores only — ablation confirmed no gain from extras)
 
 # Output classes: meter numerator (multi-label)
 CLASS_METERS = [3, 4, 5, 7, 9, 11]
@@ -112,125 +112,198 @@ LABEL_TO_METER = {
 }
 
 
-def load_wikimeter_entries(wikimeter_dir: Path) -> list[Entry]:
-    """Load WIKIMETER entries (multi-label from meter column)."""
+def _parse_wikimeter_row(row, audio_dir: Path) -> Entry | None:
+    """Parse a single WIKIMETER row into an Entry."""
+    label = row["label"].strip('"')
+    primary_meter = LABEL_TO_METER.get(label)
+    if primary_meter is None:
+        return None
+
+    # Parse multi-label meter column: "3:0.7,4:0.8"
+    meters_dict: dict[int, float] = {}
+    meter_str = row["meter"].strip('"')
+    for part in meter_str.split(","):
+        part = part.strip()
+        if ":" in part:
+            m_str, w_str = part.split(":", 1)
+            try:
+                meters_dict[int(m_str)] = float(w_str)
+            except ValueError:
+                continue
+        else:
+            try:
+                meters_dict[int(part)] = 1.0
+            except ValueError:
+                continue
+
+    if not meters_dict:
+        meters_dict = {primary_meter: 1.0}
+
+    fname = row["filename"].strip('"')
+    basename = Path(fname).name
+    audio_path = audio_dir / basename
+    if audio_path.exists():
+        return (audio_path, primary_meter, meters_dict)
+    return None
+
+
+def load_wikimeter_entries(
+    wikimeter_dir: Path,
+) -> tuple[list[Entry], list[Entry], list[Entry]]:
+    """Load WIKIMETER entries split by song-level hash (80/10/10).
+
+    Segments from the same song always go to the same split
+    to prevent data leakage.
+
+    Returns (train, val, test) entry lists.
+    """
     tab_path = wikimeter_dir / "data_wikimeter.tab"
     if not tab_path.exists():
         print(f"  WIKIMETER not found at {tab_path}", flush=True)
-        return []
+        return [], [], []
 
     audio_dir = wikimeter_dir / "audio"
-    entries: list[Entry] = []
+    train, val, test = [], [], []
     with open(tab_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
-            label = row["label"].strip('"')
-            primary_meter = LABEL_TO_METER.get(label)
-            if primary_meter is None:
+            entry = _parse_wikimeter_row(row, audio_dir)
+            if entry is None:
                 continue
-
-            # Parse multi-label meter column: "3:0.7,4:0.8"
-            meters_dict: dict[int, float] = {}
-            meter_str = row["meter"].strip('"')
-            for part in meter_str.split(","):
-                part = part.strip()
-                if ":" in part:
-                    m_str, w_str = part.split(":", 1)
-                    try:
-                        meters_dict[int(m_str)] = float(w_str)
-                    except ValueError:
-                        continue
-                else:
-                    try:
-                        meters_dict[int(part)] = 1.0
-                    except ValueError:
-                        continue
-
-            if not meters_dict:
-                meters_dict = {primary_meter: 1.0}
-
-            fname = row["filename"].strip('"')
-            basename = Path(fname).name
-            audio_path = audio_dir / basename
-            if audio_path.exists():
-                entries.append((audio_path, primary_meter, meters_dict))
-    return entries
+            split = split_by_stem(entry[0].stem)
+            if split == "train":
+                train.append(entry)
+            elif split == "val":
+                val.append(entry)
+            else:
+                test.append(entry)
+    return train, val, test
 
 
 # ---------------------------------------------------------------------------
 # Feature extraction (runs engine, captures signal details)
 # ---------------------------------------------------------------------------
 
-_worker_engine = None
+_worker_cache = None
+
+# Map from SIGNAL_NAMES to cache signal names
+_SIGNAL_CACHE_MAP = {
+    "beatnet": "beatnet_spacing",
+    "beat_this": "beat_this_spacing",
+    "madmom": "madmom_activation",
+    "autocorr": "onset_autocorr",
+    "accent": "accent_pattern",
+    "periodicity": "beat_periodicity",
+    "bar_tracking": "bar_tracking",
+    "onset_mlp": "onset_mlp_meter",
+    "resnet": "resnet_meter",
+    "hcdf": "hcdf_meter",
+}
 
 
 def _worker_init():
-    global _worker_engine
+    global _worker_cache
     warnings.filterwarnings("ignore")
-    import torch  # noqa: F401
     from beatmeter.analysis.cache import AnalysisCache
-    from beatmeter.analysis.engine import AnalysisEngine
-    _worker_engine = AnalysisEngine(cache=AnalysisCache())
+    _worker_cache = AnalysisCache()
+
+
+def _onset_alignment_score(
+    beat_times: np.ndarray,
+    onset_event_times: np.ndarray,
+    max_dist: float = 0.07,
+) -> float:
+    """Score how well beat positions align with detected onset events.
+
+    Replicates AnalysisEngine._onset_alignment_score but works on numpy arrays.
+    """
+    if len(beat_times) == 0 or len(onset_event_times) == 0:
+        return 0.0
+
+    # Precision: do beats land on actual onsets?
+    total_fwd = 0.0
+    for b in beat_times:
+        min_dist = float(np.min(np.abs(onset_event_times - b)))
+        total_fwd += min(min_dist, max_dist)
+    precision = 1.0 - total_fwd / len(beat_times) / max_dist
+
+    # Recall: do onsets have a nearby beat?
+    total_rev = 0.0
+    for ot in onset_event_times:
+        min_dist = float(np.min(np.abs(beat_times - ot)))
+        total_rev += min(min_dist, max_dist)
+    recall = 1.0 - total_rev / len(onset_event_times) / max_dist
+
+    if precision + recall > 0:
+        return 2.0 * precision * recall / (precision + recall)
+    return 0.0
 
 
 def _worker_extract(args: tuple[str, int, dict]) -> dict | None:
-    """Process a single file: run engine, capture signal details.
-
-    Also computes disabled signals (ResNet, HCDF) that aren't in the
-    engine's default pipeline but are useful for the arbiter.
-    """
-    import torch
-    import beatmeter.analysis.meter as meter_mod
-
+    """Read all signal scores + alignment + tempo from cache."""
     audio_path_str, expected_meter, meters_dict = args
     fname = Path(audio_path_str).name
 
     try:
-        with torch.inference_mode():
-            result = _worker_engine.analyze_file(audio_path_str, skip_sections=True)
+        audio_hash = _worker_cache.audio_hash(audio_path_str)
 
-        details = meter_mod.last_signal_details
-        if details is None:
-            return None
+        sig_results = {}
+        for sig_name, cache_name in _SIGNAL_CACHE_MAP.items():
+            cached = _worker_cache.load_signal(audio_hash, cache_name)
+            if cached:
+                sig_results[sig_name] = cached
 
-        predicted = None
-        if result and result.meter_hypotheses:
-            predicted = result.meter_hypotheses[0].numerator
+        # Compute alignment scores from cached beats + onsets
+        onset_data = _worker_cache.load_onsets(audio_hash)
+        onset_event_times = np.array(onset_data["onset_events"]) if onset_data else np.array([])
 
-        sig_results = details["signal_results"]
+        beatnet_alignment = 0.0
+        beat_this_alignment = 0.0
+        madmom_alignment = 0.0
 
-        # Add disabled signals that engine skips (W=0.0)
-        import librosa
-        y, sr = librosa.load(audio_path_str, sr=22050, mono=True)
-        tempo_bpm = details.get("tempo_bpm")
-        beat_interval = 60.0 / tempo_bpm if tempo_bpm and tempo_bpm > 0 else None
+        if len(onset_event_times) > 0:
+            # BeatNet
+            bn_data = _worker_cache.load_beats(audio_hash, "beatnet")
+            if bn_data:
+                bt = np.array([b["time"] for b in bn_data])
+                beatnet_alignment = _onset_alignment_score(bt, onset_event_times)
 
-        if "resnet" not in sig_results:
-            try:
-                from beatmeter.analysis.signals.resnet_meter import signal_resnet_meter
-                s = signal_resnet_meter(y, sr)
-                if s:
-                    sig_results["resnet"] = {f"{k[0]}_{k[1]}": v for k, v in s.items()}
-            except Exception:
-                pass
+            # Beat This!
+            bth_data = _worker_cache.load_beats(audio_hash, "beat_this")
+            if bth_data:
+                bt = np.array([b["time"] for b in bth_data])
+                beat_this_alignment = _onset_alignment_score(bt, onset_event_times)
 
-        if "hcdf" not in sig_results:
-            try:
-                from beatmeter.analysis.signals.hcdf_meter import signal_hcdf_meter
-                s = signal_hcdf_meter(y, sr, beat_interval=beat_interval)
-                if s:
-                    sig_results["hcdf"] = {f"{k[0]}_{k[1]}": v for k, v in s.items()}
-            except Exception:
-                pass
+            # madmom (best of bpb variants)
+            for bpb in [3, 4, 5, 7]:
+                mm_data = _worker_cache.load_beats(audio_hash, f"madmom_bpb{bpb}")
+                if mm_data:
+                    bt = np.array([b["time"] for b in mm_data])
+                    madmom_alignment = max(madmom_alignment, _onset_alignment_score(bt, onset_event_times))
+
+        # Read tempo from cache (try both methods)
+        tempo_librosa = 0.0
+        tempo_tempogram = 0.0
+        td = _worker_cache.load_signal(audio_hash, "tempo_librosa")
+        if td:
+            tempo_librosa = td.get("bpm", 0.0)
+        td = _worker_cache.load_signal(audio_hash, "tempo_tempogram")
+        if td:
+            tempo_tempogram = td.get("bpm", 0.0)
 
         return {
             "fname": fname,
             "expected": expected_meter,
             "meters": {str(k): v for k, v in meters_dict.items()},
-            "predicted": predicted,
+            "predicted": None,
             "signal_results": sig_results,
-            "trust": details["trust"],
-            "tempo_bpm": tempo_bpm,
+            "alignment": {
+                "beatnet": beatnet_alignment,
+                "beat_this": beat_this_alignment,
+                "madmom": madmom_alignment,
+            },
+            "tempo_librosa": tempo_librosa,
+            "tempo_tempogram": tempo_tempogram,
         }
     except Exception as e:
         print(f"  ERROR {fname}: {e}", file=sys.stderr, flush=True)
@@ -289,7 +362,7 @@ def build_feature_matrix(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Convert dataset dicts to (X, y) numpy arrays.
 
-    X: (n_samples, TOTAL_FEATURES) — signal scores + trust + tempo
+    X: (n_samples, TOTAL_FEATURES) — signal scores only (6 signals × 12 meters)
     y: (n_samples, N_CLASSES) — multi-hot label vector with weights
     """
     X = np.zeros((len(dataset), TOTAL_FEATURES), dtype=np.float32)
@@ -297,22 +370,13 @@ def build_feature_matrix(
 
     for i, entry in enumerate(dataset):
         sig_results = entry["signal_results"]
-        trust = entry["trust"]
-        tempo = entry.get("tempo_bpm") or 0.0
 
-        # Signal scores: 10 signals × 12 meters = 120 features
+        # Signal scores: 6 signals × 12 meters = 72 features
         for s_idx, sig_name in enumerate(SIGNAL_NAMES):
             if sig_name in sig_results:
                 for m_idx, meter_key in enumerate(METER_KEYS):
                     feat_idx = s_idx * N_METERS + m_idx
                     X[i, feat_idx] = sig_results[sig_name].get(meter_key, 0.0)
-
-        # Trust values + tempo: 4 features
-        base = N_SIGNAL_FEATURES
-        X[i, base + 0] = trust.get("beatnet", 0.0)
-        X[i, base + 1] = trust.get("beat_this", 0.0)
-        X[i, base + 2] = trust.get("madmom", 0.0)
-        X[i, base + 3] = tempo / 200.0  # normalize to ~[0, 1.5]
 
         # Multi-hot labels from "meters" dict
         meters = entry.get("meters")
@@ -357,7 +421,7 @@ def train_arbiter(
         return
 
     print(f"\nArbiter training (multi-label):", flush=True)
-    print(f"  Features: {TOTAL_FEATURES} ({N_SIGNALS} signals × {N_METERS} meters + {N_EXTRA} extra)", flush=True)
+    print(f"  Features: {TOTAL_FEATURES} ({N_SIGNALS} signals × {N_METERS} meters)", flush=True)
     print(f"  Classes: {CLASS_METERS}", flush=True)
     print(f"  Train: {len(X_train)}, Val: {len(X_val)}", flush=True)
 
@@ -575,21 +639,26 @@ def main():
             entries = entries[:args.limit]
         print(f"Loaded {len(entries)} METER2800 entries for {args.split}", flush=True)
 
+        test_entries = []
         if args.extra_data:
-            wiki_entries = load_wikimeter_entries(args.wikimeter_dir.resolve())
+            wiki_train, wiki_val, wiki_test = load_wikimeter_entries(args.wikimeter_dir.resolve())
+            wiki_tuning = wiki_train + wiki_val
             if args.limit > 0:
-                wiki_entries = wiki_entries[:args.limit]
-            print(f"Loaded {len(wiki_entries)} WIKIMETER entries", flush=True)
-            entries.extend(wiki_entries)
-            print(f"Total: {len(entries)} entries", flush=True)
+                wiki_tuning = wiki_tuning[:args.limit]
+                wiki_test = wiki_test[:args.limit]
+            print(f"  WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test (song-level hash split)", flush=True)
+            entries.extend(wiki_tuning)
+            test_entries.extend(wiki_test)
+            print(f"Total tuning: {len(entries)} entries", flush=True)
 
         extract_dataset(entries, args.workers, args.split)
 
-        # Also extract test split if extracting tuning
+        # Also extract test split
         if args.split == "tuning":
-            test_entries = load_meter2800_entries(data_dir, "test")
+            m2800_test = load_meter2800_entries(data_dir, "test")
             if args.limit > 0:
-                test_entries = test_entries[:args.limit]
+                m2800_test = m2800_test[:args.limit]
+            test_entries = m2800_test + test_entries
             if test_entries:
                 print(f"\nAlso extracting test split ({len(test_entries)} files)...", flush=True)
                 extract_dataset(test_entries, args.workers, "test")

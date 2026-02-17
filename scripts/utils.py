@@ -9,6 +9,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".oga", ".opus", ".aiff", ".aif"}
 
+_blacklist_cache: set[str] | None = None
+
+
+def load_blacklist() -> set[str]:
+    """Load blacklisted filename stems from scripts/setup/meter2800_blacklist.txt.
+
+    One stem per line, # comments. Cached after first load.
+    """
+    global _blacklist_cache
+    if _blacklist_cache is None:
+        bl_path = PROJECT_ROOT / "scripts" / "setup" / "meter2800_blacklist.txt"
+        stems: set[str] = set()
+        if bl_path.exists():
+            for line in bl_path.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    stems.add(line)
+        _blacklist_cache = stems
+    return _blacklist_cache
+
 
 def sha256_file(path: Path) -> str:
     """Compute SHA-256 hash of a file."""
@@ -50,6 +70,29 @@ def download_file(url: str, dest: Path, max_retries: int = 3,
     return False
 
 
+def split_by_stem(
+    filename_stem: str,
+    train_pct: int = 80,
+    val_pct: int = 10,
+) -> str:
+    """Deterministic hash-based split from a filename stem.
+
+    Strips _segNN suffixes so all segments of the same song land in
+    the same split (prevents data leakage).
+
+    Returns "train", "val", or "test".
+    """
+    import re
+
+    song_stem = re.sub(r"_seg\d+$", "", filename_stem)
+    h = int(hashlib.sha256(song_stem.encode()).hexdigest(), 16) % 100
+    if h < train_pct:
+        return "train"
+    if h < train_pct + val_pct:
+        return "val"
+    return "test"
+
+
 def resolve_audio_path(raw_fname: str, data_dir: Path) -> Path | None:
     """Resolve a METER2800 .tab filename to an actual audio file on disk.
 
@@ -65,6 +108,10 @@ def resolve_audio_path(raw_fname: str, data_dir: Path) -> Path | None:
     src_dir = p.parent.name  # e.g. "MAG", "FMA", "GTZAN", "OWN"
     stem = p.stem
     audio_dir = data_dir / "audio"
+
+    # Check blacklist
+    if stem in load_blacklist():
+        return None
 
     for ext in (".mp3", ".wav", ".ogg", ".flac", p.suffix):
         candidate = audio_dir / f"{stem}{ext}"

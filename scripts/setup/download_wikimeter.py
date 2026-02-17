@@ -204,16 +204,25 @@ def download_source_audio(source: Source, dest_dir: Path, timeout_s: int = 120) 
     return None
 
 
-def segment_audio(src: Path, stem: str, audio_dir: Path, segment_length: int = 35) -> list[str]:
+def segment_audio(src: Path, stem: str, audio_dir: Path, segment_length: int = 35,
+                   trim: dict | None = None) -> list[str]:
     duration = get_duration(src)
     if duration is None or duration < 15:
         return []
 
     audio_dir.mkdir(parents=True, exist_ok=True)
 
-    margin = 10.0 if duration > 40 else 0.0
-    usable_start = margin
-    usable_duration = duration - 2 * margin
+    # Apply trim bounds from wikimeter.json (e.g. {"start": 10, "end": 460})
+    trim_start = float((trim or {}).get("start", 0))
+    trim_end = float((trim or {}).get("end", duration))
+    trim_end = min(trim_end, duration)
+    trimmed_duration = trim_end - trim_start
+    if trimmed_duration < 15:
+        return []
+
+    margin = 10.0 if trimmed_duration > 40 else 0.0
+    usable_start = trim_start + margin
+    usable_duration = trimmed_duration - 2 * margin
 
     if usable_duration < 15:
         usable_start = 0
@@ -280,6 +289,7 @@ def download_and_segment(
     stem: str,
     audio_dir: Path,
     segment_length: int = 35,
+    trim: dict | None = None,
 ) -> tuple[list[str], Source | None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -290,7 +300,7 @@ def download_and_segment(
             duration = get_duration(src_audio)
             if duration is None or duration < 15:
                 continue
-            segments = segment_audio(src_audio, stem, audio_dir, segment_length)
+            segments = segment_audio(src_audio, stem, audio_dir, segment_length, trim=trim)
             if segments:
                 return segments, source
     return [], None
@@ -457,6 +467,7 @@ def main() -> None:
             stem=stem,
             audio_dir=audio_dir,
             segment_length=args.segment_length,
+            trim=song.get("trim"),
         )
 
         if segments:

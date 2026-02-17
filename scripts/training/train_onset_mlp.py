@@ -694,20 +694,13 @@ def main():
 
     if args.extra_data:
         wiki_entries = load_wikimeter(args.extra_data, valid_meters)
-        # Split WIKIMETER: add to train (80%), val (10%), test (10%) by hash
-        from scripts.setup.wikimeter_tools import get_split as wiki_split
+        from scripts.utils import split_by_stem
         wiki_train, wiki_val, wiki_test = [], [], []
-        # Group by song (remove _segNN suffix to get song key)
-        import re
         for path, meter in wiki_entries:
-            stem = path.stem
-            # Remove segment suffix to get song-level split
-            song_stem = re.sub(r"_seg\d+$", "", stem)
-            # Use deterministic hash split
-            h = int(hashlib.sha256(song_stem.encode()).hexdigest(), 16) % 100
-            if h < 80:
+            split = split_by_stem(path.stem)
+            if split == "train":
                 wiki_train.append((path, meter))
-            elif h < 90:
+            elif split == "val":
                 wiki_val.append((path, meter))
             else:
                 wiki_test.append((path, meter))

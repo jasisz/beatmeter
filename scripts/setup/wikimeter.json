@@ -114,20 +114,6 @@
   },
   {
     "artist": "Bear McCreary",
-    "title": "Passacaglia",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "jdJNxj6dhyw",
-        "url": "https://www.youtube.com/watch?v=jdJNxj6dhyw"
-      }
-    ]
-  },
-  {
-    "artist": "Bear McCreary",
     "title": "Wander My Friends",
     "meters": {
       "3": 1.0
@@ -1068,20 +1054,6 @@
     ]
   },
   {
-    "artist": "Ravel",
-    "title": "La Valse",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "UlMJ6Ri-LMM",
-        "url": "https://www.youtube.com/watch?v=UlMJ6Ri-LMM"
-      }
-    ]
-  },
-  {
     "artist": "Schubert",
     "title": "Waltz in B minor D 145 No 6",
     "meters": {
@@ -1418,21 +1390,6 @@
         "type": "youtube",
         "video_id": "7W9R-c1UeU0",
         "url": "https://www.youtube.com/watch?v=7W9R-c1UeU0"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Afoxé",
-    "meters": {
-      "3": 0.7,
-      "4": 0.8
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "PKB0uhcTMw8",
-        "url": "https://www.youtube.com/watch?v=PKB0uhcTMw8"
       }
     ]
   },
@@ -1780,20 +1737,6 @@
         "type": "youtube",
         "video_id": "Plhtk_XJqhM",
         "url": "https://www.youtube.com/watch?v=Plhtk_XJqhM"
-      }
-    ]
-  },
-  {
-    "artist": "Yann Tiersen",
-    "title": "La Valse d'Amelie",
-    "meters": {
-      "3": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "uj9BihmugmI",
-        "url": "https://www.youtube.com/watch?v=uj9BihmugmI"
       }
     ]
   },
@@ -2814,7 +2757,11 @@
         "video_id": "FD6Q2jcUDb4",
         "url": "https://www.youtube.com/watch?v=FD6Q2jcUDb4"
       }
-    ]
+    ],
+    "trim": {
+      "start": 45,
+      "end": 320
+    }
   },
   {
     "artist": "Slayer",
@@ -3477,7 +3424,8 @@
         "video_id": "pcyfAgnlO-8",
         "url": "https://www.youtube.com/watch?v=pcyfAgnlO-8"
       }
-    ]
+    ],
+    "trim": {"start": 20, "end": 430}
   },
   {
     "artist": "Harry Belafonte",
@@ -3930,7 +3878,10 @@
         "video_id": "L_XJ_s5IsQc",
         "url": "https://www.youtube.com/watch?v=L_XJ_s5IsQc"
       }
-    ]
+    ],
+    "trim": {
+      "end": 590
+    }
   },
   {
     "artist": "Soundgarden",
@@ -4561,7 +4512,10 @@
         "video_id": "ITrRu_vI75I",
         "url": "https://www.youtube.com/watch?v=ITrRu_vI75I"
       }
-    ]
+    ],
+    "trim": {
+      "end": 80
+    }
   },
   {
     "artist": "Traditional",
@@ -5545,20 +5499,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Gornooryahovska Rachenitsa",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "SB8FlNTNYMA",
-        "url": "https://www.youtube.com/watch?v=SB8FlNTNYMA"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Hora De La Munte",
     "meters": {
       "7": 1.0
@@ -6026,20 +5966,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Rachenitsa Slivenska",
-    "meters": {
-      "7": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "SvJHvzOrJr4",
-        "url": "https://www.youtube.com/watch?v=SvJHvzOrJr4"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Rachenitsa Starozagorska",
     "meters": {
       "7": 1.0
@@ -6260,7 +6186,10 @@
         "video_id": "53rP5gH1YVM",
         "url": "https://www.youtube.com/watch?v=53rP5gH1YVM"
       }
-    ]
+    ],
+    "trim": {
+      "end": 500
+    }
   },
   {
     "artist": "Traditional",
@@ -6405,7 +6334,11 @@
         "video_id": "1QCjbWHLYt8",
         "url": "https://www.youtube.com/watch?v=1QCjbWHLYt8"
       }
-    ]
+    ],
+    "trim": {
+      "start": 65,
+      "end": 385
+    }
   },
   {
     "artist": "Yuri Yunakov",
@@ -6447,7 +6380,10 @@
         "video_id": "kK_eQFkhU7g",
         "url": "https://www.youtube.com/watch?v=kK_eQFkhU7g"
       }
-    ]
+    ],
+    "trim": {
+      "end": 460
+    }
   },
   {
     "artist": "Avishai Cohen",
@@ -8043,20 +7979,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Sulukule Roman Havasi",
-    "meters": {
-      "9": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "xQPFhbpmIlc",
-        "url": "https://www.youtube.com/watch?v=xQPFhbpmIlc"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Svornato Horo",
     "meters": {
       "9": 1.0
@@ -9168,20 +9090,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Dunavsko Horo",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "yFgNA_TkXPU",
-        "url": "https://www.youtube.com/watch?v=yFgNA_TkXPU"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Dzhanguritsa",
     "meters": {
       "11": 1.0
@@ -9341,20 +9249,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Lamba Lamba",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "OQkF264_bwo",
-        "url": "https://www.youtube.com/watch?v=OQkF264_bwo"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Loveshka Kopanitsa",
     "meters": {
       "11": 1.0
@@ -9439,20 +9333,6 @@
   },
   {
     "artist": "Traditional",
-    "title": "Razlozhka Kopanitsa",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "wfxiuQSndOU",
-        "url": "https://www.youtube.com/watch?v=wfxiuQSndOU"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
     "title": "Rusenska Kopanitsa",
     "meters": {
       "11": 1.0
@@ -9476,20 +9356,6 @@
         "type": "youtube",
         "video_id": "T3VJmE0zaNc",
         "url": "https://www.youtube.com/watch?v=T3VJmE0zaNc"
-      }
-    ]
-  },
-  {
-    "artist": "Traditional",
-    "title": "Sedenka",
-    "meters": {
-      "11": 1.0
-    },
-    "sources": [
-      {
-        "type": "youtube",
-        "video_id": "uwGxRzTxLf0",
-        "url": "https://www.youtube.com/watch?v=uwGxRzTxLf0"
       }
     ]
   },
@@ -9607,6 +9473,20 @@
         "type": "youtube",
         "video_id": "RgrKxRsACtI",
         "url": "https://www.youtube.com/watch?v=RgrKxRsACtI"
+      }
+    ]
+  },
+  {
+    "artist": "Yann Tiersen",
+    "title": "La Valse d'Amelie",
+    "meters": {
+      "3": 1.0
+    },
+    "sources": [
+      {
+        "type": "youtube",
+        "video_id": "uj9BihmugmI",
+        "url": "https://www.youtube.com/watch?v=uj9BihmugmI"
       }
     ]
   }

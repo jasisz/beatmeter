@@ -41,6 +41,115 @@ logger = logging.getLogger(__name__)
 # After generate_hypotheses() runs, this holds the last signal details.
 last_signal_details: dict | None = None
 
+# ---------------------------------------------------------------------------
+# Arbiter MLP inference (lazy-loaded singleton)
+# ---------------------------------------------------------------------------
+
+_arbiter_model = None
+_arbiter_meta = None  # feat_mean, feat_std, signal_names, meter_keys, class_meters
+
+
+def _load_arbiter():
+    """Load arbiter checkpoint once. Returns (model, meta) or (None, None)."""
+    global _arbiter_model, _arbiter_meta
+    if _arbiter_model is not None:
+        return _arbiter_model, _arbiter_meta
+
+    import pathlib
+    ckpt_path = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "meter_arbiter.pt"
+    if not ckpt_path.exists():
+        return None, None
+
+    try:
+        import torch
+        import torch.nn as nn
+
+        ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
+        n_feat = ckpt["total_features"]
+        n_cls = ckpt["n_classes"]
+
+        model = nn.Sequential(
+            nn.Linear(n_feat, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.2),
+            nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU(), nn.Dropout(0.15),
+            nn.Linear(32, n_cls),
+        )
+        model.load_state_dict(ckpt["model_state"])
+        model.eval()
+
+        _arbiter_model = model
+        _arbiter_meta = {
+            "feat_mean": ckpt["feat_mean"],
+            "feat_std": ckpt["feat_std"],
+            "signal_names": ckpt["signal_names"],
+            "meter_keys": ckpt["meter_keys"],
+            "class_meters": ckpt["class_meters"],
+        }
+        logger.info(f"Arbiter loaded: {n_feat} features, {n_cls} classes")
+        return _arbiter_model, _arbiter_meta
+    except Exception as e:
+        logger.warning(f"Failed to load arbiter: {e}")
+        return None, None
+
+
+def _arbiter_predict(signal_results: dict) -> dict[tuple[int, int], float] | None:
+    """Run arbiter inference on signal results. Returns meter scores or None."""
+    model, meta = _load_arbiter()
+    if model is None:
+        return None
+
+    import torch
+
+    sig_names = meta["signal_names"]
+    meter_keys = meta["meter_keys"]
+    class_meters = meta["class_meters"]
+    feat_mean = meta["feat_mean"]
+    feat_std = meta["feat_std"]
+
+    n_signals = len(sig_names)
+    n_meters = len(meter_keys)
+
+    # Build feature vector (same layout as training)
+    x = np.zeros(n_signals * n_meters, dtype=np.float32)
+    for s_idx, sig_name in enumerate(sig_names):
+        if sig_name in signal_results:
+            sig_scores = signal_results[sig_name]
+            for m_idx, meter_key in enumerate(meter_keys):
+                # signal_results uses tuple keys like (3, 4), meter_keys are "3_4"
+                num, den = meter_key.split("_")
+                tup_key = (int(num), int(den))
+                if tup_key in sig_scores:
+                    x[s_idx * n_meters + m_idx] = sig_scores[tup_key]
+
+    # Standardize
+    x = (x - feat_mean) / feat_std
+
+    # Inference
+    with torch.no_grad():
+        logits = model(torch.tensor(x).unsqueeze(0))
+        probs = torch.sigmoid(logits).squeeze(0).numpy()
+
+    # Convert to meter scores: map class probabilities to (num, den) tuples
+    # Arbiter predicts numerator classes; we need to pick denominators.
+    # Use the best denominator from signal_results for each numerator.
+    scores: dict[tuple[int, int], float] = {}
+    for cls_idx, meter_num in enumerate(class_meters):
+        prob = float(probs[cls_idx])
+        if prob < 0.01:
+            continue
+        # Find which denominators this numerator appeared with in signal_results
+        best_den = None
+        best_sig_score = -1.0
+        for sig_scores in signal_results.values():
+            for (num, den), sc in sig_scores.items():
+                if num == meter_num and sc > best_sig_score:
+                    best_sig_score = sc
+                    best_den = den
+        if best_den is None:
+            best_den = 4 if meter_num <= 7 else 8
+        scores[(meter_num, best_den)] = prob
+
+    return scores
+
 # Meter descriptions for musicians
 METER_DESCRIPTIONS = {
     (2, 4): "Marsz, polka",
@@ -694,6 +803,14 @@ def generate_hypotheses(
         beatnet_alignment, beat_this_alignment, madmom_alignment,
     )
 
+    # When arbiter is loaded, ensure all signals are computed
+    # (arbiter needs them regardless of trust-based weights)
+    arbiter_model, _ = _load_arbiter()
+    if arbiter_model is not None:
+        for sig_key in weights:
+            if weights[sig_key] < 0.02:
+                weights[sig_key] = 0.02
+
     # Step 2: Collect scores from signals 1a, 1b, 2, 3, 7, 8, 8b, 9
     signal_results = _collect_signal_scores(
         weights, beatnet_beats, madmom_results,
@@ -711,53 +828,6 @@ def generate_hypotheses(
         cache=cache, audio_hash=audio_hash,
     )
 
-    # Step 4: Weighted additive combination with consensus bonus
-    all_candidate_meters: set[tuple[int, int]] = set()
-    for sig_scores in signal_results.values():
-        all_candidate_meters.update(sig_scores.keys())
-
-    all_scores: dict[tuple[int, int], float] = {}
-    for meter in all_candidate_meters:
-        score = 0.0
-        n_supporting = 0
-        for sig_name, sig_scores in signal_results.items():
-            w = weights.get(sig_name, 0)
-            if w < 0.001:
-                continue
-            if meter in sig_scores:
-                score += w * sig_scores[meter]
-                if sig_scores[meter] > CONSENSUS_SUPPORT_THRESHOLD:
-                    n_supporting += 1
-        if n_supporting >= 4:
-            score *= CONSENSUS_4_BONUS
-        elif n_supporting >= 3:
-            score *= CONSENSUS_3_BONUS
-        all_scores[meter] = score
-
-    if not all_scores:
-        fallback = ([MeterHypothesis(
-            numerator=4, denominator=4, confidence=0.3,
-            description=_get_description(4, 4),
-        )], 1.0)
-        if return_signal_details:
-            return fallback[0], fallback[1], {
-                "signal_results": signal_results,
-                "weights": weights,
-                "trust": {
-                    "beatnet": beatnet_trust,
-                    "beat_this": beat_this_trust,
-                    "madmom": madmom_trust,
-                },
-                "tempo_bpm": tempo_bpm,
-            }
-        return fallback
-
-    # Step 5: Apply adjustments (priors, rarity, compound, NN penalties)
-    _apply_score_adjustments(
-        all_scores, signal_results, all_beats, beat_interval,
-        onset_event_times, sr, beatnet_beats, beat_this_beats,
-    )
-
     # Capture signal details for arbiter training (always, lightweight)
     global last_signal_details
     last_signal_details = {
@@ -773,6 +843,50 @@ def generate_hypotheses(
         },
         "tempo_bpm": tempo_bpm,
     }
+
+    # Step 4: Score combination — arbiter MLP or hand-tuned fallback
+    arbiter_scores = _arbiter_predict(signal_results)
+    if arbiter_scores is not None:
+        all_scores = arbiter_scores
+        logger.debug("Using arbiter MLP for meter scoring")
+    else:
+        # Fallback: hand-tuned weighted additive combination with consensus bonus
+        all_candidate_meters: set[tuple[int, int]] = set()
+        for sig_scores in signal_results.values():
+            all_candidate_meters.update(sig_scores.keys())
+
+        all_scores: dict[tuple[int, int], float] = {}
+        for meter in all_candidate_meters:
+            score = 0.0
+            n_supporting = 0
+            for sig_name, sig_scores in signal_results.items():
+                w = weights.get(sig_name, 0)
+                if w < 0.001:
+                    continue
+                if meter in sig_scores:
+                    score += w * sig_scores[meter]
+                    if sig_scores[meter] > CONSENSUS_SUPPORT_THRESHOLD:
+                        n_supporting += 1
+            if n_supporting >= 4:
+                score *= CONSENSUS_4_BONUS
+            elif n_supporting >= 3:
+                score *= CONSENSUS_3_BONUS
+            all_scores[meter] = score
+
+        # Step 5: Apply adjustments (priors, rarity, compound, NN penalties)
+        _apply_score_adjustments(
+            all_scores, signal_results, all_beats, beat_interval,
+            onset_event_times, sr, beatnet_beats, beat_this_beats,
+        )
+
+    if not all_scores:
+        fallback = ([MeterHypothesis(
+            numerator=4, denominator=4, confidence=0.3,
+            description=_get_description(4, 4),
+        )], 1.0)
+        if return_signal_details:
+            return fallback[0], fallback[1], last_signal_details
+        return fallback
 
     # Step 6: Filter, normalize, and format hypotheses
     hypotheses, ambiguity = _format_hypotheses(all_scores, max_hypotheses)
