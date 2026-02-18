@@ -517,6 +517,7 @@ class AnalysisEngine:
                     skip_resnet=True,
                     skip_mert=True,
                     skip_onset_mlp=True,
+                    skip_cross_rhythm=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]

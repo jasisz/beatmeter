@@ -1,0 +1,28 @@
+{
+  "_comment": "METER2800 label corrections and blacklist. Versioned in repo, never edit .tab files directly.",
+  "_actions": {
+    "blacklist": "Exclude from training and evaluation entirely.",
+    "relabel": "Override meter label. Requires new_meter and reason."
+  },
+  "0143":      {"action": "blacklist", "reason": "speech, not music"},
+  "0144":      {"action": "blacklist", "reason": "speech, not music"},
+  "00361":     {"action": "blacklist", "reason": "speech, not music"},
+  "00083":     {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "00416":     {"action": "relabel", "old_meter": 7, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=1.0"},
+  "00073":     {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "072005":    {"action": "relabel", "old_meter": 3, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=1.0"},
+  "00404":     {"action": "relabel", "old_meter": 7, "new_meter": 5, "reason": "manual review: all 6 signals say 5/x, conf=1.0"},
+  "00081":     {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "00173":     {"action": "relabel", "old_meter": 5, "new_meter": 7, "reason": "manual review: all 6 signals say 7/x, conf=1.0"},
+  "0120":      {"action": "relabel", "old_meter": 7, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=1.0"},
+  "00063":     {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "00068":     {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "113935":    {"action": "relabel", "old_meter": 5, "new_meter": 7, "reason": "manual review: all 6 signals say 7/x, conf=1.0"},
+  "0003":      {"action": "relabel", "old_meter": 5, "new_meter": 3, "reason": "manual review: all 6 signals say 3/x, conf=1.0"},
+  "00354":     {"action": "relabel", "old_meter": 5, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=0.985"},
+  "rock.00015":{"action": "relabel", "old_meter": 4, "new_meter": 5, "reason": "manual review: all 6 signals say 5/x, conf=0.954"},
+  "118405":    {"action": "relabel", "old_meter": 3, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=0.882"},
+  "123003":    {"action": "relabel", "old_meter": 3, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=0.849"},
+  "047160":    {"action": "relabel", "old_meter": 5, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=0.812"},
+  "123099":    {"action": "relabel", "old_meter": 3, "new_meter": 4, "reason": "manual review: all 6 signals say 4/x, conf=0.792"}
+}

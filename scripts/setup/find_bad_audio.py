@@ -19,23 +19,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from beatmeter.analysis.cache import AnalysisCache
+from scripts.utils import load_meter2800_corrections
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CACHE_DIR = PROJECT_ROOT / ".cache"
 METER2800_AUDIO = PROJECT_ROOT / "data" / "meter2800" / "audio"
 WIKIMETER_AUDIO = PROJECT_ROOT / "data" / "wikimeter" / "audio"
 WIKIMETER_JSON = PROJECT_ROOT / "scripts" / "setup" / "wikimeter.json"
-BLACKLIST_PATH = PROJECT_ROOT / "scripts" / "setup" / "meter2800_blacklist.txt"
-
-
-def load_blacklist() -> set[str]:
-    stems: set[str] = set()
-    if BLACKLIST_PATH.exists():
-        for line in BLACKLIST_PATH.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                stems.add(line)
-    return stems
 
 
 def build_hash_to_path() -> dict[str, Path]:
@@ -123,7 +113,8 @@ def main():
     print("Building hash→filename mapping...", flush=True)
     h2p = build_hash_to_path()
     wiki_urls = load_wikimeter_urls()
-    blacklist = load_blacklist()
+    corrections = load_meter2800_corrections()
+    blacklisted_stems = {s for s, v in corrections.items() if v.get("action") == "blacklist"}
 
     import re
 
@@ -139,7 +130,7 @@ def main():
             continue
 
         stem = path.stem
-        is_blacklisted = stem in blacklist
+        is_blacklisted = stem in blacklisted_stems
         dataset = "wikimeter" if "wikimeter" in str(path) else "meter2800"
 
         # Find YouTube URL for WIKIMETER (exact stem match)

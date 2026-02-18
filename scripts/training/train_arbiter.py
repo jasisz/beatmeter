@@ -38,7 +38,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.utils import resolve_audio_path, split_by_stem
+from scripts.utils import load_meter2800_entries as _load_meter2800_base, resolve_audio_path, split_by_stem
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -52,6 +52,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 SIGNAL_NAMES = [
     "beatnet", "beat_this", "autocorr",
     "bar_tracking", "onset_mlp", "hcdf",
+    "cross_rhythm",  # signal 10: polyrhythm detection (W=0, needs gate check before training)
 ]
 
 # Canonical meter keys (order matters for feature vector)
@@ -62,8 +63,8 @@ METER_KEYS = [
 
 N_SIGNALS = len(SIGNAL_NAMES)
 N_METERS = len(METER_KEYS)
-N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 6 × 12 = 72
-TOTAL_FEATURES = N_SIGNAL_FEATURES  # 72 (signal scores only — ablation confirmed no gain from extras)
+N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 7 × 12 = 84
+TOTAL_FEATURES = N_SIGNAL_FEATURES  # 84 (signal scores only — ablation confirmed no gain from extras)
 
 # Output classes: meter numerator (multi-label)
 CLASS_METERS = [3, 4, 5, 7, 9, 11]
@@ -82,28 +83,11 @@ Entry = tuple[Path, int, dict[int, float]]
 
 
 def load_meter2800_entries(data_dir: Path, split: str) -> list[Entry]:
-    """Load METER2800 entries (single-label)."""
-    if split == "tuning":
-        tab_files = ["data_train_4_classes.tab", "data_val_4_classes.tab"]
-    elif split == "test":
-        tab_files = ["data_test_4_classes.tab"]
-    else:
-        tab_files = [f"data_{split}_4_classes.tab"]
-
-    entries: list[Entry] = []
-    for tab in tab_files:
-        label_path = data_dir / tab
-        if not label_path.exists():
-            continue
-        with open(label_path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f, delimiter="\t")
-            for row in reader:
-                fname = row["filename"].strip('"')
-                meter = int(row["meter"])
-                audio_path = resolve_audio_path(fname, data_dir)
-                if audio_path:
-                    entries.append((audio_path, meter, {meter: 1.0}))
-    return entries
+    """Load METER2800 entries (single-label) with corrections applied."""
+    return [
+        (path, meter, {meter: 1.0})
+        for path, meter in _load_meter2800_base(data_dir, split)
+    ]
 
 
 LABEL_TO_METER = {
@@ -198,6 +182,7 @@ _SIGNAL_CACHE_MAP = {
     "onset_mlp": "onset_mlp_meter",
     "resnet": "resnet_meter",
     "hcdf": "hcdf_meter",
+    "cross_rhythm": "cross_rhythm",
 }
 
 
@@ -376,7 +361,7 @@ def build_feature_matrix(
     for i, entry in enumerate(dataset):
         sig_results = entry["signal_results"]
 
-        # Signal scores: 6 signals × 12 meters = 72 features
+        # Signal scores: 7 signals × 12 meters = 84 features
         for s_idx, sig_name in enumerate(SIGNAL_NAMES):
             if sig_name in sig_results:
                 alpha = sharpening.get(sig_name, 1.0) if sharpening else 1.0

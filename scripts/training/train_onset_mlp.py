@@ -45,7 +45,7 @@ from beatmeter.analysis.signals.onset_mlp_features import (
     extract_features_v5,
     extract_features_from_path,
 )
-from scripts.utils import resolve_audio_path
+from scripts.utils import load_meter2800_entries as _load_meter2800_base, resolve_audio_path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -190,23 +190,8 @@ def _augment_and_extract(
 def load_meter2800_split(
     data_dir: Path, split: str, valid_meters: set[int]
 ) -> list[tuple[Path, int]]:
-    """Load METER2800 entries for a given split."""
-    label_path = data_dir / f"data_{split}_4_classes.tab"
-    if not label_path.exists():
-        return []
-
-    entries = []
-    with open(label_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            fname = row["filename"].strip('"')
-            meter = int(row["meter"])
-            if meter not in valid_meters:
-                continue
-            audio_path = resolve_audio_path(fname, data_dir)
-            if audio_path:
-                entries.append((audio_path, meter))
-    return entries
+    """Load METER2800 entries for a given split with corrections applied."""
+    return _load_meter2800_base(data_dir, split, valid_meters=valid_meters)
 
 
 def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[tuple[Path, int]]:

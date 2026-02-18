@@ -33,7 +33,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import resolve_audio_path
+from scripts.utils import load_meter2800_entries, load_wikimeter_entries, resolve_audio_path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -42,39 +42,6 @@ from scripts.utils import resolve_audio_path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = PROJECT_ROOT / "data" / "runs"
 
-# ---------------------------------------------------------------------------
-# Dataset registry
-# ---------------------------------------------------------------------------
-
-
-def load_meter2800_entries(
-    data_dir: Path, split: str
-) -> list[tuple[Path, int]]:
-    """Load entries for a METER2800 split from .tab label files.
-
-    split='tuning' combines train+val (2100 files).
-    """
-    if split == "tuning":
-        entries = []
-        for sub in ("train", "val"):
-            entries.extend(load_meter2800_entries(data_dir, sub))
-        return entries
-
-    for ext in (".tab", ".csv", ".tsv"):
-        label_path = data_dir / f"data_{split}_4_classes{ext}"
-        if label_path.exists():
-            entries = []
-            with open(label_path, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f, delimiter="\t")
-                for row in reader:
-                    fname = row["filename"].strip('"')
-                    meter = int(row["meter"])
-                    audio_path = resolve_audio_path(fname, data_dir)
-                    if audio_path:
-                        entries.append((audio_path, meter))
-            return entries
-    return []
-
 
 DATASETS = {
     "meter2800": {
@@ -82,6 +49,12 @@ DATASETS = {
         "loader": load_meter2800_entries,
         "splits": ["train", "val", "test", "tuning"],
         "classes": [3, 4, 5, 7],
+    },
+    "wikimeter": {
+        "data_dir": Path("data/wikimeter"),
+        "loader": load_wikimeter_entries,
+        "splits": ["train", "val", "test", "tuning", "all"],
+        "classes": [3, 4, 5, 7, 9, 11],
     },
 }
 
@@ -204,6 +177,18 @@ def save_run(
     path.write_text(json.dumps(snapshot, indent=2))
     print(f"\n  Saved to {path}")
 
+    # Save copies of all trained checkpoints alongside the snapshot
+    import shutil
+    checkpoints = {
+        "arbiter": PROJECT_ROOT / "data" / "meter_arbiter.pt",
+        "onset_mlp": PROJECT_ROOT / "data" / "meter_onset_mlp.pt",
+    }
+    for name, src in checkpoints.items():
+        if src.exists():
+            dst = RUNS_DIR / f"{ts}_{name}.pt"
+            shutil.copy2(src, dst)
+            print(f"  {name} checkpoint saved to {dst}")
+
 
 # ---------------------------------------------------------------------------
 # Display helpers
@@ -275,11 +260,17 @@ def _worker_init():
     _worker_engine = AnalysisEngine(cache=AnalysisCache())
 
 
-def _worker_process_file(args: tuple[str, int]) -> dict:
-    """Process a single file in a worker process."""
+def _worker_process_file(args: tuple[str, int, str]) -> dict:
+    """Process a single file in a worker process.
+
+    args: (audio_path_str, expected_meter, meters_dict_json_or_empty)
+    """
     import torch
-    audio_path_str, expected_meter = args
+    audio_path_str, expected_meter, meters_json = args
     fname = Path(audio_path_str).name
+
+    meters_dict = json.loads(meters_json) if meters_json else None
+
     try:
         with torch.inference_mode():
             result = _worker_engine.analyze_file(audio_path_str, skip_sections=True)
@@ -294,12 +285,19 @@ def _worker_process_file(args: tuple[str, int]) -> dict:
         predicted = None
         bpm = None
 
+    # Multi-label match: if meters_dict has >1 entry, matching any GT meter counts
+    if meters_dict and len(meters_dict) > 1 and predicted is not None:
+        ok = str(predicted) in meters_dict
+    else:
+        ok = predicted == expected_meter
+
     return {
         "fname": fname,
         "expected": expected_meter,
         "predicted": predicted,
         "bpm": bpm,
-        "ok": predicted == expected_meter,
+        "ok": ok,
+        "multilabel": meters_dict if meters_dict and len(meters_dict) > 1 else None,
     }
 
 
@@ -357,21 +355,33 @@ def main():
     if args.quick:
         args.split = "tuning"
 
-    entries = loader(data_dir, args.split)
-    if not entries:
+    raw_entries = loader(data_dir, args.split)
+    if not raw_entries:
         print(f"ERROR: No entries found for split '{args.split}' in {data_dir}")
         sys.exit(1)
 
+    # Normalize to 3-tuples: (path, primary_meter, meters_dict_or_None)
+    entries: list[tuple[Path, int, dict[int, float] | None]] = []
+    for e in raw_entries:
+        if len(e) == 2:
+            entries.append((e[0], e[1], None))
+        else:
+            entries.append(e)
+
     # Filter by meter class
     if args.meter > 0:
-        entries = [(p, m) for p, m in entries if m == args.meter]
+        entries = [(p, m, md) for p, m, md in entries if m == args.meter]
         if not entries:
             print(f"ERROR: No files with meter={args.meter}")
             sys.exit(1)
 
-    # Apply sampling/limit
+    # Apply sampling/limit (stratified_sample works on 2-tuples, adapt)
     if args.quick:
-        entries = stratified_sample(entries, n=100)
+        # Convert to 2-tuples for stratified_sample, then restore
+        two_tuples = [(p, m) for p, m, _ in entries]
+        sampled_two = stratified_sample(two_tuples, n=100)
+        sampled_set = {(str(p), m) for p, m in sampled_two}
+        entries = [(p, m, md) for p, m, md in entries if (str(p), m) in sampled_set]
     elif args.limit > 0:
         entries = entries[: args.limit]
 
@@ -379,7 +389,7 @@ def main():
     if args.quick:
         split_label = "tuning (quick)"
 
-    class_dist = Counter(m for _, m in entries)
+    class_dist = Counter(m for _, m, _ in entries)
     dist_str = ", ".join(f"{m}/x: {class_dist[m]}" for m in sorted(class_dist))
 
     n_workers = args.workers
@@ -399,10 +409,16 @@ def main():
     file_results: list[dict] = []
     t0 = time.time()
 
+    n_multilabel = sum(1 for _, _, md in entries if md and len(md) > 1)
+    n_multilabel_ok = 0
+
     if n_workers > 0:
         # --- Multiprocess mode ---
         print(f"  Starting {n_workers} workers...", flush=True)
-        work_items = [(str(p), m) for p, m in entries]
+        work_items = [
+            (str(p), m, json.dumps({str(k): v for k, v in md.items()}) if md else "")
+            for p, m, md in entries
+        ]
 
         ctx = mp.get_context("spawn")
         with ctx.Pool(n_workers, initializer=_worker_init) as pool:
@@ -417,12 +433,15 @@ def main():
                 if result["ok"]:
                     correct += 1
                     correct_by_class[result["expected"]] += 1
+                    if result.get("multilabel"):
+                        n_multilabel_ok += 1
                 file_results.append(result)
 
                 if args.verbose:
                     status = "OK  " if result["ok"] else "FAIL"
                     pred_str = f"{result['predicted']}/x" if result["predicted"] else "None"
-                    tqdm.write(f"  {status} {pred_str:5s} exp={result['expected']}/x  {result['fname']}")
+                    ml_tag = " [multi]" if result.get("multilabel") else ""
+                    tqdm.write(f"  {status} {pred_str:5s} exp={result['expected']}/x  {result['fname']}{ml_tag}")
 
                 pct = f"{correct}/{total} ({correct/total*100:.0f}%)" if total > 0 else "0/0"
                 pbar.set_postfix_str(pct)
@@ -440,7 +459,7 @@ def main():
 
         pbar = tqdm(entries, desc="Eval", unit="file",
                     bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] acc={postfix}")
-        for audio_path, expected_meter in pbar:
+        for audio_path, expected_meter, meters_dict in pbar:
             fname = audio_path.name
             try:
                 with torch.inference_mode():
@@ -458,12 +477,21 @@ def main():
                 predicted = None
                 bpm = None
 
-            ok = predicted == expected_meter
+            # Multi-label match: if meters_dict has >1 entry, matching any GT meter counts
+            if meters_dict and len(meters_dict) > 1 and predicted is not None:
+                ok = predicted in meters_dict
+            else:
+                ok = predicted == expected_meter
+
+            is_multilabel = meters_dict is not None and len(meters_dict) > 1
+
             total += 1
             total_by_class[expected_meter] += 1
             if ok:
                 correct += 1
                 correct_by_class[expected_meter] += 1
+                if is_multilabel:
+                    n_multilabel_ok += 1
 
             file_results.append({
                 "fname": fname,
@@ -471,12 +499,14 @@ def main():
                 "predicted": predicted,
                 "bpm": bpm,
                 "ok": ok,
+                "multilabel": meters_dict if is_multilabel else None,
             })
 
             if args.verbose:
                 status = "OK  " if ok else "FAIL"
                 pred_str = f"{predicted}/x" if predicted else "None"
-                tqdm.write(f"  {status} {pred_str:5s} exp={expected_meter}/x  {fname}")
+                ml_tag = " [multi]" if is_multilabel else ""
+                tqdm.write(f"  {status} {pred_str:5s} exp={expected_meter}/x  {fname}{ml_tag}")
 
             pct = f"{correct}/{total} ({correct/total*100:.0f}%)" if total > 0 else "0/0"
             pbar.set_postfix_str(pct)
@@ -488,6 +518,11 @@ def main():
         correct, total, correct_by_class, total_by_class,
         classes, elapsed, args.dataset, split_label, len(entries),
     )
+
+    # Multi-label stats
+    if n_multilabel > 0:
+        print(f"\n  Multi-label (polyrhythmic): {n_multilabel_ok}/{n_multilabel} matched"
+              f" ({_pct(n_multilabel_ok, n_multilabel)})", flush=True)
 
     # Regression detection vs last saved run
     previous = load_latest_run()
