@@ -177,12 +177,20 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
         gt_prob = float(probs[gt_class_idx])
 
         sig_votes = {}
+        sig_full = {}  # full per-numerator scores for multi-label display
         for sig_name in SIGNAL_NAMES:
             if sig_name in sig_results:
                 top_m, top_s = get_signal_top_meter(sig_results[sig_name])
                 sig_votes[sig_name] = (top_m, top_s)
+                # Aggregate by numerator: keep max score per numerator
+                by_num = defaultdict(float)
+                for key, score in sig_results[sig_name].items():
+                    num = int(key.split("_")[0])
+                    by_num[num] = max(by_num[num], score)
+                sig_full[sig_name] = dict(sorted(by_num.items(), key=lambda x: -x[1])[:3])
             else:
                 sig_votes[sig_name] = (None, 0.0)
+                sig_full[sig_name] = {}
 
         gt_agreement = sum(1 for m, _ in sig_votes.values() if m == gt_meter)
 
@@ -208,6 +216,7 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
                 "gt_prob": gt_prob,
                 "gt_agreement": gt_agreement,
                 "sig_votes": sig_votes,
+                "sig_full": sig_full,
                 "dataset": dataset_name,
                 "all_probs": all_probs,
                 "polymetric": is_polymetric,
@@ -259,15 +268,39 @@ def render_html(suspects, portable=False):
         fpath = e["fpath"]
         audio_src = f"audio/{fpath.name}" if portable else fpath.as_uri()
 
+        gt_meter_nums = set(e.get("gt_meters", {}).keys()) if e.get("gt_meters") else {e["gt"]}
+
         votes_html = ""
         for sig_name in SIGNAL_NAMES:
-            m, sc = e["sig_votes"].get(sig_name, (None, 0.0))
-            if m is None:
-                votes_html += f'<span class="vote vote-none">{sig_name}=∅</span> '
-            elif m == e["gt"]:
-                votes_html += f'<span class="vote vote-gt">{sig_name}={m} ({sc:.2f})</span> '
-            else:
-                votes_html += f'<span class="vote vote-pred">{sig_name}={m} ({sc:.2f})</span> '
+            full = e.get("sig_full", {}).get(sig_name, {})
+            if not full:
+                votes_html += f'<div class="sig-block"><span class="sig-name">{sig_name}</span> <span style="color:#aaa">∅</span></div>'
+                continue
+            # Show all meters above threshold + always include GT meters
+            # Skip 2/x — not a real class, just sub-harmonic of 4/4
+            show_meters = {}
+            for m_num, sc in full.items():
+                if m_num == 2:
+                    continue
+                if sc >= 0.15 or m_num in gt_meter_nums:
+                    show_meters[m_num] = sc
+            # Sort by score descending
+            sorted_meters = sorted(show_meters.items(), key=lambda x: -x[1])
+            rows_inner = ""
+            for m_num, sc in sorted_meters:
+                bar_w = int(sc * 60)
+                is_gt = m_num in gt_meter_nums
+                is_pred = m_num == e["pred"]
+                color = "#c0392b" if is_gt else "#27ae60" if is_pred else "#999"
+                weight = "bold" if is_gt else "normal"
+                rows_inner += (
+                    f'<div style="display:flex;align-items:center;gap:3px;margin:1px 0">'
+                    f'<span style="width:28px;text-align:right;font-weight:{weight};color:{color};font-size:11px;white-space:nowrap">{m_num}/x</span>'
+                    f'<span style="width:{bar_w}px;height:7px;background:{color};border-radius:2px;display:inline-block"></span>'
+                    f'<span style="color:#888;font-size:10px">{sc:.2f}</span>'
+                    f'</div>'
+                )
+            votes_html += f'<div class="sig-block"><span class="sig-name">{sig_name}</span>{rows_inner}</div>'
 
         bg = meter_colors.get(e["gt"], "#fff")
         conf_pct = int(e["pred_conf"] * 100)
@@ -281,11 +314,11 @@ def render_html(suspects, portable=False):
             </td>
             <td style="text-align:center">
                 <span style="font-size:20px;font-weight:bold;color:#c0392b">{e['gt']}/x</span>
+                {f'<br><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#fff3cd;color:#856404">{" + ".join(f"{m}/x ({w:.1f})" for m, w in sorted(e["gt_meters"].items()))}</span>' if e.get('gt_meters') and len(e.get('gt_meters', {})) > 1 else ''}
             </td>
             <td style="text-align:center">
                 <span style="font-size:20px;font-weight:bold;color:#27ae60">{e['pred']}/x</span>
                 <br><span style="font-size:11px;color:#888">{conf_pct}% conf</span>
-                {f'<br><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#fff3cd;color:#856404">GT: {" + ".join(f"{m}/x ({w:.1f})" for m, w in sorted(e["gt_meters"].items()))}</span>' if e.get('gt_meters') and len(e.get('gt_meters', {})) > 1 else ''}
             </td>
             <td style="font-size:11px;font-family:monospace;white-space:nowrap">{''.join(
                 f'<div style="margin:1px 0"><span style="display:inline-block;width:30px;text-align:right;font-weight:{"bold" if m == e["gt"] else "bold" if m == e["pred"] else "normal"};color:{"#c0392b" if m == e["gt"] else "#27ae60" if m == e["pred"] else "#999"}">{m}/x</span> '
@@ -329,6 +362,8 @@ def render_html(suspects, portable=False):
   .vote-gt {{ background: #d4edda; color: #155724; }}
   .vote-pred {{ background: #f8d7da; color: #721c24; }}
   .vote-none {{ background: #e2e3e5; color: #383d41; }}
+  .sig-block {{ display: inline-block; vertical-align: top; margin: 2px 6px 2px 0; padding: 3px 6px; background: #f8f9fa; border-radius: 4px; border: 1px solid #e9ecef; font-family: monospace; min-width: 90px; }}
+  .sig-name {{ font-size: 10px; color: #666; display: block; margin-bottom: 1px; font-weight: bold; }}
   .stats {{ margin-top: 20px; padding: 12px; background: #fff; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }}
   button {{ margin: 10px 0; padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }}
   button:hover {{ background: #1e8449; }}
