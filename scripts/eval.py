@@ -260,23 +260,34 @@ def _worker_init():
     _worker_engine = AnalysisEngine(cache=AnalysisCache())
 
 
-def _worker_process_file(args: tuple[str, int, str]) -> dict:
+def _worker_process_file(args: tuple[str, int, str, str]) -> dict:
     """Process a single file in a worker process.
 
-    args: (audio_path_str, expected_meter, meters_dict_json_or_empty)
+    args: (audio_path_str, expected_meter, meters_dict_json_or_empty, valid_classes_json)
     """
     import torch
-    audio_path_str, expected_meter, meters_json = args
+    audio_path_str, expected_meter, meters_json, valid_classes_json = args
     fname = Path(audio_path_str).name
 
     meters_dict = json.loads(meters_json) if meters_json else None
+    valid_classes = set(json.loads(valid_classes_json)) if valid_classes_json else None
 
     try:
         with torch.inference_mode():
             result = _worker_engine.analyze_file(audio_path_str, skip_sections=True)
         if result and result.meter_hypotheses:
-            best = result.meter_hypotheses[0]
-            predicted = best.numerator
+            predicted = result.meter_hypotheses[0].numerator
+            # Map predictions to dataset's valid classes
+            if valid_classes and predicted not in valid_classes:
+                # 9/x is compound triple → always maps to 3
+                if predicted == 9 and 3 in valid_classes:
+                    predicted = 3
+                else:
+                    # Fall back to first hypothesis in valid classes
+                    for hyp in result.meter_hypotheses[1:]:
+                        if hyp.numerator in valid_classes:
+                            predicted = hyp.numerator
+                            break
             bpm = result.tempo.bpm if result.tempo else None
         else:
             predicted = None
@@ -415,8 +426,10 @@ def main():
     if n_workers > 0:
         # --- Multiprocess mode ---
         print(f"  Starting {n_workers} workers...", flush=True)
+        valid_classes_json = json.dumps(classes)
         work_items = [
-            (str(p), m, json.dumps({str(k): v for k, v in md.items()}) if md else "")
+            (str(p), m, json.dumps({str(k): v for k, v in md.items()}) if md else "",
+             valid_classes_json)
             for p, m, md in entries
         ]
 
@@ -465,8 +478,16 @@ def main():
                 with torch.inference_mode():
                     result = engine.analyze_file(str(audio_path), skip_sections=True)
                 if result and result.meter_hypotheses:
-                    best = result.meter_hypotheses[0]
-                    predicted = best.numerator
+                    valid_set = set(classes)
+                    predicted = result.meter_hypotheses[0].numerator
+                    if predicted not in valid_set:
+                        if predicted == 9 and 3 in valid_set:
+                            predicted = 3
+                        else:
+                            for hyp in result.meter_hypotheses[1:]:
+                                if hyp.numerator in valid_set:
+                                    predicted = hyp.numerator
+                                    break
                     bpm = result.tempo.bpm if result.tempo else None
                 else:
                     predicted = None

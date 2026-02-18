@@ -206,7 +206,11 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
 
         is_polymetric = gt_meters is not None and len(gt_meters) > 1
 
-        if pred_meter != gt_meter and gt_agreement <= 1 and pred_conf > 0.6:
+        # Skip if prediction matches any GT label (multi-label aware)
+        pred_matches_gt = pred_meter == gt_meter or (
+            gt_meters and pred_meter in gt_meters
+        )
+        if not pred_matches_gt and gt_agreement <= 1 and pred_conf > 0.6:
             suspects.append({
                 "fname": fname,
                 "fpath": fname_to_path[fname],
@@ -333,23 +337,30 @@ def render_html(suspects, portable=False):
                     <source src="{audio_src}" type="audio/wav">
                 </audio>
             </td>
-            <td>
-                <select id="verdict_{i}" style="font-size:14px;padding:4px">
-                    <option value="">— wybierz —</option>
-                    <option value="gt_wrong">GT błędne → {e['pred']}/x</option>
-                    <option value="gt_correct">GT poprawne → {e['gt']}/x</option>
-                    <option value="ambiguous">Niejednoznaczne</option>
-                </select>
+            <td class="verdict-cell" data-id="{i}" data-gt="{e['gt']}" data-pred="{e['pred']}">
+                <div class="verdict-quick">
+                    <button class="vbtn vbtn-gt" onclick="setVerdict({i},'gt')" title="GT is correct">GT {e['gt']}/x</button>
+                    <button class="vbtn vbtn-pred" onclick="setVerdict({i},'pred')" title="Prediction is correct">Pred {e['pred']}/x</button>
+                    <button class="vbtn vbtn-custom" onclick="setVerdict({i},'custom')" title="Choose meter(s) yourself">Custom</button>
+                    <button class="vbtn vbtn-skip" onclick="setVerdict({i},'skip')" title="Not sure / skip">Skip</button>
+                </div>
+                <div class="verdict-custom" id="custom_{i}" style="display:none">
+                    <div class="meter-rows" id="meters_{i}"></div>
+                    <button class="vbtn-add" onclick="addMeterRow({i})">+ meter</button>
+                </div>
+                <input class="verdict-note" id="note_{i}" placeholder="Reason / note (optional)"
+                       oninput="updateNote({i})">
+                <div class="verdict-display" id="display_{i}"></div>
             </td>
         </tr>""")
 
     rows_html = "\n".join(rows)
 
     html = f"""<!DOCTYPE html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GT Suspects Review — METER2800 ({len(suspects)} plików)</title>
+<title>GT Suspects Review ({len(suspects)} files)</title>
 <style>
   body {{ font-family: sans-serif; margin: 20px; background: #f9f9f9; }}
   h1 {{ color: #333; }}
@@ -367,31 +378,52 @@ def render_html(suspects, portable=False):
   .stats {{ margin-top: 20px; padding: 12px; background: #fff; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }}
   button {{ margin: 10px 0; padding: 8px 16px; background: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }}
   button:hover {{ background: #1e8449; }}
+  .verdict-cell {{ min-width: 180px; }}
+  .verdict-quick {{ display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: 4px; }}
+  .vbtn {{ margin: 0; padding: 4px 8px; font-size: 11px; border-radius: 3px; border: 1px solid #ccc; background: #f8f9fa; color: #333; cursor: pointer; white-space: nowrap; }}
+  .vbtn:hover {{ filter: brightness(0.92); }}
+  .vbtn.active {{ border-width: 2px; font-weight: bold; }}
+  .vbtn-gt.active {{ background: #d4edda; border-color: #28a745; color: #155724; }}
+  .vbtn-pred.active {{ background: #f8d7da; border-color: #dc3545; color: #721c24; }}
+  .vbtn-custom.active {{ background: #d1ecf1; border-color: #17a2b8; color: #0c5460; }}
+  .vbtn-skip.active {{ background: #e2e3e5; border-color: #6c757d; color: #383d41; }}
+  .vbtn-add {{ margin: 2px 0; padding: 2px 8px; font-size: 10px; background: #e9ecef; color: #495057; border: 1px dashed #adb5bd; }}
+  .verdict-custom {{ margin-top: 4px; }}
+  .verdict-note {{ display: none; width: 100%; margin-top: 4px; padding: 3px 6px; font-size: 11px; border: 1px solid #ddd; border-radius: 3px; box-sizing: border-box; }}
+  .meter-row {{ display: flex; align-items: center; gap: 4px; margin: 2px 0; }}
+  .meter-row select {{ padding: 2px 4px; font-size: 12px; width: 55px; }}
+  .meter-row input {{ width: 45px; padding: 2px 4px; font-size: 12px; text-align: center; }}
+  .meter-row .remove-meter {{ cursor: pointer; color: #dc3545; font-size: 14px; padding: 0 4px; border: none; background: none; }}
+  .verdict-display {{ font-size: 11px; font-weight: bold; margin-top: 3px; min-height: 16px; }}
 </style>
 </head>
 <body>
-<h1>GT Suspects — METER2800 Test ({len(suspects)} plików)</h1>
+<h1>GT Suspects Review ({len(suspects)} files)</h1>
 
 <div class="summary">
-  <strong>Kryteria:</strong> ≤1 sygnał zgadza się z GT, pewność arbitra &gt;0.6.<br>
-  <strong>Dla każdego pliku:</strong> posłuchaj i wybierz werdykt — GT błędne czy poprawne.<br>
-  <strong>Kolor wiersza:</strong> odpowiada etykiecie GT (czerwony=5/x, zielony=7/x, niebieski=3/x, żółty=4/x).<br>
-  <strong>GT multi-label</strong> = plik ma wiele metrów w ground truth (z wikimeter.json) — np. 3/x + 4/x dla Fela Kuti.
+  <strong>Criteria:</strong> ≤1 signal agrees with GT, arbiter confidence &gt;60%.<br>
+  <strong>For each file:</strong> listen and choose a verdict:<br>
+  &bull; <strong>GT N/x</strong> — ground truth is correct, our system is wrong<br>
+  &bull; <strong>Pred N/x</strong> — prediction is correct, GT label is wrong<br>
+  &bull; <strong>Custom</strong> — choose meter(s) yourself with weights (e.g. 3/x + 4/x for polyrhythm)<br>
+  &bull; <strong>Skip</strong> — unsure / can't tell<br>
+  <strong>Row color:</strong> matches GT label (blue=3/x, yellow=4/x, red=5/x, green=7/x).<br>
+  <strong>Auto-save:</strong> verdicts persist in localStorage — you can close and come back.
 </div>
 
-<button onclick="exportVerdicts()">Eksportuj werdykty (JSON)</button>
+<button onclick="exportVerdicts()">Export verdicts (JSON)</button>
 
 <table>
 <thead>
   <tr>
     <th>#</th>
-    <th>Plik</th>
+    <th>File</th>
     <th>GT</th>
-    <th>Arbiter predykcja</th>
+    <th>Prediction</th>
     <th>All probs</th>
-    <th>Sygnały</th>
+    <th>Signals</th>
     <th>Audio</th>
-    <th>Werdykt</th>
+    <th>Verdict</th>
   </tr>
 </thead>
 <tbody>
@@ -402,6 +434,7 @@ def render_html(suspects, portable=False):
 <div class="stats" id="stats"></div>
 
 <script>
+const METERS = [3, 4, 5, 7, 9, 11];
 const data = {json.dumps([
     {
         "id": i,
@@ -410,28 +443,192 @@ const data = {json.dumps([
         "gt": e["gt"],
         "pred": e["pred"],
         "pred_conf": round(e["pred_conf"], 3),
+        "dataset": e.get("dataset", "?"),
     }
     for i, e in enumerate(suspects, 1)
 ], indent=2)};
 
+// Per-file verdict state: {{ id: {{ type, meters, note }} }}
+const verdicts = {{}};
+
+function setVerdict(id, type) {{
+    const cell = document.querySelector(`.verdict-cell[data-id="${{id}}"]`);
+    const gt = parseInt(cell.dataset.gt);
+    const pred = parseInt(cell.dataset.pred);
+    const prevNote = verdicts[id] ? verdicts[id].note || '' : '';
+
+    // Toggle off if already active
+    if (verdicts[id] && verdicts[id].type === type) {{
+        delete verdicts[id];
+    }} else if (type === 'custom') {{
+        verdicts[id] = {{ type: 'custom', meters: {{}}, note: prevNote }};
+        verdicts[id].meters[gt] = 1.0;
+        if (pred !== gt) verdicts[id].meters[pred] = 0.5;
+        showCustom(id);
+    }} else if (type === 'skip') {{
+        verdicts[id] = {{ type: 'skip', meters: null, note: prevNote }};
+    }} else {{
+        const meter = type === 'gt' ? gt : pred;
+        verdicts[id] = {{ type, meters: {{ [meter]: 1.0 }}, note: prevNote }};
+    }}
+    renderVerdict(id);
+    updateStats();
+}}
+
+function showCustom(id) {{
+    const panel = document.getElementById('custom_' + id);
+    const rows = document.getElementById('meters_' + id);
+    panel.style.display = 'block';
+    rows.innerHTML = '';
+    const v = verdicts[id];
+    if (v && v.meters) {{
+        for (const [m, w] of Object.entries(v.meters)) {{
+            _addMeterRowHtml(id, parseInt(m), w);
+        }}
+    }}
+    if (!v || !v.meters || Object.keys(v.meters).length === 0) {{
+        _addMeterRowHtml(id, 3, 1.0);
+    }}
+}}
+
+function _addMeterRowHtml(id, selectedMeter, weight) {{
+    const rows = document.getElementById('meters_' + id);
+    const row = document.createElement('div');
+    row.className = 'meter-row';
+    row.innerHTML = `
+        <select onchange="updateCustomMeters(${{id}})">${{
+            METERS.map(m => `<option value="${{m}}" ${{m === selectedMeter ? 'selected' : ''}}>${{m}}/x</option>`).join('')
+        }}</select>
+        <input type="range" min="0.1" max="1.0" step="0.1" value="${{weight}}"
+               oninput="this.nextElementSibling.textContent=this.value; updateCustomMeters(${{id}})" style="width:60px">
+        <span style="font-size:11px;width:24px">${{weight}}</span>
+        <button class="remove-meter" onclick="this.parentElement.remove(); updateCustomMeters(${{id}})">x</button>
+    `;
+    rows.appendChild(row);
+}}
+
+function addMeterRow(id) {{
+    const used = new Set();
+    document.querySelectorAll(`#meters_${{id}} select`).forEach(s => used.add(parseInt(s.value)));
+    const next = METERS.find(m => !used.has(m)) || METERS[0];
+    _addMeterRowHtml(id, next, 0.5);
+    updateCustomMeters(id);
+}}
+
+function updateCustomMeters(id) {{
+    if (!verdicts[id]) verdicts[id] = {{ type: 'custom', meters: {{}}, note: '' }};
+    verdicts[id].type = 'custom';
+    verdicts[id].meters = {{}};
+    document.querySelectorAll(`#meters_${{id}} .meter-row`).forEach(row => {{
+        const m = parseInt(row.querySelector('select').value);
+        const w = parseFloat(row.querySelector('input[type=range]').value);
+        verdicts[id].meters[m] = w;
+    }});
+    renderVerdict(id);
+    updateStats();
+}}
+
+function updateNote(id) {{
+    const note = document.getElementById('note_' + id).value;
+    if (verdicts[id]) {{
+        verdicts[id].note = note;
+    }} else {{
+        verdicts[id] = {{ type: null, meters: null, note }};
+    }}
+    saveState();
+}}
+
+function renderVerdict(id) {{
+    const cell = document.querySelector(`.verdict-cell[data-id="${{id}}"]`);
+    const display = document.getElementById('display_' + id);
+    const custom = document.getElementById('custom_' + id);
+    const noteInput = document.getElementById('note_' + id);
+    const v = verdicts[id];
+
+    // Reset button states
+    cell.querySelectorAll('.vbtn').forEach(b => b.classList.remove('active'));
+
+    if (!v || !v.type) {{
+        display.innerHTML = '';
+        custom.style.display = 'none';
+        noteInput.style.display = 'none';
+        return;
+    }}
+
+    // Show note input for any verdict
+    noteInput.style.display = 'block';
+    noteInput.value = v.note || '';
+
+    if (v.type === 'gt') {{
+        cell.querySelector('.vbtn-gt').classList.add('active');
+        custom.style.display = 'none';
+        display.innerHTML = `<span style="color:#155724">GT correct</span>`;
+    }} else if (v.type === 'pred') {{
+        cell.querySelector('.vbtn-pred').classList.add('active');
+        custom.style.display = 'none';
+        const meters = Object.entries(v.meters).map(([m,w]) => `${{m}}/x`).join(', ');
+        display.innerHTML = `<span style="color:#721c24">Correction: ${{meters}}</span>`;
+    }} else if (v.type === 'custom') {{
+        cell.querySelector('.vbtn-custom').classList.add('active');
+        custom.style.display = 'block';
+        const parts = Object.entries(v.meters)
+            .sort((a,b) => b[1]-a[1])
+            .map(([m,w]) => `${{m}}/x (${{w}})`);
+        display.innerHTML = `<span style="color:#0c5460">${{parts.join(' + ')}}</span>`;
+    }} else if (v.type === 'skip') {{
+        cell.querySelector('.vbtn-skip').classList.add('active');
+        custom.style.display = 'none';
+        display.innerHTML = `<span style="color:#6c757d">Skipped</span>`;
+    }}
+}}
+
+function updateStats() {{
+    const total = data.length;
+    const vals = Object.values(verdicts).filter(v => v.type);
+    const done = vals.length;
+    const gtOk = vals.filter(v => v.type === 'gt').length;
+    const predOk = vals.filter(v => v.type === 'pred').length;
+    const custom = vals.filter(v => v.type === 'custom').length;
+    const skipped = vals.filter(v => v.type === 'skip').length;
+    document.getElementById('stats').innerHTML =
+        `<strong>Progress:</strong> ${{done}}/${{total}} | `
+        + `GT correct: ${{gtOk}} | Pred correct: ${{predOk}} | Custom: ${{custom}} | `
+        + `Skipped: ${{skipped}} | Remaining: ${{total - done}}`;
+}}
+
 function exportVerdicts() {{
-    const verdicts = data.map(d => ({{
-        ...d,
-        verdict: document.getElementById('verdict_' + d.id)?.value || ''
-    }}));
-    const wrong = verdicts.filter(v => v.verdict === 'gt_wrong');
-    const correct = verdicts.filter(v => v.verdict === 'gt_correct');
-    const ambig = verdicts.filter(v => v.verdict === 'ambiguous');
-    const undecided = verdicts.filter(v => !v.verdict);
+    const results = data.map(d => {{
+        const v = verdicts[d.id];
+        return {{
+            fname: d.fname,
+            dataset: d.dataset,
+            gt_original: d.gt,
+            pred: d.pred,
+            pred_conf: d.pred_conf,
+            verdict: v ? v.type : null,
+            corrected_meters: v && v.meters ? v.meters : null,
+            note: v && v.note ? v.note : null,
+        }};
+    }});
+
+    const reviewed = results.filter(r => r.verdict);
+    const corrections = reviewed.filter(r => r.verdict === 'pred' || r.verdict === 'custom');
+    const withNotes = reviewed.filter(r => r.note);
 
     document.getElementById('stats').innerHTML = `
-        <strong>Postęp:</strong> ${{verdicts.length - undecided.length}}/${{verdicts.length}} ocenionych<br>
-        GT błędne: ${{wrong.length}} | GT poprawne: ${{correct.length}} | Niejednoznaczne: ${{ambig.length}} | Niezdecydowane: ${{undecided.length}}<br>
-        <br><strong>Pliki z błędnym GT:</strong><br>
-        ${{wrong.map(v => v.fpath).join('<br>')}}
+        <strong>Exported:</strong> ${{reviewed.length}}/${{results.length}} reviewed<br>
+        GT correct: ${{reviewed.filter(r => r.verdict === 'gt').length}} |
+        Corrections: ${{corrections.length}} |
+        Custom: ${{reviewed.filter(r => r.verdict === 'custom').length}} |
+        Skipped: ${{reviewed.filter(r => r.verdict === 'skip').length}} |
+        With notes: ${{withNotes.length}}<br>
+        ${{corrections.length > 0 ? '<br><strong>Corrections:</strong><br>' + corrections.map(c =>
+            `${{c.fname}}: ${{Object.entries(c.corrected_meters).map(([m,w]) => m+'/x('+w+')').join(' + ')}}`
+            + (c.note ? ` <em>(${{c.note}})</em>` : '')
+        ).join('<br>') : ''}}
     `;
 
-    const blob = new Blob([JSON.stringify(verdicts, null, 2)], {{type: 'application/json'}});
+    const blob = new Blob([JSON.stringify(results, null, 2)], {{type: 'application/json'}});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -439,16 +636,30 @@ function exportVerdicts() {{
     a.click();
 }}
 
-// Live stats update
-document.querySelectorAll('select').forEach(sel => {{
-    sel.addEventListener('change', () => {{
-        const verdicts = data.map(d => document.getElementById('verdict_' + d.id)?.value || '');
-        const done = verdicts.filter(v => v).length;
-        const wrong = verdicts.filter(v => v === 'gt_wrong').length;
-        document.getElementById('stats').innerHTML =
-            `<strong>Postęp:</strong> ${{done}}/${{data.length}} | GT błędne dotychczas: ${{wrong}}`;
-    }});
-}});
+// Auto-save to localStorage
+function saveState() {{
+    localStorage.setItem('gt_verdicts_state', JSON.stringify(verdicts));
+}}
+function loadState() {{
+    try {{
+        const saved = JSON.parse(localStorage.getItem('gt_verdicts_state'));
+        if (saved) {{
+            Object.assign(verdicts, saved);
+            for (const id of Object.keys(verdicts)) {{
+                const v = verdicts[id];
+                if (v.type === 'custom') showCustom(parseInt(id));
+                renderVerdict(parseInt(id));
+            }}
+            updateStats();
+        }}
+    }} catch(e) {{}}
+}}
+// Persist on every change
+const _origSet = setVerdict;
+const _origUpdateCustom = updateCustomMeters;
+setVerdict = function(id, type) {{ _origSet(id, type); saveState(); }};
+updateCustomMeters = function(id) {{ _origUpdateCustom(id); saveState(); }};
+loadState();
 </script>
 </body>
 </html>"""
