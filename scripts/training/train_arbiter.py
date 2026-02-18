@@ -52,7 +52,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 SIGNAL_NAMES = [
     "beatnet", "beat_this", "autocorr",
     "bar_tracking", "onset_mlp", "hcdf",
-    "cross_rhythm",  # signal 10: polyrhythm detection (W=0, needs gate check before training)
 ]
 
 # Canonical meter keys (order matters for feature vector)
@@ -63,8 +62,8 @@ METER_KEYS = [
 
 N_SIGNALS = len(SIGNAL_NAMES)
 N_METERS = len(METER_KEYS)
-N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 7 × 12 = 84
-TOTAL_FEATURES = N_SIGNAL_FEATURES  # 84 (signal scores only — ablation confirmed no gain from extras)
+N_SIGNAL_FEATURES = N_SIGNALS * N_METERS  # 6 × 12 = 72
+TOTAL_FEATURES = N_SIGNAL_FEATURES  # 72 (signal scores only — ablation confirmed no gain from extras)
 
 # Output classes: meter numerator (multi-label)
 CLASS_METERS = [3, 4, 5, 7, 9, 11]
@@ -182,7 +181,6 @@ _SIGNAL_CACHE_MAP = {
     "onset_mlp": "onset_mlp_meter",
     "resnet": "resnet_meter",
     "hcdf": "hcdf_meter",
-    "cross_rhythm": "cross_rhythm",
 }
 
 
@@ -361,7 +359,7 @@ def build_feature_matrix(
     for i, entry in enumerate(dataset):
         sig_results = entry["signal_results"]
 
-        # Signal scores: 7 signals × 12 meters = 84 features
+        # Signal scores: 6 signals × 12 meters = 72 features
         for s_idx, sig_name in enumerate(SIGNAL_NAMES):
             if sig_name in sig_results:
                 alpha = sharpening.get(sig_name, 1.0) if sharpening else 1.0

@@ -7,7 +7,6 @@ from beatmeter.analysis.signals.accent_pattern import signal_accent_pattern, com
 from beatmeter.analysis.signals.beat_periodicity import signal_beat_strength_periodicity
 from beatmeter.analysis.signals.bar_tracking import signal_bar_tracking
 from beatmeter.analysis.signals.sub_beat_division import signal_sub_beat_division
-from beatmeter.analysis.signals.cross_rhythm import signal_cross_rhythm
 
 __all__ = [
     "signal_downbeat_spacing",
@@ -18,5 +17,4 @@ __all__ = [
     "signal_beat_strength_periodicity",
     "signal_bar_tracking",
     "signal_sub_beat_division",
-    "signal_cross_rhythm",
 ]
