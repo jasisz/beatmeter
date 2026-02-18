@@ -283,29 +283,16 @@ def signal_onset_mlp_meter(audio: np.ndarray, sr: int) -> dict[tuple[int, int], 
         # Map class probabilities to meter hypotheses
         scores: dict[tuple[int, int], float] = {}
 
+        # Clean 1:1 mapping: class → single canonical meter
+        _CLASS_TO_METER = {3: (3, 4), 4: (4, 4), 5: (5, 4), 7: (7, 4), 9: (9, 8), 11: (11, 8)}
+
         for cls_idx, prob in enumerate(probs):
             beats_in_bar = _idx_to_meter.get(cls_idx)
             if beats_in_bar is None:
                 continue
-            prob = float(prob)
-
-            if beats_in_bar == 3:
-                scores[(3, 4)] = scores.get((3, 4), 0.0) + prob
-                scores[(6, 8)] = scores.get((6, 8), 0.0) + prob * 0.4
-            elif beats_in_bar == 4:
-                scores[(4, 4)] = scores.get((4, 4), 0.0) + prob
-                scores[(2, 4)] = scores.get((2, 4), 0.0) + prob * 0.3
-                scores[(12, 8)] = scores.get((12, 8), 0.0) + prob * 0.2
-            elif beats_in_bar == 5:
-                scores[(5, 4)] = scores.get((5, 4), 0.0) + prob
-                scores[(5, 8)] = scores.get((5, 8), 0.0) + prob * 0.3
-            elif beats_in_bar == 7:
-                scores[(7, 4)] = scores.get((7, 4), 0.0) + prob
-                scores[(7, 8)] = scores.get((7, 8), 0.0) + prob * 0.3
-            elif beats_in_bar == 9:
-                scores[(9, 8)] = scores.get((9, 8), 0.0) + prob
-            elif beats_in_bar == 11:
-                scores[(11, 8)] = scores.get((11, 8), 0.0) + prob
+            meter = _CLASS_TO_METER.get(beats_in_bar)
+            if meter is not None:
+                scores[meter] = float(prob)
 
         # Normalise so highest score = 1.0
         if scores:
