@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Train a small arbiter MLP that replaces the hand-tuned weighted combination.
 
-The arbiter takes per-signal, per-meter scores from the engine's 10 signals
-(+ trust values + tempo) and learns the optimal combination to predict meter.
+The arbiter takes per-signal, per-meter scores from the engine's 6 signals
+and learns the optimal combination to predict meter.
 
 Multi-label output: sigmoid per class (supports polymetric predictions).
 
+WIKIMETER-primary: WIKIMETER is the primary dataset (6 classes, balanced).
+METER2800 train+val are added to the training pool only.
+
 Two phases:
-  1. Extract: run engine on all files, capture signal_results → JSON dataset
+  1. Extract: read signal caches → JSON dataset (train.json, val.json, test.json)
   2. Train: tiny MLP on the extracted features → checkpoint
 
 Usage:
-    # Extract signal features (slow first time, cached after):
-    uv run python scripts/training/train_arbiter.py --extract --split tuning --workers 4
-
-    # Extract with WIKIMETER extra data:
-    uv run python scripts/training/train_arbiter.py --extract --split tuning --workers 4 --extra-data
+    # Extract signal features:
+    uv run python scripts/training/train_arbiter.py --extract --meter2800 data/meter2800 --workers 4
 
     # Train on extracted features:
     uv run python scripts/training/train_arbiter.py --train
 
     # Quick test:
-    uv run python scripts/training/train_arbiter.py --extract --train --limit 20 --workers 1
+    uv run python scripts/training/train_arbiter.py --extract --train --meter2800 data/meter2800 --limit 20 --workers 1
 """
 
 import argparse
@@ -31,7 +31,7 @@ import multiprocessing as mp
 import sys
 import time
 import warnings
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -650,12 +650,12 @@ def train_arbiter(
 
 def main():
     parser = argparse.ArgumentParser(description="Train meter arbiter MLP")
-    parser.add_argument("--data-dir", type=Path, default=Path("data/meter2800"))
-    parser.add_argument("--wikimeter-dir", type=Path, default=Path("data/wikimeter"))
+    parser.add_argument("--data-dir", type=Path, default=Path("data/wikimeter"),
+                        help="Primary data dir (WIKIMETER)")
+    parser.add_argument("--meter2800", type=Path, default=None,
+                        help="METER2800 data dir (train+val added to training pool)")
     parser.add_argument("--extract", action="store_true", help="Run extraction phase")
     parser.add_argument("--train", action="store_true", help="Run training phase")
-    parser.add_argument("--extra-data", action="store_true", help="Include WIKIMETER data")
-    parser.add_argument("--split", default="tuning", help="Split to extract")
     parser.add_argument("--limit", type=int, default=0, help="Limit files (0=all)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=200)
@@ -668,51 +668,58 @@ def main():
                         help="Per-signal sharpening power, e.g. 'onset_mlp:2.0,beatnet:1.5'")
     args = parser.parse_args()
 
-    data_dir = args.data_dir.resolve()
+    wikimeter_dir = args.data_dir.resolve()
 
     if args.extract:
-        entries = load_meter2800_entries(data_dir, args.split)
+        # Primary: WIKIMETER → train/val/test
+        wiki_train, wiki_val, wiki_test = load_wikimeter_entries(wikimeter_dir)
         if args.limit > 0:
-            entries = entries[:args.limit]
-        print(f"Loaded {len(entries)} METER2800 entries for {args.split}", flush=True)
+            wiki_train = wiki_train[:args.limit]
+            wiki_val = wiki_val[:args.limit]
+            wiki_test = wiki_test[:args.limit]
+        print(f"WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test", flush=True)
 
-        test_entries = []
-        if args.extra_data:
-            wiki_train, wiki_val, wiki_test = load_wikimeter_entries(args.wikimeter_dir.resolve())
-            wiki_tuning = wiki_train + wiki_val
+        train_entries = list(wiki_train)
+        val_entries = list(wiki_val)
+        test_entries = list(wiki_test)
+
+        # Extra: METER2800 train+val → training pool only
+        if args.meter2800:
+            m2800_dir = args.meter2800.resolve()
+            m2800_train = load_meter2800_entries(m2800_dir, "train")
+            m2800_val = load_meter2800_entries(m2800_dir, "val")
             if args.limit > 0:
-                wiki_tuning = wiki_tuning[:args.limit]
-                wiki_test = wiki_test[:args.limit]
-            print(f"  WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test (song-level hash split)", flush=True)
-            entries.extend(wiki_tuning)
-            test_entries.extend(wiki_test)
-            print(f"Total tuning: {len(entries)} entries", flush=True)
+                m2800_train = m2800_train[:args.limit]
+                m2800_val = m2800_val[:args.limit]
+            print(f"METER2800: {len(m2800_train)} train + {len(m2800_val)} val → training pool", flush=True)
+            train_entries.extend(m2800_train + m2800_val)
 
-        extract_dataset(entries, args.workers, args.split)
+        print(f"Total: {len(train_entries)} train, {len(val_entries)} val, {len(test_entries)} test", flush=True)
 
-        # Also extract test split
-        if args.split == "tuning":
-            m2800_test = load_meter2800_entries(data_dir, "test")
-            if args.limit > 0:
-                m2800_test = m2800_test[:args.limit]
-            test_entries = m2800_test + test_entries
-            if test_entries:
-                print(f"\nAlso extracting test split ({len(test_entries)} files)...", flush=True)
-                extract_dataset(test_entries, args.workers, "test")
+        extract_dataset(train_entries, args.workers, "train")
+        extract_dataset(val_entries, args.workers, "val")
+        extract_dataset(test_entries, args.workers, "test")
 
     if args.train:
-        # Load extracted datasets
-        tuning_path = DATASET_DIR / "tuning.json"
+        # Load extracted datasets (3-file split: train/val/test)
+        train_path = DATASET_DIR / "train.json"
+        val_path = DATASET_DIR / "val.json"
         test_path = DATASET_DIR / "test.json"
 
-        if not tuning_path.exists():
-            print(f"ERROR: No extracted data at {tuning_path}", flush=True)
-            print("  Run first:  --extract --split tuning --workers 4", flush=True)
+        if not train_path.exists():
+            print(f"ERROR: No extracted data at {train_path}", flush=True)
+            print("  Run first:  --extract --meter2800 data/meter2800 --workers 4", flush=True)
+            sys.exit(1)
+        if not val_path.exists():
+            print(f"ERROR: No extracted data at {val_path}", flush=True)
+            print("  Run first:  --extract --meter2800 data/meter2800 --workers 4", flush=True)
             sys.exit(1)
 
-        with open(tuning_path) as f:
-            tuning_data = json.load(f)
-        print(f"Loaded {len(tuning_data)} tuning entries", flush=True)
+        with open(train_path) as f:
+            train_data = json.load(f)
+        with open(val_path) as f:
+            val_data = json.load(f)
+        print(f"Loaded {len(train_data)} train, {len(val_data)} val entries", flush=True)
 
         test_data = None
         if test_path.exists():
@@ -720,23 +727,10 @@ def main():
                 test_data = json.load(f)
             print(f"Loaded {len(test_data)} test entries", flush=True)
 
-        # Split tuning into train/val (80/20 stratified by primary meter)
-        by_meter = defaultdict(list)
-        for entry in tuning_data:
-            by_meter[entry["expected"]].append(entry)
-
-        train_data = []
-        val_data = []
-        for meter, items in sorted(by_meter.items()):
-            np.random.seed(42)
-            np.random.shuffle(items)
-            split_idx = int(len(items) * 0.8)
-            train_data.extend(items[:split_idx])
-            val_data.extend(items[split_idx:])
-
-        print(f"Split: {len(train_data)} train, {len(val_data)} val", flush=True)
         meter_dist = Counter(e["expected"] for e in train_data)
         print(f"Train meters: {dict(sorted(meter_dist.items()))}", flush=True)
+        val_dist = Counter(e["expected"] for e in val_data)
+        print(f"Val meters: {dict(sorted(val_dist.items()))}", flush=True)
 
         # Parse sharpening
         sharpening = {}

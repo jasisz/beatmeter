@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Grid search over arbiter training hyperparameters.
+"""Grid search over MeterNet training hyperparameters.
 
-Runs train_arbiter.py with all combinations of parameters, saves each
+Runs train_meter_net.py with all combinations of parameters, saves each
 checkpoint and results. Resumes safely — already completed runs are skipped.
 
 Usage:
-    uv run python scripts/training/grid_arbiter.py
-    uv run python scripts/training/grid_arbiter.py --dry-run   # show combos only
-    uv run python scripts/training/grid_arbiter.py --summary   # show results table
+    uv run python scripts/training/grid_meter_net.py
+    uv run python scripts/training/grid_meter_net.py --dry-run   # show combos only
+    uv run python scripts/training/grid_meter_net.py --summary   # show results table
 """
 
 import argparse
@@ -20,64 +20,46 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-RESULTS_FILE = PROJECT_ROOT / "data" / "arbiter_grid_results.json"
-CHECKPOINT_DIR = PROJECT_ROOT / "data" / "arbiter_grid"
-TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train_arbiter.py"
-SOURCE_CKPT = PROJECT_ROOT / "data" / "meter_arbiter.pt"
+RESULTS_FILE = PROJECT_ROOT / "data" / "meter_net_grid_results.json"
+CHECKPOINT_DIR = PROJECT_ROOT / "data" / "meter_net_grid"
+TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train_meter_net.py"
+SOURCE_CKPT = PROJECT_ROOT / "data" / "meter_net.pt"
 
-# ── Grid definition ──────────────────────────────────────────────────────────
-# Edit these to define the search space.
+# -- Grid definition --
 
 GRID = {
-    "sharpen": [
-        "",
-        "autocorr:1.5",
-        "autocorr:2.0",
-        "onset_mlp:1.5",
-        "beat_this:1.5",
-    ],
-    "boost_rare": [1.0, 1.5, 2.0],
+    "lr": [3e-4, 8e-4],
+    "hidden": [640, 1024],
+    "dropout_scale": [1.0, 1.5],
+    "n_blocks": [1, 2, 3],
 }
 
 FIXED_ARGS = [
-    "--train",
-    "--seeds", "10",
-    "--epochs", "200",
-]
-
-# Set to True to re-run --extract before each training run.
-# Only needed if the arbiter dataset might be stale (e.g. after warm_cache).
-# Once the dataset is fresh, set to False to skip extraction and save time.
-EXTRACT_FIRST = False
-EXTRACT_ARGS = [
-    "--extract",
     "--meter2800", "data/meter2800",
+    "--epochs", "200",
     "--workers", "4",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def combo_key(params: dict) -> str:
-    """Stable string key for a parameter combination."""
     return ",".join(f"{k}={v}" for k, v in sorted(params.items()))
 
 
 def combo_filename(params: dict) -> str:
-    """Safe filename for a parameter combination."""
     parts = []
     for k, v in sorted(params.items()):
-        safe_v = str(v).replace(":", "-").replace(".", "p") if v != "" else "none"
+        safe_v = str(v).replace(".", "p").replace("-", "m")
         parts.append(f"{k}_{safe_v}")
     return "_".join(parts)
 
 
 def build_cmd(params: dict) -> list[str]:
     cmd = ["uv", "run", "python", str(TRAIN_SCRIPT)] + FIXED_ARGS
-    if params.get("sharpen"):
-        cmd += ["--sharpen", params["sharpen"]]
-    if params.get("boost_rare", 1.0) != 1.0:
-        cmd += ["--boost-rare", str(params["boost_rare"])]
+    cmd += ["--lr", str(params["lr"])]
+    cmd += ["--hidden", str(params["hidden"])]
+    cmd += ["--dropout-scale", str(params["dropout_scale"])]
+    cmd += ["--n-blocks", str(params["n_blocks"])]
+    cmd += ["--batch-size", "64"]
     return cmd
 
 
@@ -92,7 +74,6 @@ def save_results(results: dict) -> None:
 
 
 def read_val_acc_from_checkpoint(path: Path) -> float | None:
-    """Read best_val_acc stored inside the checkpoint."""
     try:
         import torch
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
@@ -102,18 +83,17 @@ def read_val_acc_from_checkpoint(path: Path) -> float | None:
         return None
 
 
-
 def print_summary(results: dict) -> None:
     if not results:
         print("No results yet.")
         return
     rows = sorted(results.items(), key=lambda x: x[1].get("val_acc") or 0, reverse=True)
     print(f"\n{'#':<4} {'Val acc':<10} Parameters")
-    print("-" * 72)
+    print("-" * 80)
     for i, (key, info) in enumerate(rows, 1):
         val = info.get("val_acc")
         acc_str = f"{val:.1%}" if val is not None else "ERROR"
-        marker = " ← BEST" if i == 1 else ""
+        marker = " <- BEST" if i == 1 else ""
         rc = info.get("returncode", "?")
         rc_str = "" if rc == 0 else f" [rc={rc}]"
         print(f"  {i:<2}  {acc_str:<10} {key}{rc_str}{marker}")
@@ -122,9 +102,9 @@ def print_summary(results: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="Show combinations, don't run")
-    parser.add_argument("--summary", action="store_true", help="Show results table and exit")
-    parser.add_argument("--reset", action="store_true", help="Clear previous results and re-run all combinations")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--summary", action="store_true")
+    parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
 
     if args.reset and RESULTS_FILE.exists():
@@ -137,7 +117,6 @@ def main():
         print_summary(results)
         return
 
-    # Build all combinations
     keys = list(GRID.keys())
     combos = [dict(zip(keys, vals)) for vals in itertools.product(*GRID.values())]
 
@@ -156,16 +135,6 @@ def main():
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if EXTRACT_FIRST:
-        print("Running extraction phase first...")
-        extract_cmd = ["uv", "run", "python", str(TRAIN_SCRIPT)] + EXTRACT_ARGS
-        print(f"  CMD: {' '.join(extract_cmd)}", flush=True)
-        proc = subprocess.run(extract_cmd, cwd=PROJECT_ROOT)
-        if proc.returncode != 0:
-            print(f"Extraction failed (rc={proc.returncode}), aborting.")
-            sys.exit(1)
-        print("Extraction done.\n", flush=True)
-
     for i, params in enumerate(combos, 1):
         key = combo_key(params)
 
@@ -183,7 +152,6 @@ def main():
 
         proc = subprocess.run(cmd, cwd=PROJECT_ROOT)
 
-        # Read val_acc from checkpoint (train_arbiter saves it there)
         val_acc = None
         ckpt_copy = None
         if SOURCE_CKPT.exists() and proc.returncode == 0:
@@ -193,7 +161,6 @@ def main():
             shutil.copy2(SOURCE_CKPT, ckpt_copy)
             print(f"  Checkpoint: {ckpt_copy}")
 
-        # Save immediately so we don't lose this run on crash
         results[key] = {
             "params": params,
             "val_acc": val_acc,
@@ -210,11 +177,10 @@ def main():
     print("GRID SEARCH COMPLETE")
     print_summary(results)
 
-    # Copy best checkpoint back to meter_arbiter.pt
     best_key, best_info = max(results.items(), key=lambda x: x[1].get("val_acc") or 0)
     if best_info.get("checkpoint") and Path(best_info["checkpoint"]).exists():
         shutil.copy2(best_info["checkpoint"], SOURCE_CKPT)
-        print(f"Best checkpoint ({best_key}, val={best_info['val_acc']:.1%}) copied to meter_arbiter.pt")
+        print(f"Best checkpoint ({best_key}, val={best_info['val_acc']:.1%}) copied to meter_net.pt")
 
 
 if __name__ == "__main__":

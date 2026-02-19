@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import multiprocessing as mp
+import os
 import random
 import sys
 import time
@@ -346,6 +347,13 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--save", action="store_true",
                         help="Save run snapshot for history & regression tracking")
+    parser.add_argument("--model", choices=["auto", "meternet", "arbiter"],
+                        default="auto",
+                        help="Force meter model: meternet, arbiter, or auto (default)")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Custom MeterNet checkpoint path (e.g. data/meter_net_grid/xxx.pt)")
+    parser.add_argument("--onset-checkpoint", type=str, default=None,
+                        help="Custom onset_mlp checkpoint path (e.g. data/onset_mlp_grid/xxx.pt)")
     args = parser.parse_args()
 
     ds_config = DATASETS[args.dataset]
@@ -403,12 +411,27 @@ def main():
     class_dist = Counter(m for _, m, _ in entries)
     dist_str = ", ".join(f"{m}/x: {class_dist[m]}" for m in sorted(class_dist))
 
+    # Set env vars for meter model selection (passed to worker subprocesses)
+    if args.model == "arbiter":
+        os.environ["METER_MODEL"] = "arbiter"
+    elif args.model == "meternet":
+        os.environ["METER_MODEL"] = "meternet"
+    if args.checkpoint:
+        os.environ["METER_NET_CHECKPOINT"] = args.checkpoint
+    if args.onset_checkpoint:
+        os.environ["ONSET_MLP_CHECKPOINT"] = args.onset_checkpoint
+
     n_workers = args.workers
+    model_label = f" [{args.model}]" if args.model != "auto" else ""
+    if args.checkpoint:
+        model_label += f" [{Path(args.checkpoint).name}]"
+    if args.onset_checkpoint:
+        model_label += f" [onset:{Path(args.onset_checkpoint).name}]"
     mode_str = f"{n_workers} workers" if n_workers > 0 else "in-process"
 
     print(flush=True)
     print(f"  {'─' * 56}", flush=True)
-    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {mode_str}", flush=True)
+    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {mode_str}{model_label}", flush=True)
     print(f"  {dist_str}", flush=True)
     print(f"  {'─' * 56}", flush=True)
     print(flush=True)

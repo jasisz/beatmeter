@@ -6,9 +6,9 @@ combined with tempogram, MFCC, spectral contrast, and onset rate statistics.
 
 v5: 1361-dim features (4 tempo candidates + beat-position histograms +
 autocorrelation ratios + tempogram meter salience). Residual MLP architecture.
-Backward compatible: loads v4 (876-dim, Sequential) or v5 (1361-dim, Residual).
+Hidden dim and dropout scale read from checkpoint (default: 640, 1.0).
 
-The model is trained on METER2800 + WIKIMETER (6 classes: 3, 4, 5, 7, 9, 11)
+The model is trained on WIKIMETER + METER2800 (6 classes: 3, 4, 5, 7, 9, 11)
 and loaded lazily on first use. If the model file is not found, the signal
 returns an empty dict (graceful degradation — zero weight in ensemble).
 """
@@ -32,7 +32,6 @@ _feat_mean: np.ndarray | None = None
 _feat_std: np.ndarray | None = None
 _input_dim: int | None = None
 _n_classes: int | None = None
-_arch_version: str | None = None  # "v4" or "v5"
 _lock = threading.Lock()
 
 # Search paths for the model checkpoint (checked in priority order)
@@ -52,7 +51,7 @@ def _load_model() -> bool:
     Returns True if the model is ready, False if no checkpoint was found.
     """
     global _model, _device, _idx_to_meter, _feat_mean, _feat_std
-    global _input_dim, _n_classes, _arch_version
+    global _input_dim, _n_classes
 
     if _model is not None:
         return True
@@ -66,18 +65,23 @@ def _load_model() -> bool:
 def _load_model_locked() -> bool:
     """Inner model loading (called under lock)."""
     global _model, _device, _idx_to_meter, _feat_mean, _feat_std
-    global _input_dim, _n_classes, _arch_version
+    global _input_dim, _n_classes
 
     try:
         import torch
         import torch.nn as nn
 
-        # Find checkpoint file
+        # Find checkpoint file (env var overrides defaults)
+        import os
+        custom_ckpt = os.environ.get("ONSET_MLP_CHECKPOINT")
         model_path: Path | None = None
-        for candidate in MODEL_PATHS:
-            if candidate.exists():
-                model_path = candidate
-                break
+        if custom_ckpt:
+            model_path = Path(custom_ckpt) if Path(custom_ckpt).exists() else None
+        else:
+            for candidate in MODEL_PATHS:
+                if candidate.exists():
+                    model_path = candidate
+                    break
 
         if model_path is None:
             logger.debug(
@@ -99,23 +103,11 @@ def _load_model_locked() -> bool:
         meter_to_idx = checkpoint["meter_to_idx"]
         feat_mean = checkpoint.get("feat_mean")
         feat_std = checkpoint.get("feat_std")
-        arch_version = checkpoint.get("arch_version", "v4")
 
-        if arch_version == "v5":
-            model = _build_v5_model(input_dim, n_classes)
-            model.load_state_dict(checkpoint["model_state"])
-        else:
-            # v4 fallback: nn.Sequential(512→256→128)
-            model = _build_v4_model(input_dim, n_classes)
-            # Strip "net." prefix from state dict keys
-            state_dict = checkpoint["model_state"]
-            stripped = {}
-            for k, v in state_dict.items():
-                if k.startswith("net."):
-                    stripped[k[4:]] = v
-                else:
-                    stripped[k] = v
-            model.load_state_dict(stripped)
+        hidden_dim = checkpoint.get("hidden_dim", 640)
+        ds = checkpoint.get("dropout_scale", 1.0)
+        model = _build_v5_model(input_dim, n_classes, hidden=hidden_dim, dropout_scale=ds)
+        model.load_state_dict(checkpoint["model_state"])
 
         model.to(device)
         model.eval()
@@ -128,11 +120,10 @@ def _load_model_locked() -> bool:
         _feat_std = feat_std
         _input_dim = input_dim
         _n_classes = n_classes
-        _arch_version = arch_version
 
         logger.info(
-            "Loaded Onset MLP model from %s (arch=%s, device=%s, dim=%d, classes=%d)",
-            model_path, arch_version, device, input_dim, n_classes,
+            "Loaded Onset MLP model from %s (hidden=%d, device=%s, dim=%d, classes=%d)",
+            model_path, hidden_dim, device, input_dim, n_classes,
         )
         return True
 
@@ -141,9 +132,13 @@ def _load_model_locked() -> bool:
         return False
 
 
-def _build_v5_model(input_dim: int, n_classes: int):
+def _build_v5_model(input_dim: int, n_classes: int, hidden: int = 640, dropout_scale: float = 1.0):
     """Build v5 Residual MLP (must match OnsetMLPv5 in train_onset_mlp.py)."""
     import torch.nn as nn
+
+    ds = dropout_scale
+    h2 = max(int(hidden * 0.4), 64)   # 640→256, 320→128, 1024→409
+    h4 = max(int(hidden * 0.2), 32)   # 640→128, 320→64,  1024→204
 
     class ResidualBlock(nn.Module):
         def __init__(self, dim: int, dropout: float = 0.25):
@@ -162,22 +157,22 @@ def _build_v5_model(input_dim: int, n_classes: int):
         def __init__(self, input_dim: int, n_classes: int):
             super().__init__()
             self.input_proj = nn.Sequential(
-                nn.Linear(input_dim, 640),
-                nn.BatchNorm1d(640),
+                nn.Linear(input_dim, hidden),
+                nn.BatchNorm1d(hidden),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(min(0.3 * ds, 0.5)),
             )
-            self.residual = ResidualBlock(640, dropout=0.25)
+            self.residual = ResidualBlock(hidden, dropout=min(0.25 * ds, 0.5))
             self.head = nn.Sequential(
-                nn.Linear(640, 256),
-                nn.BatchNorm1d(256),
+                nn.Linear(hidden, h2),
+                nn.BatchNorm1d(h2),
                 nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(256, 128),
-                nn.BatchNorm1d(128),
+                nn.Dropout(min(0.2 * ds, 0.5)),
+                nn.Linear(h2, h4),
+                nn.BatchNorm1d(h4),
                 nn.ReLU(),
-                nn.Dropout(0.15),
-                nn.Linear(128, n_classes),
+                nn.Dropout(min(0.15 * ds, 0.5)),
+                nn.Linear(h4, n_classes),
             )
 
         def forward(self, x):
@@ -186,28 +181,6 @@ def _build_v5_model(input_dim: int, n_classes: int):
             return self.head(x)
 
     return OnsetMLPv5(input_dim, n_classes)
-
-
-def _build_v4_model(input_dim: int, n_classes: int):
-    """Build v4 Sequential MLP (backward compatibility)."""
-    import torch.nn as nn
-
-    hidden = 512
-    return nn.Sequential(
-        nn.Linear(input_dim, hidden),
-        nn.BatchNorm1d(hidden),
-        nn.ReLU(),
-        nn.Dropout(0.3),
-        nn.Linear(hidden, hidden // 2),
-        nn.BatchNorm1d(hidden // 2),
-        nn.ReLU(),
-        nn.Dropout(0.25),
-        nn.Linear(hidden // 2, hidden // 4),
-        nn.BatchNorm1d(hidden // 4),
-        nn.ReLU(),
-        nn.Dropout(0.2),
-        nn.Linear(hidden // 4, n_classes),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +193,7 @@ def _extract_features_from_audio(audio: np.ndarray, sr: int) -> np.ndarray | Non
     Uses v5 features for v5 models, v4 for v4 models.
     """
     from beatmeter.analysis.signals.onset_mlp_features import (
-        SR, MAX_DURATION_S, extract_features_v4, extract_features_v5,
+        SR, MAX_DURATION_S, extract_features_v5,
     )
     import librosa
 
@@ -238,9 +211,7 @@ def _extract_features_from_audio(audio: np.ndarray, sr: int) -> np.ndarray | Non
         audio = librosa.resample(audio, orig_sr=sr, target_sr=SR)
         sr = SR
 
-    if _arch_version == "v5":
-        return extract_features_v5(audio, sr)
-    return extract_features_v4(audio, sr)
+    return extract_features_v5(audio, sr)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +249,7 @@ def signal_onset_mlp_meter(audio: np.ndarray, sr: int) -> dict[tuple[int, int], 
             probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("Onset MLP meter inference: %.1f ms (arch=%s)", elapsed_ms, _arch_version)
+        logger.debug("Onset MLP meter inference: %.1f ms", elapsed_ms)
 
         # Map class probabilities to meter hypotheses
         scores: dict[tuple[int, int], float] = {}

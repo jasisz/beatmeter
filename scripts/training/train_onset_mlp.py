@@ -6,18 +6,18 @@ v5: All v4 features (876) + 4th tempo candidate (+256) + beat-position histogram
 + Residual MLP (640→640 with skip), CutMix, AdamW, CosineAnnealingWarmRestarts.
 + Audio-level augmentation (--augment N): random crop, time stretch, pitch shift, noise.
 
-Usage:
-    # METER2800 only (4 classes: 3,4,5,7)
-    uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800
+WIKIMETER-primary: WIKIMETER is the primary dataset (6 classes, balanced).
+METER2800 splits go to proper train/val/test (not all dumped into training pool).
 
-    # METER2800 + WIKIMETER (6 classes: 3,4,5,7,9,11)
-    uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --extra-data data/wikimeter
+Usage:
+    # WIKIMETER-primary + METER2800 as extra training data
+    uv run python scripts/training/train_onset_mlp.py --meter2800 data/meter2800
 
     # With audio augmentation (4 augmented copies per rare-class file)
-    uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --extra-data data/wikimeter --augment 4
+    uv run python scripts/training/train_onset_mlp.py --meter2800 data/meter2800 --augment 4
 
     # Quick test
-    uv run python scripts/training/train_onset_mlp.py --data-dir data/meter2800 --limit 20
+    uv run python scripts/training/train_onset_mlp.py --meter2800 data/meter2800 --limit 20
 """
 
 import argparse
@@ -59,7 +59,6 @@ MIXUP_ALPHA = 0.2
 CUTMIX_ALPHA = 1.0
 FOCAL_GAMMA = 2.0
 
-CLASS_METERS_4 = [3, 4, 5, 7]
 CLASS_METERS_6 = [3, 4, 5, 7, 9, 11]
 
 # Rare meters that get more augmentation
@@ -431,28 +430,32 @@ class ResidualBlock(nn.Module):
 class OnsetMLPv5(nn.Module):
     """Residual MLP for meter classification (v5).
 
-    Architecture: input → 640 → 640 (residual) → 256 → 128 → n_classes
+    Architecture: input → hidden → hidden (residual) → hidden//2 → hidden//4 → n_classes
+    dropout_scale multiplies base dropout rates (0.3, 0.25, 0.2, 0.15).
     """
 
-    def __init__(self, input_dim: int, n_classes: int):
+    def __init__(self, input_dim: int, n_classes: int, hidden: int = 640, dropout_scale: float = 1.0):
         super().__init__()
+        ds = dropout_scale
+        h2 = max(int(hidden * 0.4), 64)   # 640→256, 320→128, 1024→409
+        h4 = max(int(hidden * 0.2), 32)   # 640→128, 320→64,  1024→204
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, 640),
-            nn.BatchNorm1d(640),
+            nn.Linear(input_dim, hidden),
+            nn.BatchNorm1d(hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(min(0.3 * ds, 0.5)),
         )
-        self.residual = ResidualBlock(640, dropout=0.25)
+        self.residual = ResidualBlock(hidden, dropout=min(0.25 * ds, 0.5))
         self.head = nn.Sequential(
-            nn.Linear(640, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(hidden, h2),
+            nn.BatchNorm1d(h2),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
+            nn.Dropout(min(0.2 * ds, 0.5)),
+            nn.Linear(h2, h4),
+            nn.BatchNorm1d(h4),
             nn.ReLU(),
-            nn.Dropout(0.15),
-            nn.Linear(128, n_classes),
+            nn.Dropout(min(0.15 * ds, 0.5)),
+            nn.Linear(h4, n_classes),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -460,31 +463,6 @@ class OnsetMLPv5(nn.Module):
         x = self.residual(x)
         return self.head(x)
 
-
-# Keep v4 model for backward compatibility in loading
-class OnsetMLP(nn.Module):
-    """v4 MLP (kept for loading old checkpoints)."""
-
-    def __init__(self, input_dim: int, n_classes: int, hidden: int = 512):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden),
-            nn.BatchNorm1d(hidden),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden, hidden // 2),
-            nn.BatchNorm1d(hidden // 2),
-            nn.ReLU(),
-            nn.Dropout(0.25),
-            nn.Linear(hidden // 2, hidden // 4),
-            nn.BatchNorm1d(hidden // 4),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden // 4, n_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
 
 
 def _focal_loss(
@@ -594,6 +572,8 @@ def train_model(
     batch_size: int = 64,
     lr: float = 8e-4,
     device: str = "cpu",
+    hidden: int = 640,
+    dropout_scale: float = 1.0,
 ) -> tuple[OnsetMLPv5, dict]:
     """Train the OnsetMLPv5 model."""
     n_classes = len(meter_to_idx)
@@ -631,7 +611,7 @@ def train_model(
     train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler)
     val_dl = DataLoader(val_ds, batch_size=batch_size)
 
-    model = OnsetMLPv5(input_dim, n_classes).to(device)
+    model = OnsetMLPv5(input_dim, n_classes, hidden=hidden, dropout_scale=dropout_scale).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=50, T_mult=2,
@@ -782,9 +762,10 @@ def evaluate(
 
 def main():
     parser = argparse.ArgumentParser(description="Train onset MLP v5")
-    parser.add_argument("--data-dir", type=Path, default=Path("data/meter2800"))
-    parser.add_argument("--extra-data", type=Path, default=None,
-                        help="WIKIMETER data dir for 6-class training")
+    parser.add_argument("--data-dir", type=Path, default=Path("data/wikimeter"),
+                        help="Primary data dir (WIKIMETER)")
+    parser.add_argument("--meter2800", type=Path, default=None,
+                        help="METER2800 data dir (train+val added to training pool)")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=8e-4)
@@ -794,45 +775,53 @@ def main():
                         help="N augmented copies per file (0=off). Rare classes get N, common get N//3.")
     parser.add_argument("--workers", type=int, default=1,
                         help="Parallel workers for feature extraction (default: 1)")
+    parser.add_argument("--hidden", type=int, default=640,
+                        help="Hidden layer size (default: 640)")
+    parser.add_argument("--dropout-scale", type=float, default=1.0,
+                        help="Dropout multiplier (default: 1.0)")
     parser.add_argument("--save", type=Path, default=None,
                         help="Save model to this path")
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
-    use_6_classes = args.extra_data is not None
-    class_meters = CLASS_METERS_6 if use_6_classes else CLASS_METERS_4
+    class_meters = CLASS_METERS_6
     meter_to_idx = {m: i for i, m in enumerate(class_meters)}
     valid_meters = set(class_meters)
 
     print(f"Onset MLP v5 (features={TOTAL_FEATURES})")
     print(f"Classes: {class_meters}")
-    print(f"Data: {args.data_dir}" + (f" + {args.extra_data}" if args.extra_data else ""))
+    print(f"Primary data: {args.data_dir}" + (f" + METER2800: {args.meter2800}" if args.meter2800 else ""))
     if args.augment:
         print(f"Augmentation: {args.augment}x rare, {max(1, args.augment // 3)}x common")
 
-    # Load entries
+    # Load entries — WIKIMETER-primary
     print("\nLoading data...")
-    train_entries = load_meter2800_split(args.data_dir, "train", valid_meters)
-    val_entries = load_meter2800_split(args.data_dir, "val", valid_meters)
-    test_entries = load_meter2800_split(args.data_dir, "test", valid_meters)
+    from scripts.utils import split_by_stem
+    wiki_entries = load_wikimeter(args.data_dir, valid_meters)
+    wiki_train, wiki_val, wiki_test = [], [], []
+    for path, meter in wiki_entries:
+        split = split_by_stem(path.stem)
+        if split == "train":
+            wiki_train.append((path, meter))
+        elif split == "val":
+            wiki_val.append((path, meter))
+        else:
+            wiki_test.append((path, meter))
+    print(f"  WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test")
 
-    if args.extra_data:
-        wiki_entries = load_wikimeter(args.extra_data, valid_meters)
-        from scripts.utils import split_by_stem
-        wiki_train, wiki_val, wiki_test = [], [], []
-        for path, meter in wiki_entries:
-            split = split_by_stem(path.stem)
-            if split == "train":
-                wiki_train.append((path, meter))
-            elif split == "val":
-                wiki_val.append((path, meter))
-            else:
-                wiki_test.append((path, meter))
+    train_entries = wiki_train
+    val_entries = wiki_val
+    test_entries = wiki_test
 
-        print(f"  WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test")
-        train_entries.extend(wiki_train)
-        val_entries.extend(wiki_val)
-        test_entries.extend(wiki_test)
+    # Extra: METER2800 splits → proper train/val/test
+    if args.meter2800:
+        m2800_train = load_meter2800_split(args.meter2800, "train", valid_meters)
+        m2800_val = load_meter2800_split(args.meter2800, "val", valid_meters)
+        m2800_test = load_meter2800_split(args.meter2800, "test", valid_meters)
+        print(f"  METER2800: {len(m2800_train)} train, {len(m2800_val)} val, {len(m2800_test)} test")
+        train_entries.extend(m2800_train)
+        val_entries.extend(m2800_val)
+        test_entries.extend(m2800_test)
 
     if args.limit:
         train_entries = train_entries[:args.limit]
@@ -867,7 +856,8 @@ def main():
     print("  Features standardized (z-score, fit on train)")
 
     # Train
-    print(f"\nTraining Residual MLP (input={X_train.shape[1]}, classes={len(class_meters)})...")
+    print(f"\nTraining Residual MLP (input={X_train.shape[1]}, hidden={args.hidden}, "
+          f"dropout_scale={args.dropout_scale}, classes={len(class_meters)})...")
     model, info = train_model(
         X_train, y_train, X_val, y_val,
         meter_to_idx,
@@ -875,6 +865,8 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         device=args.device,
+        hidden=args.hidden,
+        dropout_scale=args.dropout_scale,
     )
     print(f"\nBest val acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
 
@@ -903,6 +895,8 @@ def main():
             "feat_std": feat_std,
             "feature_version": FEATURE_VERSION,
             "arch_version": "v5",
+            "hidden_dim": args.hidden,
+            "dropout_scale": args.dropout_scale,
         },
         save_path,
     )

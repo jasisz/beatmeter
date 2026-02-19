@@ -17,6 +17,7 @@ Version is encoded in the directory path (hash of source files).
 No version parameter needed — file changes = automatic invalidation.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -86,6 +87,12 @@ SIGNAL_DEPS: dict[str, list[str]] = {
     "hcdf_meter": [
         "beatmeter/analysis/signals/hcdf_meter.py",
     ],
+    "meter_net": [
+        "beatmeter/analysis/meter.py",
+        "beatmeter/analysis/signals/meter_net_features.py",
+        "beatmeter/analysis/signals/onset_mlp_features.py",
+        "data/meter_net.pt",
+    ],
     "tempo_librosa": [
         "beatmeter/analysis/tempo.py",
     ],
@@ -132,12 +139,12 @@ class AnalysisCache:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @functools.lru_cache(maxsize=8192)
     def audio_hash(file_path: str) -> str:
-        """Derive a stable cache key from file metadata and content prefix.
+        """Derive a stable cache key from filename and file size.
 
-        Includes the filename stem, file size, and the first 200 KB of bytes.
-        This keeps cache keys deterministic while avoiding collisions for files
-        that share the same basename.
+        Uses stem + file size — fast (single stat, no content read) and
+        practically unique for our datasets.
         """
         p = Path(file_path)
         h = hashlib.sha256()
@@ -146,17 +153,8 @@ class AnalysisCache:
             h.update(str(p.stat().st_size).encode("ascii"))
         except OSError:
             pass
-        try:
-            with open(file_path, "rb") as f:
-                h.update(f.read(200_000))
-        except OSError:
-            pass
         return h.hexdigest()[:16]
 
-    @staticmethod
-    def audio_hash_from_array(audio) -> str:
-        """SHA-256 of first 200 KB of audio bytes -> 16 hex chars."""
-        return hashlib.sha256(audio.tobytes()[:200_000]).hexdigest()[:16]
 
     @staticmethod
     def _file_hash(rel_path: str) -> str:
