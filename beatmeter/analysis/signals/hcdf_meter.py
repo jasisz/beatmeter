@@ -4,8 +4,7 @@ Pure DSP signal — no learned parameters, no overfitting risk.
 Measures the rate of harmonic change in chromagram features.
 Triple meters show harmonic changes every 3 beats, duple every 2 or 4.
 
-Previously rejected from hand-tuned ensemble (correlated with accent_pattern),
-but included for the arbiter which can learn when to use it.
+Included as one of the input signals for MeterNet.
 """
 
 import logging

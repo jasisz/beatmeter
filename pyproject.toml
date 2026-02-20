@@ -27,6 +27,7 @@ dependencies = [
     "pyaudio>=0.2.14",
     "transformers>=4.38.0",
     "tqdm>=4.60.0",
+    "lmdb>=1.7.5",
 ]
 
 [project.scripts]

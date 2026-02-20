@@ -2,30 +2,34 @@
 """Train MeterNet — unified meter classification from audio + beat + signal + tempo features.
 
 MeterNet sees everything the pipeline produces:
-- 1361 audio features (from onset_mlp_features.py, reuses onset_features_cache_v5)
+- 1449 audio features (from onset_mlp_features.py v6)
+- 75 beat-synchronous chroma SSM (from ssm_features.py)
 - 42 beat tracker features (IBI stats, alignment, downbeat spacing, cross-tracker agreement)
 - 60 signal scores (5 signals x 12 meters, from warm cache)
 - 4 tempo features (from warm cache)
-Total: 1467 dimensions.
+Total: 1630 dimensions.
 
-Architecture: same Residual MLP as onset_mlp v5 (parameterized via grid search).
+v6 audio features extend v5 with rare-meter support:
+- beat-position histograms: [2,3,4,5,7,9,11] (was [2,3,4,5,7]) → 224d (was 160)
+- autocorrelation ratios: lags [2..7,9,11] + 4 new pairs → 84d (was 60)
+
+Architecture: Residual MLP (parameterized via grid search).
 Loss: BCEWithLogitsLoss (multi-label, supports WIKIMETER polymetric annotations).
 Val metric: balanced accuracy (macro per-class, prevents rare-class sacrifice).
 
 Prerequisites:
 - Warm cache complete (all phases: beatnet, beat_this, madmom, librosa, onsets,
-  signals, tempo, onset_mlp, hcdf)
-- onset_mlp features cached (data/onset_features_cache_v5/)
+  signals, tempo, hcdf, ssm)
 
 Usage:
     # Smoke test
-    uv run python scripts/training/train_meter_net.py --meter2800 data/meter2800 --limit 3 --workers 1
+    uv run python scripts/training/train.py --meter2800 data/meter2800 --limit 3 --workers 1
 
     # Full training
-    uv run python scripts/training/train_meter_net.py --meter2800 data/meter2800 --workers 4
+    uv run python scripts/training/train.py --meter2800 data/meter2800 --workers 4
 
     # Custom hyperparameters
-    uv run python scripts/training/train_meter_net.py --meter2800 data/meter2800 --hidden 1024 --lr 3e-4
+    uv run python scripts/training/train.py --meter2800 data/meter2800 --hidden 1024 --lr 3e-4
 """
 
 import argparse
@@ -35,6 +39,7 @@ import sys
 import time
 import warnings
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -48,14 +53,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from beatmeter.analysis.signals.onset_mlp_features import (
     SR,
     MAX_DURATION_S,
-    FEATURE_VERSION_V5,
-    TOTAL_FEATURES_V5,
-    extract_features_from_path,
+    FEATURE_VERSION_V6,
+    TOTAL_FEATURES_V6,
+    extract_features_v6,
 )
 from beatmeter.analysis.signals.meter_net_features import (
     TOTAL_FEATURES,
     FEATURE_VERSION,
     N_AUDIO_FEATURES,
+    N_SSM_FEATURES,
     N_BEAT_FEATURES,
     N_SIGNAL_FEATURES,
     N_TEMPO_FEATURES,
@@ -63,6 +69,7 @@ from beatmeter.analysis.signals.meter_net_features import (
     extract_signal_scores,
     extract_tempo_features,
 )
+from beatmeter.analysis.signals.ssm_features import extract_ssm_features_cached
 from scripts.utils import (
     load_meter2800_entries as _load_meter2800_base,
     split_by_stem,
@@ -154,17 +161,33 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[Entry]:
 # ---------------------------------------------------------------------------
 
 
+# Feature dimensions (v6)
+_TOTAL_FEATURES_ACTIVE = TOTAL_FEATURES
+_AUDIO_FEATURES_ACTIVE = TOTAL_FEATURES_V6
+
+
+def _extract_audio_from_path(audio_path_str: str) -> np.ndarray | None:
+    """Load audio and extract v6 features. Picklable for multiprocessing."""
+    import librosa
+
+    try:
+        y, _ = librosa.load(audio_path_str, sr=SR, duration=MAX_DURATION_S)
+        return extract_features_v6(y, SR)
+    except Exception:
+        return None
+
+
 def _onset_cache_key(audio_path: Path) -> str:
-    """Cache key for onset_features_cache_v5 (same as train_onset_mlp.py)."""
+    """Cache key for audio features cache (v6)."""
     st = audio_path.stat()
-    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{FEATURE_VERSION_V5}"
+    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{FEATURE_VERSION_V6}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
 def _full_cache_key(audio_path: Path) -> str:
-    """Cache key for full MeterNet feature vector (1467-dim)."""
+    """Cache key for full MeterNet feature vector (v7 = with SSM)."""
     st = audio_path.stat()
-    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::meter_net_v1"
+    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::meter_net_v7"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -172,40 +195,76 @@ def _build_full_features(
     audio_feat: np.ndarray,
     audio_path: Path,
     analysis_cache,
+    feat_db=None,
 ) -> np.ndarray | None:
-    """Combine audio features with beat/signal/tempo from analysis cache."""
-    audio_hash = analysis_cache.audio_hash(str(audio_path))
-    beat_feat = extract_beat_features(analysis_cache, audio_hash)
-    signal_feat = extract_signal_scores(analysis_cache, audio_hash)
-    tempo_feat = extract_tempo_features(analysis_cache, audio_hash)
+    """Combine audio + SSM + beat/signal/tempo from analysis cache.
 
-    full = np.concatenate([audio_feat, beat_feat, signal_feat, tempo_feat])
-    if full.shape[0] != TOTAL_FEATURES:
+    Uses load_all_for_audio() for batch LMDB reads (1 txn, no duplicates).
+    SSM features are read from NumpyLMDB with lazy migration from old .npy.
+    """
+    audio_hash = analysis_cache.audio_hash(str(audio_path))
+
+    # SSM features: from NumpyLMDB or extract from audio
+    ssm_key = _onset_cache_key(audio_path).replace(FEATURE_VERSION_V6, "ssm_v1")
+    ssm_feat = None
+    if feat_db:
+        ssm_feat = feat_db.load(f"ssm:{ssm_key}")
+        # Lazy migration from old .npy
+        if ssm_feat is None:
+            old_path = Path("data/ssm_cache_v1") / f"{ssm_key}.npy"
+            if old_path.exists():
+                ssm_feat = np.load(old_path)
+                feat_db.save(f"ssm:{ssm_key}", ssm_feat)
+                old_path.unlink()
+
+    if ssm_feat is None:
+        import librosa
+        try:
+            y, _ = librosa.load(str(audio_path), sr=SR, duration=MAX_DURATION_S)
+            ssm_feat = extract_ssm_features_cached(y, SR, analysis_cache, audio_hash)
+            if feat_db:
+                feat_db.save(f"ssm:{ssm_key}", ssm_feat)
+        except Exception:
+            ssm_feat = np.zeros(N_SSM_FEATURES)
+
+    # Batch preload: 1 transaction for all beats + onsets + signals
+    preloaded = analysis_cache.load_all_for_audio(audio_hash)
+    beat_feat = extract_beat_features(analysis_cache, audio_hash, preloaded=preloaded)
+    signal_feat = extract_signal_scores(analysis_cache, audio_hash, preloaded=preloaded)
+    tempo_feat = extract_tempo_features(analysis_cache, audio_hash, preloaded=preloaded)
+
+    full = np.concatenate([
+        audio_feat, ssm_feat,
+        beat_feat, signal_feat, tempo_feat,
+    ])
+    if full.shape[0] != _TOTAL_FEATURES_ACTIVE:
         return None
     return full
 
 
 def extract_all_features(
     entries: list[Entry],
-    onset_cache_dir: Path,
+    feat_db,
     analysis_cache,
     label: str = "",
     workers: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Extract MeterNet features for all entries.
 
-    Uses a two-level cache:
-    1. Full 1467-dim vector in meter_net_features_cache/ (fast: 1 np.load)
-    2. Fallback: audio features from onset_features_cache_v5 + 15 JSON reads
+    Uses NumpyLMDB (data/features.lmdb) with two-level cache:
+    1. Full feature vector (key: full:{hash}) — instant
+    2. Fallback: v6 audio features (key: onset:v6:{hash}) + analysis cache
+
+    Lazy migration from old .npy files on LMDB miss.
 
     Returns (X, y_multi_hot, primary_meters).
     """
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
     n_classes = len(CLASS_METERS_6)
 
-    # Full feature cache directory
-    full_cache_dir = onset_cache_dir.parent / "meter_net_features_cache"
-    full_cache_dir.mkdir(parents=True, exist_ok=True)
+    # Old .npy dirs for lazy migration
+    _old_full_dir = Path("data/meter_net_features_cache")
+    _old_onset_dir = Path(f"data/onset_features_cache_{FEATURE_VERSION_V6}")
 
     features_list: list[np.ndarray] = []
     labels_list: list[np.ndarray] = []
@@ -214,52 +273,57 @@ def extract_all_features(
     need_extract: list[tuple[int, Path, int, dict[int, float]]] = []
     n_full_cached = 0
 
-    onset_cache_dir.mkdir(parents=True, exist_ok=True)
-
     desc = f"Loading {label}" if label else "Loading"
 
-    # Phase 1: Load from full feature cache, or onset cache + analysis cache
+    # Phase 1: Load from LMDB cache (full or onset + analysis)
     for i, (audio_path, primary_meter, meters_dict) in enumerate(
         _progress(entries, desc)
     ):
-        # Try full feature cache first (1 np.load, instant)
+        # Try full feature cache first
         full_key = _full_cache_key(audio_path)
-        full_cache_path = full_cache_dir / f"{full_key}.npy"
-        if full_cache_path.exists():
-            full = np.load(full_cache_path)
-            if full.shape[0] == TOTAL_FEATURES:
-                features_list.append(full)
-                y = np.zeros(n_classes, dtype=np.float32)
-                for m, w in meters_dict.items():
-                    idx = meter_to_idx.get(m)
-                    if idx is not None:
-                        y[idx] = float(w)
-                labels_list.append(y)
-                primary_meters.append(primary_meter)
-                n_full_cached += 1
-                continue
+        full = feat_db.load(f"full:{full_key}")
+        # Lazy migration from old .npy
+        if full is None:
+            old_path = _old_full_dir / f"{full_key}.npy"
+            if old_path.exists():
+                full = np.load(old_path)
+                feat_db.save(f"full:{full_key}", full)
+                old_path.unlink()
 
-        # Try onset cache + analysis cache (15 JSON reads)
+        if full is not None and full.shape[0] == _TOTAL_FEATURES_ACTIVE:
+            features_list.append(full)
+            y = np.zeros(n_classes, dtype=np.float32)
+            for m, w in meters_dict.items():
+                idx = meter_to_idx.get(m)
+                if idx is not None:
+                    y[idx] = float(w)
+            labels_list.append(y)
+            primary_meters.append(primary_meter)
+            n_full_cached += 1
+            continue
+
+        # Try onset cache + analysis cache
         onset_key = _onset_cache_key(audio_path)
-        onset_cache_path = onset_cache_dir / f"{onset_key}.npy"
-
-        audio_feat = None
-        if onset_cache_path.exists():
-            audio_feat = np.load(onset_cache_path)
-            if audio_feat.shape[0] != TOTAL_FEATURES_V5:
-                audio_feat = None
-
+        audio_feat = feat_db.load(f"onset:v6:{onset_key}")
+        # Lazy migration from old .npy
         if audio_feat is None:
+            old_path = _old_onset_dir / f"{onset_key}.npy"
+            if old_path.exists():
+                audio_feat = np.load(old_path)
+                feat_db.save(f"onset:v6:{onset_key}", audio_feat)
+                old_path.unlink()
+
+        if audio_feat is None or audio_feat.shape[0] != _AUDIO_FEATURES_ACTIVE:
             need_extract.append((i, audio_path, primary_meter, meters_dict))
             continue
 
-        full = _build_full_features(audio_feat, audio_path, analysis_cache)
+        full = _build_full_features(audio_feat, audio_path, analysis_cache, feat_db)
         if full is None:
             need_extract.append((i, audio_path, primary_meter, meters_dict))
             continue
 
         # Save to full feature cache for next time
-        np.save(full_cache_path, full)
+        feat_db.save(f"full:{full_key}", full)
 
         features_list.append(full)
         y = np.zeros(n_classes, dtype=np.float32)
@@ -283,17 +347,17 @@ def extract_all_features(
             if audio_feat is None:
                 return False
 
-            # Save onset cache
+            # Save onset cache to LMDB
             onset_key = _onset_cache_key(audio_path)
-            np.save(onset_cache_dir / f"{onset_key}.npy", audio_feat)
+            feat_db.save(f"onset:v6:{onset_key}", audio_feat)
 
             # Build and save full features
-            full = _build_full_features(audio_feat, audio_path, analysis_cache)
+            full = _build_full_features(audio_feat, audio_path, analysis_cache, feat_db)
             if full is None:
                 return False
 
             full_key = _full_cache_key(audio_path)
-            np.save(full_cache_dir / f"{full_key}.npy", full)
+            feat_db.save(f"full:{full_key}", full)
 
             features_list.append(full)
             y = np.zeros(n_classes, dtype=np.float32)
@@ -305,14 +369,15 @@ def extract_all_features(
             primary_meters.append(primary_meter)
             return True
 
+        paths = [str(audio_path) for _, audio_path, _, _ in need_extract]
+
         if workers > 1 and len(need_extract) > 2:
             from concurrent.futures import ProcessPoolExecutor, as_completed
 
-            work = [(str(ap), "v5") for _, ap, _, _ in need_extract]
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 futures = {
-                    pool.submit(extract_features_from_path, w[0], w[1]): idx
-                    for idx, w in enumerate(work)
+                    pool.submit(_extract_audio_from_path, p): idx
+                    for idx, p in enumerate(paths)
                 }
                 for future in _progress(
                     as_completed(futures), desc2, total=len(futures)
@@ -324,10 +389,11 @@ def extract_all_features(
                     if not _handle_extracted(future.result(), audio_path, primary_meter, meters_dict):
                         skipped += 1
         else:
-            for _, audio_path, primary_meter, meters_dict in _progress(
-                need_extract, desc2
+            for (path_str, (_, audio_path, primary_meter, meters_dict)) in zip(
+                paths,
+                _progress(need_extract, desc2),
             ):
-                audio_feat = extract_features_from_path(str(audio_path), "v5")
+                audio_feat = _extract_audio_from_path(path_str)
                 if not _handle_extracted(audio_feat, audio_path, primary_meter, meters_dict):
                     skipped += 1
 
@@ -350,7 +416,7 @@ def _progress(iterable, desc="", total=None):
 
 
 # ---------------------------------------------------------------------------
-# Model (Residual MLP — same architecture as onset_mlp v5)
+# Model (Residual MLP)
 # ---------------------------------------------------------------------------
 
 
@@ -371,8 +437,15 @@ class ResidualBlock(nn.Module):
 class MeterNet(nn.Module):
     """Residual MLP for unified meter classification.
 
-    Architecture: input -> hidden -> N x hidden (residual) -> hidden*0.4 -> hidden*0.2 -> n_classes
-    n_blocks controls the number of residual blocks (depth).
+    Architecture:
+      If bottleneck > 0:
+        autocorr (ac_split dims) -> Linear(ac_split, bottleneck) -> ReLU
+        rest (input_dim - ac_split dims) -> pass through
+        concat (bottleneck + rest) -> input_proj -> ...
+      Else:
+        input -> input_proj -> ...
+
+      input_proj -> hidden -> N x hidden (residual) -> hidden*0.4 -> hidden*0.2 -> n_classes
     """
 
     def __init__(
@@ -382,13 +455,29 @@ class MeterNet(nn.Module):
         hidden: int = 640,
         dropout_scale: float = 1.0,
         n_blocks: int = 1,
+        bottleneck: int = 0,
+        ac_split: int = 1024,
     ):
         super().__init__()
         ds = dropout_scale
+
+        self.bottleneck_dim = bottleneck
+        self.ac_split = ac_split
+
+        if bottleneck > 0:
+            self.ac_compress = nn.Sequential(
+                nn.Linear(ac_split, bottleneck),
+                nn.ReLU(),
+            )
+            proj_input = bottleneck + (input_dim - ac_split)
+        else:
+            self.ac_compress = None
+            proj_input = input_dim
+
         h2 = max(int(hidden * 0.4), 64)
         h4 = max(int(hidden * 0.2), 32)
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, hidden),
+            nn.Linear(proj_input, hidden),
             nn.BatchNorm1d(hidden),
             nn.ReLU(),
             nn.Dropout(min(0.3 * ds, 0.5)),
@@ -409,9 +498,14 @@ class MeterNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.ac_compress is not None:
+            ac = x[:, :self.ac_split]
+            rest = x[:, self.ac_split:]
+            x = torch.cat([self.ac_compress(ac), rest], dim=1)
         x = self.input_proj(x)
         x = self.residual(x)
         return self.head(x)
+
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +598,8 @@ def train_model(
     seed: int = 42,
     use_focal: bool = False,
     n_blocks: int = 1,
-) -> tuple[MeterNet, dict]:
+    bottleneck: int = 0,
+) -> tuple[nn.Module, dict]:
     """Train MeterNet with BCE/Focal loss and balanced accuracy validation."""
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -555,7 +650,7 @@ def train_model(
 
     model = MeterNet(
         input_dim, n_classes, hidden=hidden, dropout_scale=dropout_scale,
-        n_blocks=n_blocks,
+        n_blocks=n_blocks, bottleneck=bottleneck,
     ).to(device)
     if use_focal:
         def criterion(logits, targets):
@@ -727,6 +822,17 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+def _prune_staging(keep: int = 5):
+    """Keep only the most recent `keep` checkpoints in data/checkpoints/."""
+    ckpt_dir = Path("data/checkpoints")
+    if not ckpt_dir.exists():
+        return
+    pts = sorted(ckpt_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime)
+    for old in pts[:-keep]:
+        old.unlink()
+        print(f"  Pruned old checkpoint: {old.name}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train MeterNet")
     parser.add_argument(
@@ -744,6 +850,13 @@ def main():
     parser.add_argument("--dropout-scale", type=float, default=1.0)
     parser.add_argument("--n-blocks", type=int, default=1, help="Number of residual blocks (1-3)")
     parser.add_argument("--focal", action="store_true", help="Use focal BCE loss")
+    parser.add_argument("--ablate", type=str, default=None,
+                        help="Comma-separated feature names to zero out (e.g. beat_beatnet,sig_hcdf)")
+    parser.add_argument("--pca-autocorr", type=int, default=0,
+                        help="PCA-compress autocorr block (1024d) to N dims (0=disabled)")
+    parser.add_argument("--bottleneck", type=int, default=0,
+                        help="Learned autocorr bottleneck dim (0=disabled, e.g. 80)")
+
     parser.add_argument("--limit", type=int, default=0, help="Limit entries (0=all)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--save", type=Path, default=None)
@@ -756,9 +869,9 @@ def main():
     valid_meters = set(CLASS_METERS_6)
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
 
-    print(f"MeterNet (features={TOTAL_FEATURES})")
-    print(f"  Audio: {N_AUDIO_FEATURES}, Beat: {N_BEAT_FEATURES}, "
-          f"Signal: {N_SIGNAL_FEATURES}, Tempo: {N_TEMPO_FEATURES}")
+    print(f"MeterNet v6 (features={_TOTAL_FEATURES_ACTIVE})")
+    print(f"  Audio: {_AUDIO_FEATURES_ACTIVE}, SSM: {N_SSM_FEATURES}, "
+          f"Beat: {N_BEAT_FEATURES}, Signal: {N_SIGNAL_FEATURES}, Tempo: {N_TEMPO_FEATURES}")
     print(f"Classes: {CLASS_METERS_6}")
     print(f"Primary data: {args.data_dir}"
           + (f" + METER2800: {args.meter2800}" if args.meter2800 else ""))
@@ -803,58 +916,111 @@ def main():
         dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
         print(f"  {name}: {dist_str}")
 
-    # Initialize analysis cache
-    from beatmeter.analysis.cache import AnalysisCache
+    # Initialize analysis cache + numpy LMDB
+    from beatmeter.analysis.cache import AnalysisCache, NumpyLMDB
     analysis_cache = AnalysisCache()
+    feat_db = NumpyLMDB("data/features.lmdb")
 
     # Extract features
-    onset_cache_dir = Path(f"data/onset_features_cache_{FEATURE_VERSION_V5}")
-    print(f"\nExtracting features (onset cache: {onset_cache_dir})...")
+    print("\nExtracting features (cache: data/features.lmdb)...")
     t0 = time.time()
 
     X_train, y_train, pm_train = extract_all_features(
-        train_entries, onset_cache_dir, analysis_cache, "train", args.workers,
+        train_entries, feat_db, analysis_cache, "train", args.workers,
     )
     X_val, y_val, pm_val = extract_all_features(
-        val_entries, onset_cache_dir, analysis_cache, "val",
+        val_entries, feat_db, analysis_cache, "val", args.workers,
     )
     X_test, y_test, pm_test = extract_all_features(
-        test_entries, onset_cache_dir, analysis_cache, "test",
+        test_entries, feat_db, analysis_cache, "test", args.workers,
     )
 
     print(f"  Feature extraction: {time.time() - t0:.1f}s")
     print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
 
+    # Ablation: zero out selected features
+    if args.ablate:
+        from beatmeter.analysis.signals.meter_net_features import ABLATION_TARGETS
+        for name in args.ablate.split(","):
+            name = name.strip()
+            if name not in ABLATION_TARGETS:
+                print(f"  WARNING: unknown ablation target '{name}', valid: {sorted(ABLATION_TARGETS.keys())}")
+                continue
+            start, end = ABLATION_TARGETS[name]
+            X_train[:, start:end] = 0.0
+            X_val[:, start:end] = 0.0
+            X_test[:, start:end] = 0.0
+            print(f"  ABLATION: {name} zeroed (dims {start}:{end}, {end - start}d)")
+
     # Check feature completeness (non-zero groups)
+    from beatmeter.analysis.signals.meter_net_features import feature_groups
+    fg = feature_groups(_AUDIO_FEATURES_ACTIVE)
     for name, X in [("Train", X_train), ("Val", X_val)]:
-        audio_ok = np.any(X[:, :N_AUDIO_FEATURES] != 0, axis=1).sum()
-        beat_ok = np.any(
-            X[:, N_AUDIO_FEATURES : N_AUDIO_FEATURES + N_BEAT_FEATURES] != 0,
-            axis=1,
-        ).sum()
-        sig_ok = np.any(
-            X[
-                :,
-                N_AUDIO_FEATURES + N_BEAT_FEATURES : N_AUDIO_FEATURES
-                + N_BEAT_FEATURES
-                + N_SIGNAL_FEATURES,
-            ]
-            != 0,
-            axis=1,
-        ).sum()
-        print(
-            f"  {name} non-zero: audio={audio_ok}/{len(X)}, "
-            f"beat={beat_ok}/{len(X)}, signal={sig_ok}/{len(X)}"
-        )
+        counts = {}
+        for grp, (start, end) in fg.items():
+            counts[grp] = int(np.any(X[:, start:end] != 0, axis=1).sum())
+        parts = ", ".join(f"{g}={c}/{len(X)}" for g, c in counts.items())
+        print(f"  {name} non-zero: {parts}")
+
+    # Fail-fast: check if beat/signal/tempo features are populated
+    train_beat_nz = np.any(X_train[:, fg["beat"][0]:fg["beat"][1]] != 0, axis=1).sum()
+    train_signal_nz = np.any(X_train[:, fg["signal"][0]:fg["signal"][1]] != 0, axis=1).sum()
+    cache_pct = (train_beat_nz + train_signal_nz) / (2 * len(X_train)) * 100
+    if cache_pct < 10:
+        print(f"\n  Beat/signal features populated for {cache_pct:.0f}% of train files.")
+        print("  MeterNet needs cached beat tracker + signal data to train properly.")
+        print("  Run warm first:")
+        print("    uv run python scripts/setup/warm.py -w 4")
+        sys.exit(1)
+
+    # PCA compression of autocorrelation block
+    pca_info = None
+    if args.pca_autocorr > 0:
+        from sklearn.decomposition import PCA
+        from beatmeter.analysis.signals.onset_mlp_features import N_AUTOCORR_V5
+
+        n_pca = min(args.pca_autocorr, X_train.shape[0] - 1)
+        ac_end = N_AUTOCORR_V5  # 1024
+
+        # Fit PCA on train autocorr block
+        pca = PCA(n_components=n_pca)
+        ac_train = pca.fit_transform(X_train[:, :ac_end])
+        ac_val = pca.transform(X_val[:, :ac_end])
+        ac_test = pca.transform(X_test[:, :ac_end])
+
+        explained = pca.explained_variance_ratio_.sum()
+        print(f"  PCA autocorr: {ac_end}d -> {n_pca}d ({explained:.1%} variance explained)")
+
+        # Reconstruct: PCA(autocorr) + rest_of_features
+        rest_train = X_train[:, ac_end:]
+        rest_val = X_val[:, ac_end:]
+        rest_test = X_test[:, ac_end:]
+
+        X_train = np.hstack([ac_train, rest_train]).astype(np.float32)
+        X_val = np.hstack([ac_val, rest_val]).astype(np.float32)
+        X_test = np.hstack([ac_test, rest_test]).astype(np.float32)
+
+        new_dim = X_train.shape[1]
+        print(f"  New feature dim: {new_dim} (was {TOTAL_FEATURES})")
+
+        pca_info = {
+            "pca_components": pca.components_,  # (n_pca, 1024)
+            "pca_mean": pca.mean_,              # (1024,)
+            "pca_n": n_pca,
+            "pca_ac_end": ac_end,
+            "pca_explained": float(explained),
+        }
 
     # Standardize
     X_train, X_val, X_test, feat_mean, feat_std = _standardize(X_train, X_val, X_test)
     print("  Features standardized (z-score, fit on train)")
 
     # Train
+    bn_label = f", bottleneck={args.bottleneck}" if args.bottleneck else ""
     print(
         f"\nTraining MeterNet (input={X_train.shape[1]}, hidden={args.hidden}, "
-        f"blocks={args.n_blocks}, dropout_scale={args.dropout_scale}, classes={len(CLASS_METERS_6)})..."
+        f"blocks={args.n_blocks}, dropout_scale={args.dropout_scale}{bn_label}, "
+        f"classes={len(CLASS_METERS_6)})..."
     )
     model, info = train_model(
         X_train, y_train, pm_train,
@@ -868,41 +1034,70 @@ def main():
         seed=args.seed,
         use_focal=args.focal,
         n_blocks=args.n_blocks,
+        bottleneck=args.bottleneck,
     )
     print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
 
     # Test
     results = evaluate(model, X_test, y_test, args.device)
 
-    # Save
+    # Save — always to unique path (promote via eval.py --promote)
     if args.save:
         save_path = args.save
     elif args.limit:
         save_path = Path("data/meter_net_test.pt")
         print(f"  (--limit active, saving to {save_path})")
     else:
-        save_path = Path("data/meter_net.pt")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ckpt_dir = Path("data/checkpoints")
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        save_path = ckpt_dir / f"{ts}.pt"
 
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "class_meters": CLASS_METERS_6,
-            "meter_to_idx": {m: i for i, m in enumerate(CLASS_METERS_6)},
-            "input_dim": X_train.shape[1],
-            "n_classes": len(CLASS_METERS_6),
-            "best_epoch": info["best_epoch"],
-            "best_val_acc": info["best_val_acc"],
-            "test_results": results,
-            "feat_mean": feat_mean,
-            "feat_std": feat_std,
-            "feature_version": FEATURE_VERSION,
-            "hidden_dim": args.hidden,
-            "dropout_scale": args.dropout_scale,
-            "n_blocks": args.n_blocks,
-        },
-        save_path,
+    from beatmeter.experiment import enrich_checkpoint, log_experiment, make_experiment_record
+
+    ckpt = {
+        "model_state": model.state_dict(),
+        "class_meters": CLASS_METERS_6,
+        "meter_to_idx": {m: i for i, m in enumerate(CLASS_METERS_6)},
+        "input_dim": X_train.shape[1],
+        "n_classes": len(CLASS_METERS_6),
+        "best_epoch": info["best_epoch"],
+        "best_val_acc": info["best_val_acc"],
+        "test_results": results,
+        "feat_mean": feat_mean,
+        "feat_std": feat_std,
+        "feature_version": FEATURE_VERSION,
+        "n_audio_features": _AUDIO_FEATURES_ACTIVE,
+        "hidden_dim": args.hidden,
+        "dropout_scale": args.dropout_scale,
+        "n_blocks": args.n_blocks,
+        "bottleneck": args.bottleneck,
+    }
+    if pca_info:
+        ckpt["pca"] = pca_info
+    ckpt = enrich_checkpoint(
+        ckpt, args=args,
+        train_size=len(X_train), val_size=len(X_val), test_size=len(X_test),
     )
-    print(f"\nModel saved to {save_path}")
+    torch.save(ckpt, save_path)
+    print(f"\nModel saved to {save_path} (val_acc={info['best_val_acc']:.1%})")
+    if not args.save and not args.limit:
+        print(f"To promote:  uv run python scripts/eval.py --promote {save_path}")
+        _prune_staging(keep=5)
+
+    log_experiment(make_experiment_record(
+        type="train", model="meter_net",
+        params={"hidden": args.hidden, "n_blocks": args.n_blocks, "lr": args.lr,
+                "dropout_scale": args.dropout_scale, "bottleneck": args.bottleneck,
+                "epochs": args.epochs, "batch_size": args.batch_size, "seed": args.seed,
+                "focal": args.focal},
+        results={"best_val_acc": info["best_val_acc"], "best_epoch": info["best_epoch"],
+                 "test_acc": results["overall_acc"], "test_correct": results["overall_correct"],
+                 "test_total": results["overall_total"]},
+        checkpoint=str(save_path),
+        extra={"train_size": len(X_train), "val_size": len(X_val), "test_size": len(X_test),
+               "feature_version": FEATURE_VERSION, "input_dim": X_train.shape[1]},
+    ))
 
 
 if __name__ == "__main__":

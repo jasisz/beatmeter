@@ -10,8 +10,7 @@ v5 features (1361 dims) = v4 + 485 new dims:
     +60  (autocorrelation ratios: 4 signals × 15 ratios)
     +9   (tempogram meter salience: 9 candidate meters)
 
-Used by both scripts/training/train_onset_mlp.py and
-beatmeter/analysis/signals/onset_mlp_meter.py.
+Used by MeterNet for audio feature extraction (extract_features_v6).
 """
 
 import logging
@@ -57,20 +56,44 @@ TOTAL_FEATURES_V5 = TOTAL_FEATURES_V4 + N_NEW_V5  # 1361
 
 FEATURE_VERSION_V4 = "v4"
 FEATURE_VERSION_V5 = "v5"
+FEATURE_VERSION_V6 = "v6"
+FEATURE_VERSION_V61 = "v6.1b"
 
 # Bar lengths for beat-position histograms (in beats)
 BAR_BEAT_LENGTHS = [2, 3, 4, 5, 7]
+BAR_BEAT_LENGTHS_V6 = [2, 3, 4, 5, 7, 9, 11]
 
 # Autocorrelation ratio config
 RATIO_LAGS = [2, 3, 4, 5, 6, 7]  # absolute lags
+RATIO_LAGS_V6 = [2, 3, 4, 5, 6, 7, 9, 11]
 RATIO_PAIRS = [
     (3, 4), (5, 4), (7, 4),  # vs 4
     (3, 2), (5, 3), (7, 3),  # vs smaller
+    (5, 7), (9, 4), (11, 4),  # odd vs even — NOTE: 9,11 lags broken in v5 (always 0)
+]
+RATIO_PAIRS_V6 = [
+    (3, 4), (5, 4), (7, 4),   # vs 4
+    (3, 2), (5, 3), (7, 3),   # vs smaller
     (5, 7), (9, 4), (11, 4),  # odd vs even
+    (9, 7), (11, 7),          # rare vs 7
+    (9, 3), (11, 3),          # rare vs 3
 ]
 
 # Tempogram meter salience candidate meters
 SALIENCE_METERS = [2, 3, 4, 5, 6, 7, 9, 11, 12]
+
+# v6 feature dims
+N_BEAT_POSITION_BARS_V6 = len(BAR_BEAT_LENGTHS_V6)  # 7
+N_BEAT_POSITION_FEATURES_V6 = N_BEAT_POSITION_BARS_V6 * N_BEAT_POSITION_BINS  # 224
+N_AUTOCORR_RATIO_PER_SIGNAL_V6 = len(RATIO_LAGS_V6) + len(RATIO_PAIRS_V6)  # 8 + 13 = 21
+N_AUTOCORR_RATIO_FEATURES_V6 = N_SIGNALS * N_AUTOCORR_RATIO_PER_SIGNAL_V6  # 84
+N_NEW_V6_DELTA = (N_BEAT_POSITION_FEATURES_V6 - N_BEAT_POSITION_FEATURES) + (N_AUTOCORR_RATIO_FEATURES_V6 - N_AUTOCORR_RATIO_FEATURES)  # 64 + 24 = 88
+TOTAL_FEATURES_V6 = TOTAL_FEATURES_V5 + N_NEW_V6_DELTA  # 1449
+
+# v6.1: same dims and structure as v6, but autocorr block uses 4 beat-tracker
+# tempos instead of 4 tempogram-estimated tempos. Drop-in replacement.
+N_TEMPO_CANDIDATES_V61 = 4  # same count as v5/v6
+TOTAL_FEATURES_V61 = TOTAL_FEATURES_V6  # 1449 — identical layout
 
 
 # ---------------------------------------------------------------------------
@@ -302,23 +325,28 @@ def onset_rate_statistics(y: np.ndarray, sr: int = SR) -> np.ndarray:
 def beat_position_histograms(
     y: np.ndarray, sr: int = SR, primary_tempo: float | None = None,
     onset_env: np.ndarray | None = None,
+    bar_lengths: list[int] | None = None,
 ) -> np.ndarray:
-    """Beat-position histograms for 5 bar lengths (160 dims).
+    """Beat-position histograms for given bar lengths.
 
-    For each hypothetical bar length (2, 3, 4, 5, 7 beats), fold onset
-    times modulo bar_duration and build a histogram weighted by onset
-    strength. This captures accent patterns within a bar.
+    For each hypothetical bar length, fold onset times modulo bar_duration
+    and build a histogram weighted by onset strength. This captures accent
+    patterns within a bar.
 
     Args:
         y: Audio signal.
         sr: Sample rate.
         primary_tempo: Primary tempo in BPM. If None, estimated from audio.
         onset_env: Pre-computed onset envelope. If None, computed from y.
+        bar_lengths: Bar lengths in beats. Default: [2, 3, 4, 5, 7] (v5).
 
     Returns:
-        160-dim feature vector (5 bar lengths × 32 bins).
+        Feature vector (len(bar_lengths) × 32 bins).
     """
     import librosa
+
+    if bar_lengths is None:
+        bar_lengths = BAR_BEAT_LENGTHS
 
     if primary_tempo is None:
         tempo = librosa.feature.tempo(y=y, sr=sr, hop_length=HOP_LENGTH)
@@ -335,14 +363,14 @@ def beat_position_histograms(
         y=y, sr=sr, hop_length=HOP_LENGTH, onset_envelope=onset_env,
     )
     if len(onset_frames) < 3:
-        return np.zeros(N_BEAT_POSITION_BARS * N_BEAT_POSITION_BINS)
+        return np.zeros(len(bar_lengths) * N_BEAT_POSITION_BINS)
 
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=HOP_LENGTH)
     # Onset strengths at detected frames
     onset_strengths = onset_env[onset_frames]
 
     features = []
-    for n_beats in BAR_BEAT_LENGTHS:
+    for n_beats in bar_lengths:
         bar_duration = beat_duration * n_beats
         if bar_duration < 0.1:
             features.append(np.zeros(N_BEAT_POSITION_BINS))
@@ -367,26 +395,34 @@ def beat_position_histograms(
     return np.concatenate(features)
 
 
-def autocorrelation_ratios(autocorrs: list[np.ndarray], sr: int = SR, primary_tempo: float = 120.0) -> np.ndarray:
-    """Autocorrelation ratios for meter discrimination (60 dims).
+def autocorrelation_ratios(
+    autocorrs: list[np.ndarray], sr: int = SR, primary_tempo: float = 120.0,
+    ratio_lags: list[int] | None = None, ratio_pairs: list[tuple[int, int]] | None = None,
+) -> np.ndarray:
+    """Autocorrelation ratios for meter discrimination.
 
     For each of the 4 autocorrelation signals, compute:
-    - 6 absolute peak values at lag = 2, 3, 4, 5, 6, 7 beats
-    - 9 discriminative ratios: (3 vs 4), (5 vs 4), (7 vs 4), etc.
+    - Absolute peak values at given lag multiples of beat period
+    - Discriminative ratios between pairs
 
-    This explicitly encodes "is peak@5 > peak@4?" which the model
-    otherwise has to learn from raw autocorrelation values.
+    Args:
+        ratio_lags: Beat multiples for absolute peaks. Default: [2,3,4,5,6,7] (v5).
+        ratio_pairs: Pairs (a, b) for ratio computation. Default: v5 pairs.
 
     Returns:
-        60-dim feature vector (4 signals × 15 ratios).
+        Feature vector (4 signals × (len(lags) + len(pairs)) dims).
     """
+    if ratio_lags is None:
+        ratio_lags = RATIO_LAGS
+    if ratio_pairs is None:
+        ratio_pairs = RATIO_PAIRS
+
     beat_period_frames = (60.0 / primary_tempo) * (sr / HOP_LENGTH)
     features = []
 
     for ac in autocorrs:
-        # 6 absolute values at integer-beat lags
         abs_vals = {}
-        for n in RATIO_LAGS:
+        for n in ratio_lags:
             lag = int(n * beat_period_frames)
             if 0 < lag < len(ac):
                 window = max(1, int(lag * WINDOW_PCT))
@@ -396,13 +432,11 @@ def autocorrelation_ratios(autocorrs: list[np.ndarray], sr: int = SR, primary_te
             else:
                 abs_vals[n] = 0.0
 
-        signal_feats = [abs_vals[n] for n in RATIO_LAGS]  # 6 values
+        signal_feats = [abs_vals[n] for n in ratio_lags]
 
-        # 9 discriminative ratio pairs
-        for a, b in RATIO_PAIRS:
+        for a, b in ratio_pairs:
             va = abs_vals.get(a, 0.0)
             vb = abs_vals.get(b, 0.0)
-            # Ratio normalized to [-1, 1]: (a - b) / (a + b + eps)
             signal_feats.append((va - vb) / (va + vb + 1e-8))
 
         features.append(np.array(signal_feats))
@@ -551,6 +585,135 @@ def extract_features_v5(y: np.ndarray, sr: int = SR) -> np.ndarray | None:
 
     except Exception as e:
         logger.warning("v5 feature extraction failed: %s", e)
+        return None
+
+
+def extract_features_v6(y: np.ndarray, sr: int = SR) -> np.ndarray | None:
+    """Extract v6 features (1449 dims) from pre-loaded audio array.
+
+    v6 = v5 base with extended rare-meter support:
+    - beat-position histograms: [2,3,4,5,7,9,11] (was [2,3,4,5,7]) → 224d (was 160)
+    - autocorrelation ratios: lags [2..7,9,11] + 4 new pairs → 84d (was 60)
+    - Fixes v5 bug: RATIO_PAIRS referenced lags 9,11 not in RATIO_LAGS (always 0)
+
+    Returns None on failure.
+    """
+    try:
+        import librosa
+
+        if len(y) < sr * 2:
+            return None
+
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP_LENGTH)
+        tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=HOP_LENGTH)
+        avg_tg = tg.mean(axis=1)
+
+        autocorrs, onset_env = compute_autocorrelations(y, sr, onset_env=onset_env)
+        if any(len(ac) < 10 for ac in autocorrs):
+            return None
+
+        tempos_v5 = estimate_tempos_v5(y, sr, avg_tg=avg_tg)
+        primary_tempo = tempos_v5[0]
+
+        # Part 1: Autocorrelation features at 4 tempos (1024 dims) — same as v5
+        parts = []
+        for t in tempos_v5:
+            for ac in autocorrs:
+                parts.append(sample_autocorr_at_tempo(ac, t, sr))
+
+        # Part 2: v4 tempo-independent features (108 dims) — same as v5
+        parts.append(tempogram_profile(y, sr, avg_tg=avg_tg))
+        parts.append(mfcc_statistics(y, sr))
+        parts.append(spectral_contrast_statistics(y, sr))
+        parts.append(onset_rate_statistics(y, sr))
+
+        # Part 3: v6 extended features (317 dims, was 229 in v5)
+        parts.append(beat_position_histograms(
+            y, sr, primary_tempo, onset_env=onset_env,
+            bar_lengths=BAR_BEAT_LENGTHS_V6,
+        ))  # 224
+        parts.append(autocorrelation_ratios(
+            autocorrs, sr, primary_tempo,
+            ratio_lags=RATIO_LAGS_V6, ratio_pairs=RATIO_PAIRS_V6,
+        ))  # 84
+        parts.append(tempogram_meter_salience(y, sr, avg_tg=avg_tg))  # 9
+
+        feat = np.concatenate(parts)
+        assert feat.shape[0] == TOTAL_FEATURES_V6, f"v6 dim mismatch: {feat.shape[0]} != {TOTAL_FEATURES_V6}"
+        return feat
+
+    except Exception as e:
+        logger.warning("v6 feature extraction failed: %s", e)
+        return None
+
+
+def extract_features_v61(
+    y: np.ndarray, sr: int = SR, tempos: list[float] | None = None,
+) -> np.ndarray | None:
+    """Extract v6.1 features (1449 dims) from pre-loaded audio array.
+
+    v6.1 = v6 but autocorr block uses 4 external tempos (from beat trackers)
+    instead of 4 internally estimated tempos from the tempogram.
+    Same structure: 4 tempos × 4 signals × 64 lags = 1024 autocorr dims.
+
+    Args:
+        y: Audio signal (mono, resampled to SR).
+        sr: Sample rate.
+        tempos: 4 tempo candidates from beat trackers
+                [t_consensus, t_tempogram, t_consensus/2, t_consensus×1.5].
+                If None, falls back to v6 (internal tempogram tempos).
+
+    Returns None on failure.
+    """
+    if tempos is None or len(tempos) != N_TEMPO_CANDIDATES_V61:
+        return extract_features_v6(y, sr)
+
+    try:
+        import librosa
+
+        if len(y) < sr * 2:
+            return None
+
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP_LENGTH)
+        tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=HOP_LENGTH)
+        avg_tg = tg.mean(axis=1)
+
+        autocorrs, onset_env = compute_autocorrelations(y, sr, onset_env=onset_env)
+        if any(len(ac) < 10 for ac in autocorrs):
+            return None
+
+        primary_tempo = tempos[0]
+
+        # Part 1: Autocorrelation at 4 beat-tracker tempos (1024 dims)
+        parts = []
+        for t in tempos:
+            t_clamped = float(np.clip(t, 30.0, 300.0))
+            for ac in autocorrs:
+                parts.append(sample_autocorr_at_tempo(ac, t_clamped, sr))
+
+        # Part 2: v4 tempo-independent features (108 dims)
+        parts.append(tempogram_profile(y, sr, avg_tg=avg_tg))
+        parts.append(mfcc_statistics(y, sr))
+        parts.append(spectral_contrast_statistics(y, sr))
+        parts.append(onset_rate_statistics(y, sr))
+
+        # Part 3: v6 extended features (317 dims)
+        parts.append(beat_position_histograms(
+            y, sr, primary_tempo, onset_env=onset_env,
+            bar_lengths=BAR_BEAT_LENGTHS_V6,
+        ))  # 224
+        parts.append(autocorrelation_ratios(
+            autocorrs, sr, primary_tempo,
+            ratio_lags=RATIO_LAGS_V6, ratio_pairs=RATIO_PAIRS_V6,
+        ))  # 84
+        parts.append(tempogram_meter_salience(y, sr, avg_tg=avg_tg))  # 9
+
+        feat = np.concatenate(parts)
+        assert feat.shape[0] == TOTAL_FEATURES_V61, f"v6.1 dim mismatch: {feat.shape[0]} != {TOTAL_FEATURES_V61}"
+        return feat
+
+    except Exception as e:
+        logger.warning("v6.1 feature extraction failed: %s", e)
         return None
 
 

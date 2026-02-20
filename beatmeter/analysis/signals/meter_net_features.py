@@ -1,12 +1,13 @@
 """Feature extraction for MeterNet — unified meter classification model.
 
 MeterNet combines:
-- Audio features (1361 dims) from onset_mlp_features.py
+- Audio features (1449 dims) from onset_mlp_features.py v6
+- Beat-synchronous chroma SSM (75 dims) from ssm_features.py
 - Beat tracker features (42 dims) from cached beat data
 - Signal scores (60 dims) from cached signal data
 - Tempo features (4 dims) from cached tempo data
 
-Total: 1467 dimensions.
+Total: 1630 dimensions.
 
 Two extraction paths:
 1. Cache-based: for training (reads from .cache/)
@@ -24,7 +25,13 @@ logger = logging.getLogger(__name__)
 # Feature group constants
 # ---------------------------------------------------------------------------
 
-N_AUDIO_FEATURES = 1361  # from onset_mlp_features.py v5
+# v6 audio features
+N_AUDIO_FEATURES_V6 = 1449
+
+N_AUDIO_FEATURES = N_AUDIO_FEATURES_V6
+
+# Beat-synchronous chroma SSM: 3 trackers × 25 dims
+from beatmeter.analysis.signals.ssm_features import N_SSM_FEATURES  # 75
 
 # Beat features: 3 trackers × 12 dims + 6 cross-tracker agreement
 N_TRACKERS = 3  # beatnet, beat_this, madmom (best BPB)
@@ -41,10 +48,11 @@ N_SIGNAL_FEATURES = N_SIGNAL_NAMES * N_METER_KEYS  # 60
 N_TEMPO_FEATURES = 4
 
 TOTAL_FEATURES = (
-    N_AUDIO_FEATURES + N_BEAT_FEATURES + N_SIGNAL_FEATURES + N_TEMPO_FEATURES
-)  # 1467
+    N_AUDIO_FEATURES + N_SSM_FEATURES
+    + N_BEAT_FEATURES + N_SIGNAL_FEATURES + N_TEMPO_FEATURES
+)  # 1630
 
-FEATURE_VERSION = "mn_v1"
+FEATURE_VERSION = "mn_v6"  # v6 = v4 + SSM (75)
 
 # Tracker names (order matters for feature layout)
 TRACKER_NAMES = ["beatnet", "beat_this", "madmom"]
@@ -65,24 +73,63 @@ SIGNAL_CACHE_MAP = {
     "hcdf": "hcdf_meter",
 }
 
-# Meter keys (same order as arbiter)
+# Meter keys (canonical order for signal score features)
 METER_KEYS = [
     "2_4", "3_4", "4_4", "5_4", "5_8", "6_8",
     "7_4", "7_8", "9_8", "10_8", "11_8", "12_8",
 ]
 
-# Feature group offsets
+# Feature group offsets (v6 default — use feature_groups() for version-aware)
+_AFTER_AUDIO = N_AUDIO_FEATURES
+_AFTER_SSM = _AFTER_AUDIO + N_SSM_FEATURES
+_AFTER_BEAT = _AFTER_SSM + N_BEAT_FEATURES
+_AFTER_SIGNAL = _AFTER_BEAT + N_SIGNAL_FEATURES
+_AFTER_TEMPO = _AFTER_SIGNAL + N_TEMPO_FEATURES
+
 FEATURE_GROUPS = {
-    "audio": (0, N_AUDIO_FEATURES),
-    "beat": (N_AUDIO_FEATURES, N_AUDIO_FEATURES + N_BEAT_FEATURES),
-    "signal": (
-        N_AUDIO_FEATURES + N_BEAT_FEATURES,
-        N_AUDIO_FEATURES + N_BEAT_FEATURES + N_SIGNAL_FEATURES,
-    ),
-    "tempo": (
-        N_AUDIO_FEATURES + N_BEAT_FEATURES + N_SIGNAL_FEATURES,
-        TOTAL_FEATURES,
-    ),
+    "audio": (0, _AFTER_AUDIO),
+    "ssm": (_AFTER_AUDIO, _AFTER_SSM),
+    "beat": (_AFTER_SSM, _AFTER_BEAT),
+    "signal": (_AFTER_BEAT, _AFTER_SIGNAL),
+    "tempo": (_AFTER_SIGNAL, _AFTER_TEMPO),
+}
+
+
+def feature_groups(n_audio: int | None = None) -> dict[str, tuple[int, int]]:
+    """Return feature group offsets for a given audio feature size."""
+    if n_audio is None:
+        return FEATURE_GROUPS
+    a = n_audio
+    ssm = a + N_SSM_FEATURES
+    b = ssm + N_BEAT_FEATURES
+    s = b + N_SIGNAL_FEATURES
+    t = s + N_TEMPO_FEATURES
+    return {
+        "audio": (0, a),
+        "ssm": (a, ssm),
+        "beat": (ssm, b),
+        "signal": (b, s),
+        "tempo": (s, t),
+    }
+
+# Granular ablation targets (individual features within groups)
+_BT = N_BEAT_FEATURES_PER_TRACKER  # 12
+_MK = N_METER_KEYS  # 12
+ABLATION_TARGETS = {
+    # SSM feature group
+    "ssm": (_AFTER_AUDIO, _AFTER_SSM),
+    # Beat trackers (12 dims each)
+    "beat_beatnet": (_AFTER_SSM, _AFTER_SSM + _BT),
+    "beat_beat_this": (_AFTER_SSM + _BT, _AFTER_SSM + 2 * _BT),
+    "beat_madmom": (_AFTER_SSM + 2 * _BT, _AFTER_SSM + 3 * _BT),
+    # Signal scores (12 dims each)
+    "sig_beatnet": (_AFTER_BEAT, _AFTER_BEAT + _MK),
+    "sig_beat_this": (_AFTER_BEAT + _MK, _AFTER_BEAT + 2 * _MK),
+    "sig_autocorr": (_AFTER_BEAT + 2 * _MK, _AFTER_BEAT + 3 * _MK),
+    "sig_bar_tracking": (_AFTER_BEAT + 3 * _MK, _AFTER_BEAT + 4 * _MK),
+    "sig_hcdf": (_AFTER_BEAT + 4 * _MK, _AFTER_BEAT + 5 * _MK),
+    # Tempo (4 dims)
+    "tempo": (_AFTER_SIGNAL, _AFTER_TEMPO),
 }
 
 
@@ -218,16 +265,22 @@ def _compute_cross_tracker_agreement(
 # ---------------------------------------------------------------------------
 
 
-def extract_beat_features(cache, audio_hash: str) -> np.ndarray:
+def extract_beat_features(cache, audio_hash: str, preloaded=None) -> np.ndarray:
     """Extract beat features from analysis cache (42 dims).
 
     Reads cached beats for 3 trackers + onsets, computes IBI stats,
     alignment, downbeat histograms, and cross-tracker agreement.
+
+    Args:
+        preloaded: Optional dict from cache.load_all_for_audio() for batch reads.
     """
     feat = np.zeros(N_BEAT_FEATURES)
 
     # Load onset events for alignment
-    onset_data = cache.load_onsets(audio_hash)
+    onset_data = (
+        preloaded.get("onsets") if preloaded
+        else cache.load_onsets(audio_hash)
+    )
     onset_event_times = (
         np.array(onset_data["onset_events"]) if onset_data else np.array([])
     )
@@ -241,6 +294,11 @@ def extract_beat_features(cache, audio_hash: str) -> np.ndarray:
 
     tracker_dominant: list[int | None] = []
 
+    def _load_beats(tracker):
+        if preloaded:
+            return preloaded["beats"].get(tracker)
+        return cache.load_beats(audio_hash, tracker)
+
     for t_idx, tracker_name in enumerate(TRACKER_NAMES):
         offset = t_idx * N_BEAT_FEATURES_PER_TRACKER
 
@@ -249,7 +307,7 @@ def extract_beat_features(cache, audio_hash: str) -> np.ndarray:
             best_data = None
             best_alignment = -1.0
             for bpb in [3, 4, 5, 7]:
-                data = cache.load_beats(audio_hash, f"madmom_bpb{bpb}")
+                data = _load_beats(f"madmom_bpb{bpb}")
                 if data and len(data) > 0:
                     bt = np.array([b["time"] for b in data])
                     if len(onset_event_times) > 0 and len(bt) >= 3:
@@ -270,7 +328,7 @@ def extract_beat_features(cache, audio_hash: str) -> np.ndarray:
             else:
                 tracker_dominant.append(None)
         else:
-            data = cache.load_beats(audio_hash, tracker_name)
+            data = _load_beats(tracker_name)
             if data and len(data) > 0:
                 bt = np.array([b["time"] for b in data])
                 is_db = np.array([b.get("is_downbeat", False) for b in data])
@@ -290,16 +348,22 @@ def extract_beat_features(cache, audio_hash: str) -> np.ndarray:
     return feat
 
 
-def extract_signal_scores(cache, audio_hash: str) -> np.ndarray:
+def extract_signal_scores(cache, audio_hash: str, preloaded=None) -> np.ndarray:
     """Extract signal score features from cache (60 dims).
 
     5 signals x 12 meter keys = 60 features.
+
+    Args:
+        preloaded: Optional dict from cache.load_all_for_audio() for batch reads.
     """
     feat = np.zeros(N_SIGNAL_FEATURES)
 
     for s_idx, sig_name in enumerate(SIGNAL_NAMES):
         cache_name = SIGNAL_CACHE_MAP[sig_name]
-        cached = cache.load_signal(audio_hash, cache_name)
+        cached = (
+            preloaded["signals"].get(cache_name) if preloaded
+            else cache.load_signal(audio_hash, cache_name)
+        )
         if cached:
             for m_idx, meter_key in enumerate(METER_KEYS):
                 feat[s_idx * N_METER_KEYS + m_idx] = cached.get(meter_key, 0.0)
@@ -307,24 +371,32 @@ def extract_signal_scores(cache, audio_hash: str) -> np.ndarray:
     return feat
 
 
-def extract_tempo_features(cache, audio_hash: str) -> np.ndarray:
+def extract_tempo_features(cache, audio_hash: str, preloaded=None) -> np.ndarray:
     """Extract tempo features from cache (4 dims).
 
     [0] tempo_librosa BPM (normalized /300)
     [1] tempo_tempogram BPM (normalized /300)
     [2] tempo ratio (lib / tg)
     [3] tempo agreement (1 - |lib - tg| / max)
+
+    Args:
+        preloaded: Optional dict from cache.load_all_for_audio() for batch reads.
     """
     feat = np.zeros(N_TEMPO_FEATURES)
+
+    def _load_signal(name):
+        if preloaded:
+            return preloaded["signals"].get(name)
+        return cache.load_signal(audio_hash, name)
 
     tempo_lib = 0.0
     tempo_tg = 0.0
 
-    td = cache.load_signal(audio_hash, "tempo_librosa")
+    td = _load_signal("tempo_librosa")
     if td:
         tempo_lib = td.get("bpm", 0.0)
 
-    td = cache.load_signal(audio_hash, "tempo_tempogram")
+    td = _load_signal("tempo_tempogram")
     if td:
         tempo_tg = td.get("bpm", 0.0)
 
@@ -345,6 +417,127 @@ def _compute_tempo_features(tempo_lib: float, tempo_tg: float) -> np.ndarray:
         feat[3] = 0.0 if (tempo_lib == 0 and tempo_tg == 0) else 0.5
 
     return feat
+
+
+# ---------------------------------------------------------------------------
+# Tracker tempo extraction
+# ---------------------------------------------------------------------------
+
+
+def _ibi_to_bpm(beat_data: list[dict]) -> float:
+    """Compute BPM from beat data IBI median. Returns 0.0 on failure."""
+    if not beat_data or len(beat_data) < 3:
+        return 0.0
+    times = [b["time"] for b in beat_data]
+    ibis = np.diff(times)
+    valid = [x for x in ibis if 0.1 < x < 3.0]
+    if len(valid) < 2:
+        return 0.0
+    return 60.0 / float(np.median(valid))
+
+
+def _get_per_tracker_bpms(cache, audio_hash: str) -> dict[str, float]:
+    """Get BPM from each cached tracker. Returns {name: bpm} (0.0 if unavailable)."""
+    result = {}
+    for tracker_name in TRACKER_NAMES:
+        if tracker_name == "madmom":
+            best_bpm = 0.0
+            for bpb in [3, 4, 5, 7]:
+                data = cache.load_beats(audio_hash, f"madmom_bpb{bpb}")
+                bpm = _ibi_to_bpm(data) if data else 0.0
+                if bpm > 0:
+                    best_bpm = max(best_bpm, bpm)
+            result[tracker_name] = best_bpm
+        else:
+            data = cache.load_beats(audio_hash, tracker_name)
+            result[tracker_name] = _ibi_to_bpm(data) if data else 0.0
+    return result
+
+
+def _get_tempogram_bpm(cache, audio_hash: str) -> float:
+    """Get tempogram BPM from cache. Returns 0.0 if unavailable."""
+    td = cache.load_signal(audio_hash, "tempo_librosa")
+    if td:
+        bpm = td.get("bpm", 0.0)
+        if bpm > 0:
+            return bpm
+    td = cache.load_signal(audio_hash, "tempo_tempogram")
+    if td:
+        bpm = td.get("bpm", 0.0)
+        if bpm > 0:
+            return bpm
+    return 0.0
+
+
+def _build_4_tempos(t_consensus: float, t_tempogram: float) -> list[float]:
+    """Build 4 tempo candidates for v6.1 autocorrelation features.
+
+    Layout (mirrors v5/v6 estimate_tempos_v5 but from beat trackers):
+      [0] t_consensus        — median of tracker IBIs (most reliable)
+      [1] t_tempogram        — independent librosa estimate
+      [2] t_consensus / 2    — octave down
+      [3] t_consensus × 1.5  — compound (6/8, 9/8, 12/8)
+    """
+    if t_tempogram <= 0:
+        t_tempogram = t_consensus
+
+    return [float(np.clip(t, 30.0, 300.0)) for t in [
+        t_consensus,
+        t_tempogram,
+        t_consensus / 2,
+        t_consensus * 1.5,
+    ]]
+
+
+def extract_tracker_tempos(cache, audio_hash: str) -> list[float]:
+    """Extract 4 tempo candidates from cached beat trackers.
+
+    Returns list of 4 floats for v6.1 autocorrelation features.
+    See _build_4_tempos for layout.
+    """
+    per_tracker = _get_per_tracker_bpms(cache, audio_hash)
+    valid_bpms = [v for v in per_tracker.values() if v > 0]
+    t_consensus = float(np.median(valid_bpms)) if valid_bpms else 120.0
+    t_tempogram = _get_tempogram_bpm(cache, audio_hash)
+
+    return _build_4_tempos(t_consensus, t_tempogram)
+
+
+def extract_tracker_tempos_live(
+    beatnet_beats, beat_this_beats, madmom_results: dict,
+    tempo_librosa_bpm: float = 0.0,
+) -> list[float]:
+    """Extract 4 tempo candidates from live beat data (for inference).
+
+    Returns list of 4 floats for v6.1 autocorrelation features.
+    See _build_4_tempos for layout.
+    """
+    def _beats_to_bpm(beats) -> float:
+        if not beats or len(beats) < 3:
+            return 0.0
+        times = [b.time for b in beats]
+        ibis = np.diff(times)
+        valid = [x for x in ibis if 0.1 < x < 3.0]
+        if len(valid) < 2:
+            return 0.0
+        return 60.0 / float(np.median(valid))
+
+    t_beatnet = _beats_to_bpm(beatnet_beats)
+    t_beat_this = _beats_to_bpm(beat_this_beats)
+
+    t_madmom = 0.0
+    if madmom_results:
+        best_bpm = 0.0
+        for bpb, beats in madmom_results.items():
+            bpm = _beats_to_bpm(beats)
+            if bpm > 0:
+                best_bpm = max(best_bpm, bpm)
+        t_madmom = best_bpm
+
+    valid_bpms = [t for t in [t_beatnet, t_beat_this, t_madmom] if t > 0]
+    t_consensus = float(np.median(valid_bpms)) if valid_bpms else 120.0
+
+    return _build_4_tempos(t_consensus, tempo_librosa_bpm)
 
 
 # ---------------------------------------------------------------------------

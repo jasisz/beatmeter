@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Unified evaluation script for meter detection.
 
-Supports both in-process (--workers 0) and multiprocess (--workers N) modes.
-Multiprocess gives true parallelism on cold cache; in-process is simpler
-and sufficient on warm cache.
+Primary: WIKIMETER test (330 segments, 6 classes, balanced accuracy).
+Secondary: METER2800 test (700 files, 4 classes, external benchmark).
 
 Usage:
-    uv run python scripts/eval.py --limit 3            # smoke test
-    uv run python scripts/eval.py --quick               # stratified 100 (~20 min)
-    uv run python scripts/eval.py --split test --limit 0 # hold-out 700
-    uv run python scripts/eval.py --workers 4            # parallel cold cache
-    uv run python scripts/eval.py --save                 # save baseline
+    uv run python scripts/eval.py                        # wikimeter test (primary)
+    uv run python scripts/eval.py meter2800              # meter2800 test
+    uv run python scripts/eval.py --limit 3              # smoke test (3 files)
+    uv run python scripts/eval.py --quick                # stratified 100
+    uv run python scripts/eval.py --save                 # run BOTH, save baseline
     uv run python scripts/eval.py --verbose              # per-file details
     uv run python scripts/eval.py --meter 5              # only meter 5
 """
@@ -21,6 +20,7 @@ import json
 import multiprocessing as mp
 import os
 import random
+import shutil
 import sys
 import time
 import warnings
@@ -45,17 +45,19 @@ RUNS_DIR = PROJECT_ROOT / "data" / "runs"
 
 
 DATASETS = {
-    "meter2800": {
-        "data_dir": Path("data/meter2800"),
-        "loader": load_meter2800_entries,
-        "splits": ["train", "val", "test", "tuning"],
-        "classes": [3, 4, 5, 7],
-    },
     "wikimeter": {
         "data_dir": Path("data/wikimeter"),
         "loader": load_wikimeter_entries,
         "splits": ["train", "val", "test", "tuning", "all"],
         "classes": [3, 4, 5, 7, 9, 11],
+        "default_split": "test",
+    },
+    "meter2800": {
+        "data_dir": Path("data/meter2800"),
+        "loader": load_meter2800_entries,
+        "splits": ["train", "val", "test", "tuning"],
+        "classes": [3, 4, 5, 7],
+        "default_split": "test",
     },
 }
 
@@ -100,7 +102,7 @@ def stratified_sample(
 
 
 # ---------------------------------------------------------------------------
-# Run snapshots
+# Run snapshots (multi-dataset)
 # ---------------------------------------------------------------------------
 
 
@@ -117,15 +119,34 @@ def load_latest_run() -> dict | None:
         return None
 
 
+def _get_dataset_baseline(previous: dict | None, dataset: str) -> dict | None:
+    """Extract baseline for a specific dataset from a saved run.
+
+    Supports both old format (single dataset) and new format (multi-dataset).
+    """
+    if previous is None:
+        return None
+
+    # New format: datasets.wikimeter, datasets.meter2800
+    if "datasets" in previous:
+        return previous["datasets"].get(dataset)
+
+    # Old format: single dataset in root
+    if previous.get("dataset") == dataset:
+        return previous
+
+    return None
+
+
 def detect_regressions(
     current_by_class: dict[int, tuple[int, int]],
-    previous: dict | None,
+    baseline: dict | None,
 ) -> list[str]:
-    """Compare current per-class results to previous and list regressions."""
-    if previous is None:
+    """Compare current per-class results to baseline and list regressions."""
+    if baseline is None:
         return []
 
-    prev_by_class = previous.get("per_class", {})
+    prev_by_class = baseline.get("per_class", {})
     regressions = []
     for meter_str, prev_data in prev_by_class.items():
         meter = int(meter_str)
@@ -141,18 +162,18 @@ def detect_regressions(
     return regressions
 
 
-def save_run(
-    file_results: list[dict],
+def _build_dataset_snapshot(
     correct: int,
     total: int,
     correct_by_class: Counter,
     total_by_class: Counter,
-    dataset: str,
-    split: str,
     classes: list[int],
     elapsed: float,
-):
-    """Save a full run snapshot to runs/ directory."""
+    dataset: str,
+    split: str,
+    file_results: list[dict],
+) -> dict:
+    """Build a snapshot dict for one dataset evaluation."""
     per_class = {}
     for m in classes:
         t = total_by_class[m]
@@ -160,35 +181,89 @@ def save_run(
         if t > 0:
             per_class[str(m)] = {"correct": c, "total": t}
 
-    snapshot = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+    # Balanced accuracy
+    per_class_accs = []
+    for m in classes:
+        t = total_by_class[m]
+        c = correct_by_class[m]
+        if t > 0:
+            per_class_accs.append(c / t)
+    balanced_acc = sum(per_class_accs) / len(per_class_accs) if per_class_accs else 0.0
+
+    return {
         "dataset": dataset,
         "split": split,
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total * 100, 1) if total > 0 else 0,
+        "balanced_accuracy": round(balanced_acc * 100, 1),
         "elapsed_s": round(elapsed, 1),
         "per_class": per_class,
         "files": file_results,
     }
 
+
+def save_combined_run(snapshots: dict[str, dict]):
+    """Save a combined multi-dataset run snapshot."""
+    from beatmeter.experiment import get_git_info, checkpoint_sha256, log_experiment, make_experiment_record
+
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = RUNS_DIR / f"{ts}.json"
-    path.write_text(json.dumps(snapshot, indent=2))
-    print(f"\n  Saved to {path}")
+
+    combined = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "git": get_git_info(),
+        "command": " ".join(sys.argv),
+        "checkpoints": {},
+        "datasets": snapshots,
+    }
 
     # Save copies of all trained checkpoints alongside the snapshot
     import shutil
+    import torch
     checkpoints = {
-        "arbiter": PROJECT_ROOT / "data" / "meter_arbiter.pt",
-        "onset_mlp": PROJECT_ROOT / "data" / "meter_onset_mlp.pt",
+        "meter_net": PROJECT_ROOT / "data" / "meter_net.pt",
     }
+    for name, src in checkpoints.items():
+        if src.exists():
+            combined["checkpoints"][name] = {
+                "path": str(src),
+                "sha256": checkpoint_sha256(src),
+            }
+            # Read experiment info from checkpoint if available
+            try:
+                ckpt = torch.load(src, map_location="cpu", weights_only=False)
+                if "experiment" in ckpt:
+                    combined["checkpoints"][name]["trained"] = ckpt["experiment"]["timestamp"]
+                    combined["checkpoints"][name]["git_at_train"] = ckpt["experiment"]["git"]
+            except Exception:
+                pass
+
+    path.write_text(json.dumps(combined, indent=2))
+    print(f"\n  Saved to {path}")
+
     for name, src in checkpoints.items():
         if src.exists():
             dst = RUNS_DIR / f"{ts}_{name}.pt"
             shutil.copy2(src, dst)
             print(f"  {name} checkpoint saved to {dst}")
+
+    # Log to experiments.jsonl
+    m2800 = snapshots.get("meter2800", {})
+    wiki = snapshots.get("wikimeter", {})
+    log_experiment(make_experiment_record(
+        type="eval", model="pipeline",
+        results={
+            "meter2800_acc": m2800.get("accuracy"),
+            "meter2800_correct": m2800.get("correct"),
+            "meter2800_total": m2800.get("total"),
+            "wikimeter_acc": wiki.get("accuracy"),
+            "wikimeter_correct": wiki.get("correct"),
+            "wikimeter_total": wiki.get("total"),
+        },
+        extra={"snapshot_path": str(path)},
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +293,19 @@ def print_summary(
     print(flush=True)
     print(f"  {'━' * w}", flush=True)
     overall_pct = _pct(correct, total) if total > 0 else "–"
+
+    # Balanced accuracy
+    per_class_accs = []
+    for m in classes:
+        t = total_by_class[m]
+        c = correct_by_class[m]
+        if t > 0:
+            per_class_accs.append(c / t)
+    balanced_acc = sum(per_class_accs) / len(per_class_accs) if per_class_accs else 0.0
+
     print(
         f"  {dataset.upper()} {split_label}:  {correct}/{total} ({overall_pct})"
+        f"   bal={balanced_acc:.1%}"
         f"   [{elapsed:.0f}s]",
         flush=True,
     )
@@ -247,7 +333,6 @@ def print_summary(
 # ---------------------------------------------------------------------------
 # Subprocess worker
 # ---------------------------------------------------------------------------
-
 _worker_engine = None
 
 
@@ -262,10 +347,7 @@ def _worker_init():
 
 
 def _worker_process_file(args: tuple[str, int, str, str]) -> dict:
-    """Process a single file in a worker process.
-
-    args: (audio_path_str, expected_meter, meters_dict_json_or_empty, valid_classes_json)
-    """
+    """Process a single file in a worker process."""
     import torch
     audio_path_str, expected_meter, meters_json, valid_classes_json = args
     fname = Path(audio_path_str).name
@@ -278,13 +360,10 @@ def _worker_process_file(args: tuple[str, int, str, str]) -> dict:
             result = _worker_engine.analyze_file(audio_path_str, skip_sections=True)
         if result and result.meter_hypotheses:
             predicted = result.meter_hypotheses[0].numerator
-            # Map predictions to dataset's valid classes
             if valid_classes and predicted not in valid_classes:
-                # 9/x is compound triple → always maps to 3
                 if predicted == 9 and 3 in valid_classes:
                     predicted = 3
                 else:
-                    # Fall back to first hypothesis in valid classes
                     for hyp in result.meter_hypotheses[1:]:
                         if hyp.numerator in valid_classes:
                             predicted = hyp.numerator
@@ -297,7 +376,6 @@ def _worker_process_file(args: tuple[str, int, str, str]) -> dict:
         predicted = None
         bpm = None
 
-    # Multi-label match: if meters_dict has >1 entry, matching any GT meter counts
     if meters_dict and len(meters_dict) > 1 and predicted is not None:
         ok = str(predicted) in meters_dict
     else:
@@ -314,124 +392,28 @@ def _worker_process_file(args: tuple[str, int, str, str]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Core eval function
 # ---------------------------------------------------------------------------
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Unified evaluation for meter detection"
-    )
-    parser.add_argument(
-        "dataset",
-        nargs="?",
-        default="meter2800",
-        choices=list(DATASETS.keys()),
-        help="Dataset to evaluate on (default: meter2800)",
-    )
-    parser.add_argument("--data-dir", type=Path, default=None,
-                        help="Override dataset data directory")
-    parser.add_argument(
-        "--split",
-        default="tuning",
-        help="Data split (default: tuning). Use 'test' for hold-out.",
-    )
-    parser.add_argument("--limit", type=int, default=100,
-                        help="Max files (0=all, default=100)")
-    parser.add_argument("--quick", action="store_true",
-                        help="Stratified 100 from tuning split")
-    parser.add_argument("--meter", type=int, default=0,
-                        help="Filter by meter class (3, 4, 5, 7)")
-    parser.add_argument("--workers", type=int, default=0,
-                        help="Number of worker processes (0=in-process, default=0)")
-    parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--save", action="store_true",
-                        help="Save run snapshot for history & regression tracking")
-    parser.add_argument("--model", choices=["auto", "meternet", "arbiter"],
-                        default="auto",
-                        help="Force meter model: meternet, arbiter, or auto (default)")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Custom MeterNet checkpoint path (e.g. data/meter_net_grid/xxx.pt)")
-    parser.add_argument("--onset-checkpoint", type=str, default=None,
-                        help="Custom onset_mlp checkpoint path (e.g. data/onset_mlp_grid/xxx.pt)")
-    args = parser.parse_args()
-
-    ds_config = DATASETS[args.dataset]
-    data_dir = (args.data_dir or ds_config["data_dir"]).resolve()
-    classes = ds_config["classes"]
-    loader = ds_config["loader"]
-
-    # Validate split
-    valid_splits = ds_config["splits"]
-    if args.split not in valid_splits:
-        print(f"ERROR: Invalid split '{args.split}' for {args.dataset}. "
-              f"Valid: {valid_splits}")
-        sys.exit(1)
-
-    # --quick and --save imply tuning split, 100 stratified
-    if args.save and not args.quick and args.limit == 100 and args.split == "tuning":
-        args.quick = True
-    if args.quick:
-        args.split = "tuning"
-
-    raw_entries = loader(data_dir, args.split)
-    if not raw_entries:
-        print(f"ERROR: No entries found for split '{args.split}' in {data_dir}")
-        sys.exit(1)
-
-    # Normalize to 3-tuples: (path, primary_meter, meters_dict_or_None)
-    entries: list[tuple[Path, int, dict[int, float] | None]] = []
-    for e in raw_entries:
-        if len(e) == 2:
-            entries.append((e[0], e[1], None))
-        else:
-            entries.append(e)
-
-    # Filter by meter class
-    if args.meter > 0:
-        entries = [(p, m, md) for p, m, md in entries if m == args.meter]
-        if not entries:
-            print(f"ERROR: No files with meter={args.meter}")
-            sys.exit(1)
-
-    # Apply sampling/limit (stratified_sample works on 2-tuples, adapt)
-    if args.quick:
-        # Convert to 2-tuples for stratified_sample, then restore
-        two_tuples = [(p, m) for p, m, _ in entries]
-        sampled_two = stratified_sample(two_tuples, n=100)
-        sampled_set = {(str(p), m) for p, m in sampled_two}
-        entries = [(p, m, md) for p, m, md in entries if (str(p), m) in sampled_set]
-    elif args.limit > 0:
-        entries = entries[: args.limit]
-
-    split_label = args.split
-    if args.quick:
-        split_label = "tuning (quick)"
+def run_eval(
+    dataset: str,
+    split: str,
+    entries: list[tuple[Path, int, dict[int, float] | None]],
+    classes: list[int],
+    n_workers: int = 0,
+    verbose: bool = False,
+    model_label: str = "",
+) -> tuple[int, int, Counter, Counter, list[dict], float]:
+    """Run evaluation on a list of entries. Returns (correct, total, correct_by_class, total_by_class, file_results, elapsed)."""
 
     class_dist = Counter(m for _, m, _ in entries)
     dist_str = ", ".join(f"{m}/x: {class_dist[m]}" for m in sorted(class_dist))
 
-    # Set env vars for meter model selection (passed to worker subprocesses)
-    if args.model == "arbiter":
-        os.environ["METER_MODEL"] = "arbiter"
-    elif args.model == "meternet":
-        os.environ["METER_MODEL"] = "meternet"
-    if args.checkpoint:
-        os.environ["METER_NET_CHECKPOINT"] = args.checkpoint
-    if args.onset_checkpoint:
-        os.environ["ONSET_MLP_CHECKPOINT"] = args.onset_checkpoint
-
-    n_workers = args.workers
-    model_label = f" [{args.model}]" if args.model != "auto" else ""
-    if args.checkpoint:
-        model_label += f" [{Path(args.checkpoint).name}]"
-    if args.onset_checkpoint:
-        model_label += f" [onset:{Path(args.onset_checkpoint).name}]"
     mode_str = f"{n_workers} workers" if n_workers > 0 else "in-process"
-
     print(flush=True)
     print(f"  {'─' * 56}", flush=True)
-    print(f"  {args.dataset.upper()} {split_label}  |  {len(entries)} files  |  {mode_str}{model_label}", flush=True)
+    print(f"  {dataset.upper()} {split}  |  {len(entries)} files  |  {mode_str}{model_label}", flush=True)
     print(f"  {dist_str}", flush=True)
     print(f"  {'─' * 56}", flush=True)
     print(flush=True)
@@ -447,7 +429,6 @@ def main():
     n_multilabel_ok = 0
 
     if n_workers > 0:
-        # --- Multiprocess mode ---
         print(f"  Starting {n_workers} workers...", flush=True)
         valid_classes_json = json.dumps(classes)
         work_items = [
@@ -473,7 +454,7 @@ def main():
                         n_multilabel_ok += 1
                 file_results.append(result)
 
-                if args.verbose:
+                if verbose:
                     status = "OK  " if result["ok"] else "FAIL"
                     pred_str = f"{result['predicted']}/x" if result["predicted"] else "None"
                     ml_tag = " [multi]" if result.get("multilabel") else ""
@@ -483,7 +464,6 @@ def main():
                 pbar.set_postfix_str(pct)
 
     else:
-        # --- In-process mode ---
         print("  Loading engine...", flush=True)
         import torch
         from beatmeter.analysis.cache import AnalysisCache
@@ -516,12 +496,11 @@ def main():
                     predicted = None
                     bpm = None
             except Exception as e:
-                if args.verbose:
+                if verbose:
                     tqdm.write(f"  ERR  {fname}: {e}")
                 predicted = None
                 bpm = None
 
-            # Multi-label match: if meters_dict has >1 entry, matching any GT meter counts
             if meters_dict and len(meters_dict) > 1 and predicted is not None:
                 ok = predicted in meters_dict
             else:
@@ -546,7 +525,7 @@ def main():
                 "multilabel": meters_dict if is_multilabel else None,
             })
 
-            if args.verbose:
+            if verbose:
                 status = "OK  " if ok else "FAIL"
                 pred_str = f"{predicted}/x" if predicted else "None"
                 ml_tag = " [multi]" if is_multilabel else ""
@@ -555,46 +534,317 @@ def main():
             pct = f"{correct}/{total} ({correct/total*100:.0f}%)" if total > 0 else "0/0"
             pbar.set_postfix_str(pct)
 
-    # Summary
     elapsed = time.time() - t0
 
     print_summary(
         correct, total, correct_by_class, total_by_class,
-        classes, elapsed, args.dataset, split_label, len(entries),
+        classes, elapsed, dataset, split, len(entries),
     )
 
-    # Multi-label stats
     if n_multilabel > 0:
         print(f"\n  Multi-label (polyrhythmic): {n_multilabel_ok}/{n_multilabel} matched"
               f" ({_pct(n_multilabel_ok, n_multilabel)})", flush=True)
 
-    # Regression detection vs last saved run
+    return correct, total, correct_by_class, total_by_class, file_results, elapsed
+
+
+# ---------------------------------------------------------------------------
+# Entry loading helper
+# ---------------------------------------------------------------------------
+
+
+def _load_entries(
+    dataset: str,
+    split: str,
+    data_dir: Path | None = None,
+    meter: int = 0,
+    quick: bool = False,
+    limit: int = 0,
+) -> tuple[list[tuple[Path, int, dict[int, float] | None]], str]:
+    """Load and filter entries for a dataset. Returns (entries, split_label)."""
+    ds_config = DATASETS[dataset]
+    resolved_dir = (data_dir or ds_config["data_dir"]).resolve()
+    loader = ds_config["loader"]
+
+    raw_entries = loader(resolved_dir, split)
+    if not raw_entries:
+        print(f"ERROR: No entries found for split '{split}' in {resolved_dir}")
+        sys.exit(1)
+
+    entries: list[tuple[Path, int, dict[int, float] | None]] = []
+    for e in raw_entries:
+        if len(e) == 2:
+            entries.append((e[0], e[1], None))
+        else:
+            entries.append(e)
+
+    if meter > 0:
+        entries = [(p, m, md) for p, m, md in entries if m == meter]
+
+    split_label = split
+    if quick:
+        two_tuples = [(p, m) for p, m, _ in entries]
+        sampled_two = stratified_sample(two_tuples, n=100)
+        sampled_set = {(str(p), m) for p, m in sampled_two}
+        entries = [(p, m, md) for p, m, md in entries if (str(p), m) in sampled_set]
+        split_label = f"{split} (quick)"
+    elif limit > 0:
+        entries = entries[:limit]
+
+    return entries, split_label
+
+
+# ---------------------------------------------------------------------------
+# Promote flow
+# ---------------------------------------------------------------------------
+
+
+def _run_promote(args):
+    """Evaluate a checkpoint on both datasets and optionally promote to meter_net.pt."""
+    ckpt_path = Path(args.promote)
+    prod_path = PROJECT_ROOT / "data" / "meter_net.pt"
+    prev_path = PROJECT_ROOT / "data" / "meter_net.prev.pt"
+
+    if not ckpt_path.exists():
+        print(f"ERROR: Checkpoint not found: {ckpt_path}")
+        sys.exit(1)
+
+    # Use candidate checkpoint for evaluation
+    os.environ["METER_NET_CHECKPOINT"] = str(ckpt_path.resolve())
+    model_label = f" [{ckpt_path.name}]"
+
+    print(f"  === PROMOTE MODE: evaluating {ckpt_path} ===\n")
+
+    snapshots: dict[str, dict] = {}
+    for ds_name in ["wikimeter", "meter2800"]:
+        ds_cfg = DATASETS[ds_name]
+        ds_split = ds_cfg["default_split"]
+        ds_classes = ds_cfg["classes"]
+
+        entries, split_label = _load_entries(ds_name, ds_split)
+        correct, total, correct_by_class, total_by_class, file_results, elapsed = run_eval(
+            ds_name, split_label, entries, ds_classes, args.workers, args.verbose, model_label,
+        )
+        snapshots[ds_name] = _build_dataset_snapshot(
+            correct, total, correct_by_class, total_by_class,
+            ds_classes, elapsed, ds_name, ds_split, file_results,
+        )
+
+    # Compare with baseline
     previous = load_latest_run()
-    current_by_class = {
-        m: (correct_by_class[m], total_by_class[m]) for m in classes if total_by_class[m] > 0
-    }
-    regressions = detect_regressions(current_by_class, previous)
-    if regressions:
-        print(f"\n  REGRESSIONS DETECTED ({len(regressions)}):")
-        for msg in regressions:
+    has_baseline = previous is not None
+
+    any_warning = False
+    for ds_name in ["wikimeter", "meter2800"]:
+        snap = snapshots[ds_name]
+        baseline = _get_dataset_baseline(previous, ds_name)
+        if baseline is None:
+            continue
+
+        ds_classes = DATASETS[ds_name]["classes"]
+        cur_correct = snap["correct"]
+        cur_total = snap["total"]
+        prev_correct = baseline.get("correct", 0)
+        prev_total = baseline.get("total", 0)
+
+        print(f"\n  {ds_name.upper()} comparison:")
+        print(f"    Previous: {prev_correct}/{prev_total} ({_pct(prev_correct, prev_total)})")
+        print(f"    New:      {cur_correct}/{cur_total} ({_pct(cur_correct, cur_total)})")
+
+        if cur_correct < prev_correct and cur_total >= prev_total:
+            print(f"    WARNING: overall regression ({prev_correct} -> {cur_correct})")
+            any_warning = True
+
+        # Per-class diff
+        prev_by_class = baseline.get("per_class", {})
+        for m_str, prev_data in sorted(prev_by_class.items(), key=lambda x: int(x[0])):
+            m = int(m_str)
+            pc = prev_data["correct"]
+            pt = prev_data["total"]
+            nc = snap["per_class"].get(m_str, {}).get("correct", 0)
+            nt = snap["per_class"].get(m_str, {}).get("total", 0)
+            diff = nc - pc
+            if diff != 0:
+                sign = "+" if diff > 0 else ""
+                marker = "  WARNING" if diff < -3 else ""
+                if diff < -3:
+                    any_warning = True
+                print(f"    {m}/x: {pc}/{pt} -> {nc}/{nt} ({sign}{diff}){marker}")
+
+    # Decide whether to promote
+    if has_baseline and any_warning:
+        print("\n  Warnings detected (see above).")
+
+    if not has_baseline:
+        print("\n  No baseline found — promoting without comparison.")
+
+    if not args.force:
+        try:
+            answer = input("\n  Promote? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer and answer != "y":
+            print("  Aborted.")
+            sys.exit(1)
+
+    # Backup + promote
+    if prod_path.exists():
+        shutil.copy2(prod_path, prev_path)
+    shutil.copy2(ckpt_path, prod_path)
+
+    save_combined_run(snapshots)
+
+    print(f"\n  Promoted {ckpt_path.name} -> meter_net.pt")
+    if prev_path.exists():
+        print(f"  Previous saved to {prev_path}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Unified evaluation for meter detection"
+    )
+    parser.add_argument(
+        "dataset",
+        nargs="?",
+        default="wikimeter",
+        choices=list(DATASETS.keys()),
+        help="Dataset to evaluate on (default: wikimeter)",
+    )
+    parser.add_argument("--data-dir", type=Path, default=None,
+                        help="Override dataset data directory")
+    parser.add_argument(
+        "--split",
+        default=None,
+        help="Data split (default: test). Use 'tuning' for dev.",
+    )
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Max files (0=all, default=0)")
+    parser.add_argument("--quick", action="store_true",
+                        help="Stratified 100 from tuning split")
+    parser.add_argument("--meter", type=int, default=0,
+                        help="Filter by meter class (3, 4, 5, 7, 9, 11)")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="Number of worker processes (0=in-process, default=0)")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--save", action="store_true",
+                        help="Run BOTH datasets and save combined baseline")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Custom MeterNet checkpoint path")
+    parser.add_argument("--promote", type=str, default=None, metavar="CHECKPOINT",
+                        help="Evaluate checkpoint on both datasets and promote to "
+                             "meter_net.pt if approved")
+    parser.add_argument("--force", action="store_true",
+                        help="Skip interactive confirmation for --promote")
+    args = parser.parse_args()
+
+    # --- Promote mode ---
+    if args.promote:
+        _run_promote(args)
+        return
+
+    # Set env vars for meter model selection
+    if args.checkpoint:
+        os.environ["METER_NET_CHECKPOINT"] = args.checkpoint
+
+    model_label = ""
+    if args.checkpoint:
+        model_label = f" [{Path(args.checkpoint).name}]"
+
+    ds_config = DATASETS[args.dataset]
+    split = args.split or ds_config["default_split"]
+
+    if args.quick:
+        split = "tuning"
+
+    # Validate split
+    if split not in ds_config["splits"]:
+        print(f"ERROR: Invalid split '{split}' for {args.dataset}. "
+              f"Valid: {ds_config['splits']}")
+        sys.exit(1)
+
+    # --- Normal (single dataset) eval ---
+    if not args.save:
+        entries, split_label = _load_entries(
+            args.dataset, split, args.data_dir, args.meter, args.quick, args.limit,
+        )
+        classes = ds_config["classes"]
+
+        correct, total, correct_by_class, total_by_class, file_results, elapsed = run_eval(
+            args.dataset, split_label, entries, classes, args.workers, args.verbose, model_label,
+        )
+
+        # Regression detection
+        previous = load_latest_run()
+        baseline = _get_dataset_baseline(previous, args.dataset)
+        current_by_class = {
+            m: (correct_by_class[m], total_by_class[m]) for m in classes if total_by_class[m] > 0
+        }
+        regressions = detect_regressions(current_by_class, baseline)
+        if regressions:
+            print(f"\n  REGRESSIONS DETECTED ({len(regressions)}):")
+            for msg in regressions:
+                print(msg)
+        elif baseline:
+            prev_correct = baseline.get("correct", 0)
+            prev_total = baseline.get("total", 0)
+            prev_bal = baseline.get("balanced_accuracy", 0)
+            print(
+                f"\n  vs last saved: {prev_correct}/{prev_total}"
+                f" ({_pct(prev_correct, prev_total)}, bal={prev_bal}%)"
+            )
+
+        if regressions:
+            sys.exit(1)
+        return
+
+    # --- Save mode: run BOTH datasets ---
+    print("  === SAVE MODE: evaluating both datasets ===\n")
+    snapshots: dict[str, dict] = {}
+    all_regressions: list[str] = []
+    previous = load_latest_run()
+
+    for ds_name in ["wikimeter", "meter2800"]:
+        ds_cfg = DATASETS[ds_name]
+        ds_split = ds_cfg["default_split"]
+        ds_classes = ds_cfg["classes"]
+
+        entries, split_label = _load_entries(ds_name, ds_split, meter=args.meter)
+
+        correct, total, correct_by_class, total_by_class, file_results, elapsed = run_eval(
+            ds_name, split_label, entries, ds_classes, args.workers, args.verbose, model_label,
+        )
+
+        snapshots[ds_name] = _build_dataset_snapshot(
+            correct, total, correct_by_class, total_by_class,
+            ds_classes, elapsed, ds_name, ds_split, file_results,
+        )
+
+        # Regression check per dataset
+        baseline = _get_dataset_baseline(previous, ds_name)
+        current_by_class = {
+            m: (correct_by_class[m], total_by_class[m]) for m in ds_classes if total_by_class[m] > 0
+        }
+        regs = detect_regressions(current_by_class, baseline)
+        if regs:
+            all_regressions.extend([f"  [{ds_name.upper()}] {r.strip()}" for r in regs])
+        elif baseline:
+            prev_c = baseline.get("correct", 0)
+            prev_t = baseline.get("total", 0)
+            prev_bal = baseline.get("balanced_accuracy", 0)
+            print(f"\n  vs last saved ({ds_name}): {prev_c}/{prev_t}"
+                  f" ({_pct(prev_c, prev_t)}, bal={prev_bal}%)")
+
+    save_combined_run(snapshots)
+
+    if all_regressions:
+        print(f"\n  REGRESSIONS DETECTED ({len(all_regressions)}):")
+        for msg in all_regressions:
             print(msg)
-    elif previous:
-        prev_correct = previous.get("correct", 0)
-        prev_total = previous.get("total", 0)
-        print(
-            f"\n  vs last saved: {prev_correct}/{prev_total}"
-            f" ({_pct(prev_correct, prev_total)})"
-        )
-
-    # Save snapshot
-    if args.save:
-        save_run(
-            file_results, correct, total, correct_by_class, total_by_class,
-            args.dataset, args.split, classes, elapsed,
-        )
-
-    # Exit code: non-zero if regressions
-    if regressions:
         sys.exit(1)
 
 

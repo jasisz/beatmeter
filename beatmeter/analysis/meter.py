@@ -1,6 +1,6 @@
 """Meter (time signature) hypothesis generation.
 
-Score combination chain: MeterNet → arbiter MLP → 4/4 fallback.
+Score combination chain: MeterNet → 4/4 fallback.
 Signal functions live in beatmeter.analysis.signals/.
 """
 
@@ -13,28 +13,24 @@ import numpy as np
 from beatmeter.analysis.models import Beat, MeterHypothesis
 from beatmeter.analysis.signals import (
     signal_downbeat_spacing,
-    signal_madmom_activation,
     signal_onset_autocorrelation,
     signal_bar_tracking,
 )
-import beatmeter.analysis.signals.onset_mlp_meter as _onset_mlp_mod
 
 logger = logging.getLogger(__name__)
 
-# Module-level capture for arbiter training.
-# After generate_hypotheses() runs, this holds the last signal details.
-last_signal_details: dict | None = None
-
 # ---------------------------------------------------------------------------
-# MeterNet inference (lazy-loaded singleton) — takes priority over arbiter
+# MeterNet inference (lazy-loaded singleton)
 # ---------------------------------------------------------------------------
 
 _meter_net_model = None
 _meter_net_meta = None  # feat_mean, feat_std, class_meters, etc.
 
 
-def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
-    """Build MeterNet model (must match MeterNet in train_meter_net.py)."""
+def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks,
+                     bottleneck=0, ac_split=1024):
+    """Build MeterNet model (must match MeterNet in scripts/training/train.py)."""
+    import torch
     import torch.nn as nn
 
     ds = dropout_scale
@@ -53,8 +49,20 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
     class MeterNetModel(nn.Module):
         def __init__(self):
             super().__init__()
+            self.bottleneck_dim = bottleneck
+            self.ac_split = ac_split
+
+            if bottleneck > 0:
+                self.ac_compress = nn.Sequential(
+                    nn.Linear(ac_split, bottleneck), nn.ReLU(),
+                )
+                proj_input = bottleneck + (input_dim - ac_split)
+            else:
+                self.ac_compress = None
+                proj_input = input_dim
+
             self.input_proj = nn.Sequential(
-                nn.Linear(input_dim, hidden), nn.BatchNorm1d(hidden), nn.ReLU(),
+                nn.Linear(proj_input, hidden), nn.BatchNorm1d(hidden), nn.ReLU(),
                 nn.Dropout(min(0.3 * ds, 0.5)),
             )
             self.residual = nn.Sequential(
@@ -68,16 +76,20 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
                 nn.Linear(h4, n_classes),
             )
         def forward(self, x):
+            if self.ac_compress is not None:
+                ac = x[:, :self.ac_split]
+                rest = x[:, self.ac_split:]
+                x = torch.cat([self.ac_compress(ac), rest], dim=1)
             return self.head(self.residual(self.input_proj(x)))
 
     return MeterNetModel()
 
 
+
 def _load_meter_net():
     """Load MeterNet checkpoint once. Returns (model, meta) or (None, None).
 
-    Respects env vars:
-      METER_MODEL=arbiter  → skip MeterNet, force arbiter path
+    Respects env var:
       METER_NET_CHECKPOINT → custom checkpoint path (default: data/meter_net.pt)
     """
     global _meter_net_model, _meter_net_meta
@@ -86,10 +98,6 @@ def _load_meter_net():
 
     import os
     import pathlib
-
-    # Allow forcing arbiter-only mode
-    if os.environ.get("METER_MODEL", "").lower() == "arbiter":
-        return None, None
 
     custom_ckpt = os.environ.get("METER_NET_CHECKPOINT")
     if custom_ckpt:
@@ -110,7 +118,9 @@ def _load_meter_net():
         ds = ckpt.get("dropout_scale", 1.0)
         n_blocks = ckpt.get("n_blocks", 1)
 
-        model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks)
+        bottleneck = ckpt.get("bottleneck", 0)
+        model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks,
+                                 bottleneck=bottleneck)
 
         # Backward compat: old checkpoints (pre-n_blocks) have "residual.block.*"
         # instead of "residual.0.block.*".
@@ -130,6 +140,7 @@ def _load_meter_net():
             "feat_std": ckpt["feat_std"],
             "class_meters": ckpt["class_meters"],
             "meter_to_idx": ckpt["meter_to_idx"],
+            "feature_version": ckpt.get("feature_version", "mn_v3"),
         }
         logger.info(
             "MeterNet loaded: dim=%d, hidden=%d, blocks=%d, classes=%d",
@@ -162,19 +173,19 @@ def _meter_net_predict(
     try:
         import torch
         from beatmeter.analysis.signals.onset_mlp_features import (
-            extract_features_v5, SR, MAX_DURATION_S,
+            extract_features_v6, SR, MAX_DURATION_S,
         )
         from beatmeter.analysis.signals.meter_net_features import (
             extract_beat_features_live,
             extract_signal_scores_live,
             extract_tempo_features_live,
-            TOTAL_FEATURES,
         )
+        from beatmeter.analysis.signals.ssm_features import extract_ssm_features_live
         import librosa
 
         t0 = time.perf_counter()
 
-        # Audio features (1361 dims) — same as onset_mlp
+        # Prepare audio
         audio_copy = audio.copy()
         max_samples = sr * MAX_DURATION_S
         if len(audio_copy) > max_samples:
@@ -183,21 +194,7 @@ def _meter_net_predict(
         if sr != SR:
             audio_copy = librosa.resample(audio_copy, orig_sr=sr, target_sr=SR)
 
-        audio_feat = extract_features_v5(audio_copy, SR)
-        if audio_feat is None:
-            return None
-
-        # Beat features (42 dims)
-        duration = len(audio) / sr
-        oet = onset_event_times if onset_event_times is not None else np.array([])
-        beat_feat = extract_beat_features_live(
-            beatnet_beats, beat_this_beats, madmom_results, oet, duration,
-        )
-
-        # Signal scores (60 dims) — 5 signals, excludes onset_mlp
-        signal_feat = extract_signal_scores_live(signal_results)
-
-        # Tempo features (4 dims)
+        # Tempo info from cache/live
         tempo_lib = 0.0
         tempo_tg = 0.0
         if cache and audio_hash:
@@ -210,12 +207,38 @@ def _meter_net_predict(
         if tempo_lib == 0 and tempo_tg == 0 and tempo_bpm:
             tempo_lib = tempo_bpm
             tempo_tg = tempo_bpm
+
+        # Audio features (v6: 1449d, tempos from internal tempogram)
+        audio_feat = extract_features_v6(audio_copy, SR)
+        if audio_feat is None:
+            return None
+
+        # Beat-synchronous chroma SSM (75 dims)
+        ssm_feat = extract_ssm_features_live(
+            audio_copy, SR, beatnet_beats, beat_this_beats, madmom_results,
+        )
+
+        # Beat features (42 dims)
+        duration = len(audio) / sr
+        oet = onset_event_times if onset_event_times is not None else np.array([])
+        beat_feat = extract_beat_features_live(
+            beatnet_beats, beat_this_beats, madmom_results, oet, duration,
+        )
+
+        # Signal scores (60 dims) — 5 signals, excludes onset_mlp
+        signal_feat = extract_signal_scores_live(signal_results)
+
+        # Tempo features (4 dims)
         tempo_feat = extract_tempo_features_live(tempo_lib, tempo_tg)
 
         # Concatenate
-        full_feat = np.concatenate([audio_feat, beat_feat, signal_feat, tempo_feat])
-        if full_feat.shape[0] != TOTAL_FEATURES:
-            logger.warning("MeterNet feature dim mismatch: %d != %d", full_feat.shape[0], TOTAL_FEATURES)
+        full_feat = np.concatenate([
+            audio_feat, ssm_feat,
+            beat_feat, signal_feat, tempo_feat,
+        ])
+        expected_dim = len(meta["feat_mean"])
+        if full_feat.shape[0] != expected_dim:
+            logger.warning("MeterNet feature dim mismatch: %d != %d", full_feat.shape[0], expected_dim)
             return None
 
         # Standardize
@@ -257,126 +280,6 @@ def _meter_net_predict(
     except Exception as e:
         logger.warning("MeterNet prediction failed: %s", e)
         return None
-
-
-# ---------------------------------------------------------------------------
-# Arbiter MLP inference (lazy-loaded singleton)
-# ---------------------------------------------------------------------------
-
-_arbiter_model = None
-_arbiter_meta = None  # feat_mean, feat_std, signal_names, meter_keys, class_meters
-
-
-def _load_arbiter():
-    """Load arbiter checkpoint once. Returns (model, meta) or (None, None)."""
-    global _arbiter_model, _arbiter_meta
-    if _arbiter_model is not None:
-        return _arbiter_model, _arbiter_meta
-
-    import pathlib
-    ckpt_path = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "meter_arbiter.pt"
-    if not ckpt_path.exists():
-        return None, None
-
-    try:
-        import torch
-        import torch.nn as nn
-
-        ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
-        n_feat = ckpt["total_features"]
-        n_cls = ckpt["n_classes"]
-
-        model = nn.Sequential(
-            nn.Linear(n_feat, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU(), nn.Dropout(0.15),
-            nn.Linear(32, n_cls),
-        )
-        model.load_state_dict(ckpt["model_state"])
-        model.eval()
-
-        _arbiter_model = model
-        _arbiter_meta = {
-            "feat_mean": ckpt["feat_mean"],
-            "feat_std": ckpt["feat_std"],
-            "signal_names": ckpt["signal_names"],
-            "meter_keys": ckpt["meter_keys"],
-            "class_meters": ckpt["class_meters"],
-            "sharpening": ckpt.get("sharpening", {}),
-        }
-        logger.info(f"Arbiter loaded: {n_feat} features, {n_cls} classes")
-        return _arbiter_model, _arbiter_meta
-    except Exception as e:
-        logger.warning(f"Failed to load arbiter: {e}")
-        return None, None
-
-
-def _arbiter_predict(signal_results: dict) -> dict[tuple[int, int], float] | None:
-    """Run arbiter inference on signal results. Returns meter scores or None."""
-    model, meta = _load_arbiter()
-    if model is None:
-        return None
-
-    import torch
-
-    sig_names = meta["signal_names"]
-    meter_keys = meta["meter_keys"]
-    class_meters = meta["class_meters"]
-    feat_mean = meta["feat_mean"]
-    feat_std = meta["feat_std"]
-    sharpening = meta.get("sharpening", {})
-
-    n_signals = len(sig_names)
-    n_meters = len(meter_keys)
-
-    # Build feature vector (same layout as training)
-    x = np.zeros(n_signals * n_meters, dtype=np.float32)
-    for s_idx, sig_name in enumerate(sig_names):
-        if sig_name in signal_results:
-            sig_scores = signal_results[sig_name]
-            alpha = sharpening.get(sig_name, 1.0)
-            raw = []
-            for m_idx, meter_key in enumerate(meter_keys):
-                num, den = meter_key.split("_")
-                tup_key = (int(num), int(den))
-                raw.append(sig_scores.get(tup_key, 0.0))
-
-            if alpha != 1.0:
-                arr = np.array(raw)
-                if arr.max() > 0:
-                    arr = arr ** alpha
-                    arr /= arr.max()
-                for m_idx, val in enumerate(arr):
-                    x[s_idx * n_meters + m_idx] = val
-            else:
-                for m_idx, val in enumerate(raw):
-                    x[s_idx * n_meters + m_idx] = val
-
-    # Standardize
-    x = (x - feat_mean) / feat_std
-
-    # Inference
-    with torch.no_grad():
-        logits = model(torch.tensor(x).unsqueeze(0))
-        probs = torch.sigmoid(logits).squeeze(0).numpy()
-
-    # Convert to meter scores
-    scores: dict[tuple[int, int], float] = {}
-    for cls_idx, meter_num in enumerate(class_meters):
-        prob = float(probs[cls_idx])
-        if prob < 0.01:
-            continue
-        best_den = None
-        best_sig_score = -1.0
-        for sig_scores in signal_results.values():
-            for (num, den), sc in sig_scores.items():
-                if num == meter_num and sc > best_sig_score:
-                    best_sig_score = sc
-                    best_den = den
-        if best_den is None:
-            best_den = 4 if meter_num <= 7 else 8
-        scores[(meter_num, best_den)] = prob
-
-    return scores
 
 
 # Meter descriptions for musicians
@@ -421,12 +324,8 @@ def _get_grouping(num: int, den: int) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Signal collection — always compute signals needed by MeterNet/arbiter
+# Signal collection — compute signals needed by MeterNet
 # ---------------------------------------------------------------------------
-
-# Signals needed by MeterNet (60 dims) and arbiter (72 dims)
-_ARBITER_SIGNALS = {"beatnet", "beat_this", "autocorr", "bar_tracking", "hcdf", "onset_mlp"}
-_METER_NET_SIGNALS = {"beatnet", "beat_this", "autocorr", "bar_tracking", "hcdf"}
 
 
 def _collect_signal_scores(
@@ -440,7 +339,6 @@ def _collect_signal_scores(
     audio: np.ndarray | None,
     beat_this_beats: list[Beat] | None,
     skip_bar_tracking: bool,
-    skip_onset_mlp: bool = False,
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
@@ -478,14 +376,6 @@ def _collect_signal_scores(
         if s1b:
             signal_results["beat_this"] = s1b
 
-    # Signal 2: madmom activation scoring
-    s2 = _try_cache("madmom_activation")
-    if s2 is None:
-        s2 = signal_madmom_activation(madmom_results, onset_times, onset_strengths)
-        _save_cache("madmom_activation", s2)
-    if s2:
-        signal_results["madmom"] = s2
-
     # Signal 3: onset autocorrelation
     if len(onset_times) > 0:
         s3 = _try_cache("onset_autocorr")
@@ -513,15 +403,6 @@ def _collect_signal_scores(
         hcdf = _try_cache("hcdf_meter")
         if hcdf:
             signal_results["hcdf"] = hcdf
-
-    # Signal 9: Onset MLP meter classifier
-    if not skip_onset_mlp and audio is not None:
-        s9 = _try_cache("onset_mlp_meter")
-        if s9 is None:
-            s9 = _onset_mlp_mod.signal_onset_mlp_meter(audio, sr)
-            _save_cache("onset_mlp_meter", s9)
-        if s9:
-            signal_results["onset_mlp"] = s9
 
     return signal_results
 
@@ -605,15 +486,12 @@ def generate_hypotheses(
     beat_this_alignment: float = 0.0,
     onset_event_times: np.ndarray | None = None,
     skip_bar_tracking: bool = False,
-    skip_resnet: bool = False,
-    skip_mert: bool = False,
-    skip_onset_mlp: bool = False,
     cache=None,
     audio_hash: str | None = None,
     tmp_path: str | None = None,
-    return_signal_details: bool = False,
-) -> tuple[list[MeterHypothesis], float] | tuple[list[MeterHypothesis], float, dict]:
-    """Generate meter hypotheses. MeterNet → arbiter → 4/4 fallback."""
+    audio_file_path: str | None = None,
+) -> tuple[list[MeterHypothesis], float]:
+    """Generate meter hypotheses. MeterNet → 4/4 fallback."""
     # Beat interval from tempo
     beat_interval = None
     if tempo_bpm and tempo_bpm > 0:
@@ -626,36 +504,17 @@ def generate_hypotheses(
 
     beat_times = np.array([b.time for b in all_beats]) if all_beats else np.array([])
 
-    # Check which models are available
-    meter_net_model, _ = _load_meter_net()
-    arbiter_model, _ = _load_arbiter()
-
-    # When MeterNet is active, skip onset_mlp signal (MeterNet computes
-    # the same audio features internally, and doesn't use onset_mlp scores)
-    effective_skip_onset_mlp = skip_onset_mlp or (meter_net_model is not None)
-
-    # Collect signal scores (needed by MeterNet for 60-dim signal features,
-    # and by arbiter for 72-dim feature vector)
+    # Collect signal scores (needed by MeterNet for 60-dim signal features)
     signal_results = _collect_signal_scores(
         beatnet_beats, madmom_results,
         onset_times, onset_strengths, beat_interval, beat_times,
         sr, audio, beat_this_beats, skip_bar_tracking,
-        effective_skip_onset_mlp,
         cache=cache, audio_hash=audio_hash, tmp_path=tmp_path,
     )
 
-    # Capture signal details for training scripts
-    global last_signal_details
-    last_signal_details = {
-        "signal_results": {
-            sig: {f"{k[0]}_{k[1]}": v for k, v in scores.items()}
-            for sig, scores in signal_results.items()
-        },
-        "tempo_bpm": tempo_bpm,
-    }
-
-    # Score combination: MeterNet → arbiter → 4/4 fallback
+    # Score combination: MeterNet → 4/4 fallback
     meter_net_scores = None
+    meter_net_model, _ = _load_meter_net()
     if meter_net_model is not None and audio is not None:
         # Try cache first
         if cache and audio_hash:
@@ -675,33 +534,20 @@ def generate_hypotheses(
             if meter_net_scores and cache and audio_hash:
                 cache.save_signal(audio_hash, "meter_net", meter_net_scores)
 
-    arbiter_scores = _arbiter_predict(signal_results) if meter_net_scores is None else None
-
     if meter_net_scores is not None:
         all_scores = meter_net_scores
         logger.debug("Using MeterNet for meter scoring")
-    elif arbiter_scores is not None:
-        all_scores = arbiter_scores
-        logger.debug("Using arbiter MLP for meter scoring")
     else:
         all_scores = {}
 
     if not all_scores:
-        fallback = ([MeterHypothesis(
+        return [MeterHypothesis(
             numerator=4, denominator=4, confidence=0.3,
             description=_get_description(4, 4),
-        )], 1.0)
-        if return_signal_details:
-            return fallback[0], fallback[1], last_signal_details
-        return fallback
+        )], 1.0
 
     # Format hypotheses
-    hypotheses, ambiguity = _format_hypotheses(all_scores, max_hypotheses)
-
-    if return_signal_details:
-        return hypotheses, ambiguity, last_signal_details
-
-    return hypotheses, ambiguity
+    return _format_hypotheses(all_scores, max_hypotheses)
 
 
 # Disambiguation hint keys for ambiguous meter pairs.

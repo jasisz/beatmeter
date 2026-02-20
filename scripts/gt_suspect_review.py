@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
-"""Generate HTML review page for potential GT label errors in METER2800 test set."""
+"""Generate HTML review page for potential GT label errors.
 
+Uses the full analysis pipeline (MeterNet) to find files where the model
+disagrees with ground truth labels. Generates an interactive HTML page
+for listening and verdict annotation.
+
+Criteria: ≤1 signal agrees with GT, MeterNet confidence >60%.
+
+Usage:
+    uv run python scripts/gt_suspect_review.py
+    uv run python scripts/gt_suspect_review.py --dataset wikimeter
+    uv run python scripts/gt_suspect_review.py --limit 50
+"""
+
+import argparse
 import json
 import re
 import sys
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.utils import load_meter2800_entries, resolve_audio_path
+from scripts.utils import load_meter2800_entries, load_wikimeter_entries
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data" / "meter2800"
-DATASET_DIR = PROJECT_ROOT / "data" / "arbiter_dataset"
 OUT_HTML = PROJECT_ROOT / "data" / "gt_suspects.html"
 OUT_ZIP = PROJECT_ROOT / "data" / "gt_suspects.zip"
 
-SIGNAL_NAMES = ["beatnet", "beat_this", "autocorr", "bar_tracking", "onset_mlp", "hcdf"]
+# Signals displayed in the review UI (MeterNet inputs)
+SIGNAL_NAMES = ["beatnet", "beat_this", "autocorr", "bar_tracking", "hcdf"]
 
-
-def load_test_labels():
-    """Load ground truth for test split with corrections applied."""
-    labels = {}
-    fname_to_path = {}
-    for audio_path, meter in load_meter2800_entries(DATA_DIR, "test"):
-        labels[audio_path.name] = meter
-        fname_to_path[audio_path.name] = audio_path
-    return labels, fname_to_path
+WIKIMETER_DIR = PROJECT_ROOT / "data" / "wikimeter"
 
 
 def get_signal_top_meter(sig_scores):
@@ -45,18 +49,15 @@ def get_signal_top_meter(sig_scores):
     return best_num, by_num[best_num]
 
 
-WIKIMETER_DIR = PROJECT_ROOT / "data" / "wikimeter"
+# ---------------------------------------------------------------------------
+# WIKIMETER multi-label support
+# ---------------------------------------------------------------------------
 
-# Map WIKIMETER meter label → numerator used in METER2800 classes
 WIKIMETER_METER_MAP = {3: 3, 4: 4, 5: 5, 7: 7, 9: 9, 11: 11}
 
 
 def _load_wikimeter_multilabel() -> dict[str, dict[int, float]]:
-    """Load multi-label meters from wikimeter.json, keyed by segment stem prefix.
-
-    Returns dict: song_stem -> {meter_num: weight}, e.g.
-      "fela_kuti_water_no_get_enemy" -> {3: 0.6, 4: 1.0}
-    """
+    """Load multi-label meters from wikimeter.json, keyed by segment stem prefix."""
     catalog_path = PROJECT_ROOT / "scripts" / "setup" / "wikimeter.json"
     if not catalog_path.exists():
         return {}
@@ -69,7 +70,6 @@ def _load_wikimeter_multilabel() -> dict[str, dict[int, float]]:
         meters = song.get("meters", {})
         if not isinstance(meters, dict) or not meters:
             continue
-        # Reproduce sanitize_filename from download_wikimeter.py
         name = f"{song['artist']}_{song['title']}".lower()
         name = re.sub(r"[^\w\s-]", "", name)
         name = re.sub(r"[\s]+", "_", name)
@@ -85,106 +85,110 @@ def _segment_stem_to_song_stem(segment_fname: str) -> str | None:
     return m.group(1) if m else None
 
 
-def load_wikimeter_labels():
-    """Load WIKIMETER labels from tuning dataset entries with _seg in name."""
-    labels = {}
-    fname_to_path = {}
-    # Read from tuning.json (WIKIMETER entries are mixed in when --extra-data)
-    tuning_path = DATASET_DIR / "tuning.json"
-    if not tuning_path.exists():
-        return labels, fname_to_path
-    with open(tuning_path) as f:
-        dataset = json.load(f)
-    for entry in dataset:
-        fname = entry["fname"]
-        if "_seg" not in fname:
-            continue
-        meter = entry.get("expected") or entry.get("meter")
-        if meter is None:
-            continue
-        audio_path = WIKIMETER_DIR / "audio" / fname
-        if audio_path.exists():
-            labels[fname] = meter
-            fname_to_path[fname] = audio_path
-    return labels, fname_to_path
+# ---------------------------------------------------------------------------
+# Signal score loading from LMDB cache
+# ---------------------------------------------------------------------------
+
+# Map from display name → cache signal name
+_SIGNAL_CACHE_MAP = {
+    "beatnet": "beatnet_spacing",
+    "beat_this": "beat_this_spacing",
+    "autocorr": "onset_autocorr",
+    "bar_tracking": "bar_tracking",
+    "hcdf": "hcdf_meter",
+}
 
 
-def _load_arbiter():
-    """Load arbiter model and checkpoint data."""
+def _load_signal_scores(cache, audio_hash: str) -> dict[str, dict[str, float]]:
+    """Load all signal scores from cache for a file."""
+    results = {}
+    for display_name, cache_name in _SIGNAL_CACHE_MAP.items():
+        raw = cache.load_signal(audio_hash, cache_name)
+        if raw:
+            results[display_name] = raw
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Suspect detection via analysis engine
+# ---------------------------------------------------------------------------
+
+
+def _run_predictions(entries, cache, engine, limit=0):
+    """Run MeterNet predictions for all entries. Returns list of result dicts."""
     import torch
-    import torch.nn as nn
-    ckpt = torch.load(PROJECT_ROOT / "data" / "meter_arbiter.pt", weights_only=False, map_location="cpu")
 
-    n_feat = ckpt["total_features"]
-    n_cls = ckpt["n_classes"]
-    model = nn.Sequential(
-        nn.Linear(n_feat, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.2),
-        nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU(), nn.Dropout(0.15),
-        nn.Linear(32, n_cls),
-    )
-    model.load_state_dict(ckpt["model_state"])
-    model.eval()
-    return model, ckpt
+    results = []
+    total = len(entries)
+    if limit > 0:
+        entries = entries[:limit]
+        total = len(entries)
+
+    for i, (audio_path, gt_meter) in enumerate(entries):
+        fname = audio_path.name
+        ah = cache.audio_hash(str(audio_path))
+
+        try:
+            with torch.inference_mode():
+                result = engine.analyze_file(str(audio_path), skip_sections=True)
+
+            if result and result.meter_hypotheses:
+                hyps = result.meter_hypotheses
+                pred_meter = hyps[0].numerator
+                pred_conf = hyps[0].confidence
+                # All hypothesis probabilities
+                all_probs = {h.numerator: h.confidence for h in hyps}
+            else:
+                pred_meter = None
+                pred_conf = 0.0
+                all_probs = {}
+        except Exception as e:
+            print(f"  ERR {fname}: {e}", flush=True)
+            pred_meter = None
+            pred_conf = 0.0
+            all_probs = {}
+
+        # Load signal scores from cache
+        sig_scores = _load_signal_scores(cache, ah)
+
+        results.append({
+            "fname": fname,
+            "fpath": audio_path,
+            "gt": gt_meter,
+            "pred": pred_meter,
+            "pred_conf": pred_conf,
+            "all_probs": all_probs,
+            "sig_scores": sig_scores,
+        })
+
+        if (i + 1) % 50 == 0:
+            print(f"  {i+1}/{total}", flush=True)
+
+    return results
 
 
-def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_name, wm_multilabel=None):
-    """Find suspect files for a given set of labels."""
-    import torch
-    class_meters = ckpt["class_meters"]
-    feat_mean = ckpt["feat_mean"]
-    feat_std = ckpt["feat_std"]
-    sharpening = ckpt.get("sharpening", {})
-    signal_names = ckpt["signal_names"]
-    meter_keys = ckpt["meter_keys"]
-    n_signals = len(signal_names)
-    n_meters = len(meter_keys)
-
+def build_suspects_from(results, dataset_name, wm_multilabel=None):
+    """Find suspect files from prediction results."""
     suspects = []
-    for fname, gt_meter in labels.items():
-        entry = by_fname.get(fname)
-        if entry is None:
+
+    for r in results:
+        if r["pred"] is None:
             continue
 
-        if gt_meter not in class_meters:
-            continue
+        gt_meter = r["gt"]
+        pred_meter = r["pred"]
+        pred_conf = r["pred_conf"]
 
-        sig_results = entry["signal_results"]
-        x = np.zeros(n_signals * n_meters, dtype=np.float32)
-        for s_idx, sig_name in enumerate(signal_names):
-            if sig_name in sig_results:
-                alpha = sharpening.get(sig_name, 1.0)
-                raw = [sig_results[sig_name].get(mk, 0.0) for mk in meter_keys]
-                if alpha != 1.0:
-                    arr = np.array(raw)
-                    if arr.max() > 0:
-                        arr = arr ** alpha
-                        arr /= arr.max()
-                    for m_idx, val in enumerate(arr):
-                        x[s_idx * n_meters + m_idx] = val
-                else:
-                    for m_idx, val in enumerate(raw):
-                        x[s_idx * n_meters + m_idx] = val
-
-        x_std = (x - feat_mean) / feat_std
-        with torch.no_grad():
-            logits = model(torch.tensor(x_std).unsqueeze(0))
-            probs = torch.sigmoid(logits).squeeze(0).numpy()
-
-        pred_idx = int(probs.argmax())
-        pred_meter = class_meters[pred_idx]
-        pred_conf = float(probs[pred_idx])
-        gt_class_idx = class_meters.index(gt_meter)
-        gt_prob = float(probs[gt_class_idx])
-
+        # Signal votes
         sig_votes = {}
-        sig_full = {}  # full per-numerator scores for multi-label display
+        sig_full = {}
         for sig_name in SIGNAL_NAMES:
-            if sig_name in sig_results:
-                top_m, top_s = get_signal_top_meter(sig_results[sig_name])
+            if sig_name in r["sig_scores"]:
+                scores = r["sig_scores"][sig_name]
+                top_m, top_s = get_signal_top_meter(scores)
                 sig_votes[sig_name] = (top_m, top_s)
-                # Aggregate by numerator: keep max score per numerator
                 by_num = defaultdict(float)
-                for key, score in sig_results[sig_name].items():
+                for key, score in scores.items():
                     num = int(key.split("_")[0])
                     by_num[num] = max(by_num[num], score)
                 sig_full[sig_name] = dict(sorted(by_num.items(), key=lambda x: -x[1])[:3])
@@ -194,17 +198,12 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
 
         gt_agreement = sum(1 for m, _ in sig_votes.values() if m == gt_meter)
 
-        # All class probabilities
-        all_probs = {class_meters[i]: float(probs[i]) for i in range(len(class_meters))}
-
-        # GT multi-label lookup from wikimeter.json
+        # GT multi-label lookup
         gt_meters = None
         if wm_multilabel:
-            song_stem = _segment_stem_to_song_stem(fname)
+            song_stem = _segment_stem_to_song_stem(r["fname"])
             if song_stem and song_stem in wm_multilabel:
                 gt_meters = wm_multilabel[song_stem]
-
-        is_polymetric = gt_meters is not None and len(gt_meters) > 1
 
         # Skip if prediction matches any GT label (multi-label aware)
         pred_matches_gt = pred_meter == gt_meter or (
@@ -212,18 +211,18 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
         )
         if not pred_matches_gt and gt_agreement <= 1 and pred_conf > 0.6:
             suspects.append({
-                "fname": fname,
-                "fpath": fname_to_path[fname],
+                "fname": r["fname"],
+                "fpath": r["fpath"],
                 "gt": gt_meter,
                 "pred": pred_meter,
                 "pred_conf": pred_conf,
-                "gt_prob": gt_prob,
+                "gt_prob": r["all_probs"].get(gt_meter, 0.0),
                 "gt_agreement": gt_agreement,
                 "sig_votes": sig_votes,
                 "sig_full": sig_full,
                 "dataset": dataset_name,
-                "all_probs": all_probs,
-                "polymetric": is_polymetric,
+                "all_probs": r["all_probs"],
+                "polymetric": gt_meters is not None and len(gt_meters) > 1,
                 "gt_meters": gt_meters,
             })
 
@@ -231,34 +230,43 @@ def build_suspects_from(labels, fname_to_path, by_fname, model, ckpt, dataset_na
     return suspects
 
 
-def build_suspects():
-    model, ckpt = _load_arbiter()
+def build_suspects(datasets, limit=0):
+    """Run pipeline and find GT suspects across datasets."""
+    import torch
+    from beatmeter.analysis.cache import AnalysisCache
+    from beatmeter.analysis.engine import AnalysisEngine
 
-    # Merge all arbiter dataset JSONs
-    by_fname = {}
-    for json_name in ["test.json", "tuning.json"]:
-        path = DATASET_DIR / json_name
-        if path.exists():
-            for entry in json.load(open(path)):
-                by_fname[entry["fname"]] = entry
-
-    # Load WIKIMETER multi-label ground truth from catalog
+    cache = AnalysisCache()
+    engine = AnalysisEngine(cache=cache)
     wm_multilabel = _load_wikimeter_multilabel()
 
-    # METER2800 test
-    m2800_labels, m2800_paths = load_test_labels()
-    m2800_suspects = build_suspects_from(m2800_labels, m2800_paths, by_fname, model, ckpt, "meter2800")
+    all_suspects = []
 
-    # WIKIMETER
-    wm_labels, wm_paths = load_wikimeter_labels()
-    wm_suspects = build_suspects_from(wm_labels, wm_paths, by_fname, model, ckpt, "wikimeter", wm_multilabel=wm_multilabel)
+    for ds_name in datasets:
+        if ds_name == "meter2800":
+            data_dir = (PROJECT_ROOT / "data" / "meter2800").resolve()
+            entries = load_meter2800_entries(data_dir, "test")
+            # Convert 3-tuples to 2-tuples
+            entries = [(p, m) for p, m, *_ in entries]
+        elif ds_name == "wikimeter":
+            data_dir = (PROJECT_ROOT / "data" / "wikimeter").resolve()
+            raw = load_wikimeter_entries(data_dir, "test")
+            entries = [(p, m) for p, m, *_ in raw]
+        else:
+            print(f"Unknown dataset: {ds_name}")
+            continue
 
-    print(f"  METER2800: {len(m2800_suspects)} suspects / {len(m2800_labels)} files "
-          f"({len(m2800_suspects)/max(len(m2800_labels),1)*100:.1f}%)")
-    print(f"  WIKIMETER: {len(wm_suspects)} suspects / {len(wm_labels)} files "
-          f"({len(wm_suspects)/max(len(wm_labels),1)*100:.1f}%)")
+        print(f"\n  {ds_name.upper()}: {len(entries)} files", flush=True)
+        results = _run_predictions(entries, cache, engine, limit=limit)
 
-    all_suspects = m2800_suspects + wm_suspects
+        wm_ml = wm_multilabel if ds_name == "wikimeter" else None
+        suspects = build_suspects_from(results, ds_name, wm_multilabel=wm_ml)
+
+        print(f"  {ds_name.upper()}: {len(suspects)} suspects / {len(entries)} files "
+              f"({len(suspects)/max(len(entries),1)*100:.1f}%)")
+
+        all_suspects.extend(suspects)
+
     all_suspects.sort(key=lambda e: -e["pred_conf"])
     return all_suspects
 
@@ -280,15 +288,12 @@ def render_html(suspects, portable=False):
             if not full:
                 votes_html += f'<div class="sig-block"><span class="sig-name">{sig_name}</span> <span style="color:#aaa">∅</span></div>'
                 continue
-            # Show all meters above threshold + always include GT meters
-            # Skip 2/x — not a real class, just sub-harmonic of 4/4
             show_meters = {}
             for m_num, sc in full.items():
                 if m_num == 2:
                     continue
                 if sc >= 0.15 or m_num in gt_meter_nums:
                     show_meters[m_num] = sc
-            # Sort by score descending
             sorted_meters = sorted(show_meters.items(), key=lambda x: -x[1])
             rows_inner = ""
             for m_num, sc in sorted_meters:
@@ -401,7 +406,7 @@ def render_html(suspects, portable=False):
 <h1>GT Suspects Review ({len(suspects)} files)</h1>
 
 <div class="summary">
-  <strong>Criteria:</strong> ≤1 signal agrees with GT, arbiter confidence &gt;60%.<br>
+  <strong>Criteria:</strong> ≤1 signal agrees with GT, MeterNet confidence &gt;60%.<br>
   <strong>For each file:</strong> listen and choose a verdict:<br>
   &bull; <strong>GT N/x</strong> — ground truth is correct, our system is wrong<br>
   &bull; <strong>Pred N/x</strong> — prediction is correct, GT label is wrong<br>
@@ -436,7 +441,7 @@ def render_html(suspects, portable=False):
 <script>
 const METERS = [3, 4, 5, 7, 9, 11];
 const data = {json.dumps([
-    {
+    {{
         "id": i,
         "fname": e["fname"],
         "fpath": str(e["fpath"]),
@@ -444,7 +449,7 @@ const data = {json.dumps([
         "pred": e["pred"],
         "pred_conf": round(e["pred_conf"], 3),
         "dataset": e.get("dataset", "?"),
-    }
+    }}
     for i, e in enumerate(suspects, 1)
 ], indent=2)};
 
@@ -457,7 +462,6 @@ function setVerdict(id, type) {{
     const pred = parseInt(cell.dataset.pred);
     const prevNote = verdicts[id] ? verdicts[id].note || '' : '';
 
-    // Toggle off if already active
     if (verdicts[id] && verdicts[id].type === type) {{
         delete verdicts[id];
     }} else if (type === 'custom') {{
@@ -545,7 +549,6 @@ function renderVerdict(id) {{
     const noteInput = document.getElementById('note_' + id);
     const v = verdicts[id];
 
-    // Reset button states
     cell.querySelectorAll('.vbtn').forEach(b => b.classList.remove('active'));
 
     if (!v || !v.type) {{
@@ -555,7 +558,6 @@ function renderVerdict(id) {{
         return;
     }}
 
-    // Show note input for any verdict
     noteInput.style.display = 'block';
     noteInput.value = v.note || '';
 
@@ -668,9 +670,18 @@ loadState();
 
 
 if __name__ == "__main__":
-    print("Loading data and computing predictions...")
-    suspects = build_suspects()
-    print(f"Found {len(suspects)} suspect files.")
+    parser = argparse.ArgumentParser(description="Generate GT suspect review page")
+    parser.add_argument("--dataset", action="append", default=None,
+                        help="Dataset(s) to check (repeat for multiple). Default: meter2800 + wikimeter.")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Max files per dataset (0=all)")
+    args = parser.parse_args()
+
+    datasets = args.dataset or ["meter2800", "wikimeter"]
+
+    print("Loading data and running MeterNet predictions...")
+    suspects = build_suspects(datasets, limit=args.limit)
+    print(f"\nFound {len(suspects)} suspect files total.")
 
     # Local HTML (file:// paths)
     local_html = render_html(suspects, portable=False)

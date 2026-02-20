@@ -52,6 +52,7 @@ class AnalysisEngine:
 
     def analyze_file(self, file_path: str, skip_sections: bool = False) -> AnalysisResult:
         """Analyze an audio file."""
+        self._file_path = file_path
         if self.cache:
             from beatmeter.analysis.cache import AnalysisCache
             self._audio_hash = AnalysisCache.audio_hash(file_path)
@@ -252,6 +253,7 @@ class AnalysisEngine:
                 cache=self.cache,
                 audio_hash=ah,
                 tmp_path=tmp_wav_path,
+                audio_file_path=getattr(self, '_file_path', None),
             )
             for h in meter_hypotheses:
                 logger.info(f"  {h.label}: {h.confidence:.1%} - {h.description}")
@@ -514,9 +516,6 @@ class AnalysisEngine:
                     beat_this_beats=sec_beat_this,
                     onset_event_times=onset_event_times,
                     skip_bar_tracking=True,
-                    skip_resnet=True,
-                    skip_mert=True,
-                    skip_onset_mlp=True,
                 )
                 if hyps:
                     sec_meter = hyps[0]

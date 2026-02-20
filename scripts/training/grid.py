@@ -1,37 +1,35 @@
 #!/usr/bin/env python3
 """Grid search over MeterNet training hyperparameters.
 
-Runs train_meter_net.py with all combinations of parameters, saves each
+Runs train.py with all combinations of parameters, saves each
 checkpoint and results. Resumes safely — already completed runs are skipped.
 
 Usage:
-    uv run python scripts/training/grid_meter_net.py
-    uv run python scripts/training/grid_meter_net.py --dry-run   # show combos only
-    uv run python scripts/training/grid_meter_net.py --summary   # show results table
+    uv run python scripts/training/grid.py
+    uv run python scripts/training/grid.py --dry-run   # show combos only
+    uv run python scripts/training/grid.py --summary   # show results table
 """
 
 import argparse
 import itertools
 import json
-import shutil
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 RESULTS_FILE = PROJECT_ROOT / "data" / "meter_net_grid_results.json"
 CHECKPOINT_DIR = PROJECT_ROOT / "data" / "meter_net_grid"
-TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train_meter_net.py"
-SOURCE_CKPT = PROJECT_ROOT / "data" / "meter_net.pt"
+TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train.py"
 
 # -- Grid definition --
 
 GRID = {
-    "lr": [3e-4, 8e-4],
-    "hidden": [640, 1024],
-    "dropout_scale": [1.0, 1.5],
-    "n_blocks": [1, 2, 3],
+    "lr": [3e-4],
+    "hidden": [256, 384, 512, 640, 1024],
+    "dropout_scale": [1.5],
+    "n_blocks": [1, 2],
+    "no_beat_features": [False],
 }
 
 FIXED_ARGS = [
@@ -58,8 +56,10 @@ def build_cmd(params: dict) -> list[str]:
     cmd += ["--lr", str(params["lr"])]
     cmd += ["--hidden", str(params["hidden"])]
     cmd += ["--dropout-scale", str(params["dropout_scale"])]
-    cmd += ["--n-blocks", str(params["n_blocks"])]
+    cmd += ["--n-blocks", str(params.get("n_blocks", 1))]
     cmd += ["--batch-size", "64"]
+    if params.get("no_beat_features"):
+        cmd += ["--no-beat-features"]
     return cmd
 
 
@@ -129,8 +129,10 @@ def main():
         for c in combos:
             key = combo_key(c)
             status = "DONE" if key in results else "TODO"
+            save_path = CHECKPOINT_DIR / f"{combo_filename(c)}.pt"
+            cmd = build_cmd(c) + ["--save", str(save_path)]
             print(f"[{status}] {key}")
-            print(f"       {' '.join(build_cmd(c))}")
+            print(f"       {' '.join(cmd)}")
         return
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -144,7 +146,8 @@ def main():
             print(f"[{i}/{len(combos)}] SKIP (val={acc_str}): {key}")
             continue
 
-        cmd = build_cmd(params)
+        save_path = CHECKPOINT_DIR / f"{combo_filename(params)}.pt"
+        cmd = build_cmd(params) + ["--save", str(save_path)]
         print(f"\n[{i}/{len(combos)}] START: {key}")
         print(f"  CMD: {' '.join(cmd)}")
         print(f"  Time: {datetime.now().strftime('%H:%M:%S')}")
@@ -153,19 +156,15 @@ def main():
         proc = subprocess.run(cmd, cwd=PROJECT_ROOT)
 
         val_acc = None
-        ckpt_copy = None
-        if SOURCE_CKPT.exists() and proc.returncode == 0:
-            val_acc = read_val_acc_from_checkpoint(SOURCE_CKPT)
-            fname = combo_filename(params) + ".pt"
-            ckpt_copy = str(CHECKPOINT_DIR / fname)
-            shutil.copy2(SOURCE_CKPT, ckpt_copy)
-            print(f"  Checkpoint: {ckpt_copy}")
+        if save_path.exists() and proc.returncode == 0:
+            val_acc = read_val_acc_from_checkpoint(save_path)
+            print(f"  Checkpoint: {save_path}")
 
         results[key] = {
             "params": params,
             "val_acc": val_acc,
             "returncode": proc.returncode,
-            "checkpoint": ckpt_copy,
+            "checkpoint": str(save_path) if save_path.exists() else None,
             "timestamp": datetime.now().isoformat(),
         }
         save_results(results)
@@ -177,10 +176,37 @@ def main():
     print("GRID SEARCH COMPLETE")
     print_summary(results)
 
-    best_key, best_info = max(results.items(), key=lambda x: x[1].get("val_acc") or 0)
-    if best_info.get("checkpoint") and Path(best_info["checkpoint"]).exists():
-        shutil.copy2(best_info["checkpoint"], SOURCE_CKPT)
-        print(f"Best checkpoint ({best_key}, val={best_info['val_acc']:.1%}) copied to meter_net.pt")
+    real_results = {k: v for k, v in results.items() if not k.startswith("_")}
+    best_key, best_info = max(real_results.items(), key=lambda x: x[1].get("val_acc") or 0)
+
+    # Mark winner explicitly in results
+    from beatmeter.experiment import get_git_info, log_experiment, make_experiment_record
+    results["_winner"] = best_key
+    results["_winner_val_acc"] = best_info["val_acc"]
+    results["_timestamp"] = datetime.now().isoformat()
+    results["_git"] = get_git_info()
+    save_results(results)
+
+    log_experiment(make_experiment_record(
+        type="grid_search", model="meter_net",
+        params=best_info["params"],
+        results={"val_acc": best_info["val_acc"],
+                 "n_combos": len(real_results)},
+        checkpoint=best_info.get("checkpoint"),
+    ))
+
+    # Print promote command for the winner
+    best_ckpt = best_info.get("checkpoint")
+    if best_ckpt and Path(best_ckpt).exists():
+        print(f"\nBest: {best_key} (val={best_info['val_acc']:.1%})")
+        print(f"To promote:\n  uv run python scripts/eval.py --promote {best_ckpt} --workers 4")
+
+    # Cleanup: remove non-winner checkpoints
+    for key, info in real_results.items():
+        ckpt = info.get("checkpoint")
+        if ckpt and ckpt != best_info.get("checkpoint") and Path(ckpt).exists():
+            Path(ckpt).unlink()
+            print(f"  Cleaned: {Path(ckpt).name}")
 
 
 if __name__ == "__main__":

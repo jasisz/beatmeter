@@ -347,7 +347,7 @@ def load_wikimeter_entries(
             if not audio_path.exists():
                 continue
 
-            # Filter by split (hash-based, same as train_arbiter)
+            # Filter by split (hash-based)
             file_split = split_by_stem(audio_path.stem)
             if file_split != split:
                 continue

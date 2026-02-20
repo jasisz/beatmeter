@@ -141,26 +141,9 @@ Use this when you want to expand `scripts/setup/wikimeter.json` in a controlled 
 Catalog entries support multi-source `sources[]`.
 
 ```bash
-# 1) Prepare a reviewed queue JSON (manual curation)
-#    default path: data/wikimeter/review_queue.json
-
-# 2) Merge approved entries into catalog (gate step)
-uv run python scripts/setup/merge_wikimeter_reviewed.py \
-  --review-queue data/wikimeter/review_queue.json
-
-# 3) Download/refresh dataset from catalog
+# Download/refresh dataset from catalog
 uv run python scripts/setup/download_wikimeter.py
 ```
-
-Review queue entries should include:
-- `seed.artist`
-- `seed.title`
-- `seed.meters` (example: `5` or `3:0.8,4:0.7`)
-- `status` (`approved` to merge)
-- source info in `candidate` (`source`, `sources`, `video_id`/`video_url` legacy)
-
-Blacklist gate:
-- `data/wikimeter/blacklist.json` blocks known bad song+meter pairs during merge.
 
 ## Project Structure
 

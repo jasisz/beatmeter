@@ -42,7 +42,7 @@ Update `.claude/projects/.../memory/MEMORY.md` and topic files after:
 
 ## Signal Integration Protocol
 1. Train/implement signal standalone
-2. Run orthogonality check (`scripts/check_mert_orthogonality.py` pattern)
+2. Run orthogonality check (agreement matrix pattern)
 3. Gate check: agreement <85%, complementarity ratio >1.5
 4. Only then integrate with W_NEW = 0.0, then tune up
 5. Document results in RESEARCH.md regardless of outcome (negative results are valuable)

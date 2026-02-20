@@ -1,20 +1,22 @@
-"""Per-tracker and per-signal analysis cache with file-hash invalidation.
+"""Per-tracker and per-signal analysis cache backed by LMDB.
 
 Cache structure:
-    .cache/
-    ├── beats/{tracker_name}/{tracker_hash}/
-    │   └── {audio_hash}.json
-    ├── onsets/{onset_hash}/
-    │   └── {audio_hash}.json
-    ├── signals/{signal_name}/{deps_hash}/
-    │   └── {audio_hash}.json
+    .cache/analysis.lmdb/
+    ├── data.mdb
+    └── lock.mdb
 
-Each tracker is hashed independently — changing BeatNet code does not
-invalidate the madmom cache. Each signal has explicit upstream dependencies;
-its cache is invalidated when any dependency file changes.
+Key format:
+    beats:{tracker}:{tracker_hash}:{audio_hash}     → JSON string
+    onsets:{onset_hash}:{audio_hash}                 → JSON string
+    signals:{signal_name}:{deps_hash}:{audio_hash}   → JSON string
 
-Version is encoded in the directory path (hash of source files).
-No version parameter needed — file changes = automatic invalidation.
+Hash in the key provides automatic invalidation — changing source code
+produces a new hash, so old entries simply aren't read. Stale entries
+are cleaned up at startup via prefix scan.
+
+Migration: on first run after switching from the old JSON-file cache,
+data is lazily migrated (LMDB miss → check old JSON path → insert +
+delete JSON). One full pipeline run = complete migration.
 """
 
 import functools
@@ -23,11 +25,13 @@ import json
 import logging
 from pathlib import Path
 
+import lmdb
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
-# Maximum number of hash subdirectories to keep per level.
-# Older ones (by mtime) are pruned at init time.
-_MAX_HASH_DIRS = 2
+# LMDB map size: 4 GB virtual address space (file grows on demand).
+_MAP_SIZE = 4 * 1024 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Per-signal dependency map: signal_name -> list of source files that affect it.
@@ -43,28 +47,9 @@ SIGNAL_DEPS: dict[str, list[str]] = {
         "beatmeter/analysis/signals/downbeat_spacing.py",
         "beatmeter/analysis/trackers/beat_this.py",
     ],
-    "madmom_activation": [
-        "beatmeter/analysis/signals/madmom_activation.py",
-        "beatmeter/analysis/trackers/madmom_tracker.py",
-        "beatmeter/analysis/onset.py",
-    ],
     "onset_autocorr": [
         "beatmeter/analysis/signals/onset_autocorrelation.py",
         "beatmeter/analysis/onset.py",
-    ],
-    "accent_pattern": [
-        "beatmeter/analysis/signals/accent_pattern.py",
-        "beatmeter/analysis/trackers/beatnet.py",
-        "beatmeter/analysis/trackers/beat_this.py",
-        "beatmeter/analysis/trackers/madmom_tracker.py",
-        "beatmeter/analysis/trackers/librosa_tracker.py",
-    ],
-    "beat_periodicity": [
-        "beatmeter/analysis/signals/beat_periodicity.py",
-        "beatmeter/analysis/trackers/beatnet.py",
-        "beatmeter/analysis/trackers/beat_this.py",
-        "beatmeter/analysis/trackers/madmom_tracker.py",
-        "beatmeter/analysis/trackers/librosa_tracker.py",
     ],
     "bar_tracking": [
         "beatmeter/analysis/signals/bar_tracking.py",
@@ -72,17 +57,6 @@ SIGNAL_DEPS: dict[str, list[str]] = {
         "beatmeter/analysis/trackers/beat_this.py",
         "beatmeter/analysis/trackers/madmom_tracker.py",
         "beatmeter/analysis/trackers/librosa_tracker.py",
-    ],
-    "resnet_meter": [
-        "beatmeter/analysis/signals/resnet_meter.py",
-    ],
-    "mert_meter": [
-        "beatmeter/analysis/signals/mert_meter.py",
-    ],
-    "onset_mlp_meter": [
-        "beatmeter/analysis/signals/onset_mlp_meter.py",
-        "beatmeter/analysis/signals/onset_mlp_features.py",
-        "data/meter_onset_mlp.pt",
     ],
     "hcdf_meter": [
         "beatmeter/analysis/signals/hcdf_meter.py",
@@ -114,7 +88,7 @@ TRACKER_FILES: dict[str, str] = {
 
 
 class AnalysisCache:
-    """Unified per-signal cache for the analysis pipeline."""
+    """Unified per-signal cache for the analysis pipeline (LMDB backend)."""
 
     def __init__(self, cache_dir: Path | str = ".cache"):
         self.cache_dir = Path(cache_dir)
@@ -132,7 +106,32 @@ class AnalysisCache:
         for sig_name, deps in SIGNAL_DEPS.items():
             self._signal_hashes[sig_name] = self._combined_hash(*deps)
 
-        self._cleanup_old_dirs()
+        # Open LMDB environment
+        lmdb_path = self.cache_dir / "analysis.lmdb"
+        lmdb_path.mkdir(parents=True, exist_ok=True)
+        self._env = lmdb.open(
+            str(lmdb_path),
+            map_size=_MAP_SIZE,
+            max_dbs=0,
+            readahead=False,
+        )
+
+        self._cleanup_stale_entries()
+
+    # ------------------------------------------------------------------
+    # Key builders
+    # ------------------------------------------------------------------
+
+    def _beats_key(self, tracker: str, audio_hash: str) -> bytes:
+        h = self._tracker_hashes.get(tracker, "unknown")
+        return f"beats:{tracker}:{h}:{audio_hash}".encode()
+
+    def _onsets_key(self, audio_hash: str) -> bytes:
+        return f"onsets:{self._onset_hash}:{audio_hash}".encode()
+
+    def _signal_key(self, signal_name: str, audio_hash: str) -> bytes:
+        h = self._signal_hashes.get(signal_name, "unknown")
+        return f"signals:{signal_name}:{h}:{audio_hash}".encode()
 
     # ------------------------------------------------------------------
     # Hashing helpers
@@ -155,7 +154,6 @@ class AnalysisCache:
             pass
         return h.hexdigest()[:16]
 
-
     @staticmethod
     def _file_hash(rel_path: str) -> str:
         """SHA-256 of a source file -> 12 hex chars."""
@@ -175,58 +173,112 @@ class AnalysisCache:
         return h.hexdigest()[:12]
 
     # ------------------------------------------------------------------
-    # Beats: .cache/beats/{tracker}/{tracker_hash}/{audio_hash}.json
+    # Beats: beats:{tracker}:{hash}:{audio_hash}
     # ------------------------------------------------------------------
-
-    def _beats_dir(self, tracker: str) -> Path:
-        h = self._tracker_hashes.get(tracker, "unknown")
-        return self.cache_dir / "beats" / tracker / h
 
     def load_beats(self, audio_hash: str, tracker: str) -> list[dict] | None:
-        path = self._beats_dir(tracker) / f"{audio_hash}.json"
-        return _read_json(path)
+        key = self._beats_key(tracker, audio_hash)
+        with self._env.begin() as txn:
+            data = txn.get(key)
+        if data is not None:
+            return json.loads(data)
+        # Lazy migration from old JSON cache
+        return self._migrate_beats(audio_hash, tracker, key)
+
+    def _migrate_beats(self, audio_hash: str, tracker: str, key: bytes) -> list[dict] | None:
+        h = self._tracker_hashes.get(tracker, "unknown")
+        old_path = self.cache_dir / "beats" / tracker / h / f"{audio_hash}.json"
+        data = _read_json(old_path)
+        if data is not None:
+            with self._env.begin(write=True) as txn:
+                txn.put(key, json.dumps(data).encode())
+            old_path.unlink(missing_ok=True)
+        return data
 
     def save_beats(self, audio_hash: str, tracker: str, beats: list[dict]) -> None:
-        d = self._beats_dir(tracker)
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{audio_hash}.json"
-        path.write_text(json.dumps(beats))
+        key = self._beats_key(tracker, audio_hash)
+        with self._env.begin(write=True) as txn:
+            txn.put(key, json.dumps(beats).encode())
 
     # ------------------------------------------------------------------
-    # Onsets: .cache/onsets/{onset_hash}/{audio_hash}.json
+    # Onsets: onsets:{hash}:{audio_hash}
     # ------------------------------------------------------------------
-
-    def _onsets_dir(self) -> Path:
-        return self.cache_dir / "onsets" / self._onset_hash
 
     def load_onsets(self, audio_hash: str) -> dict | None:
-        path = self._onsets_dir() / f"{audio_hash}.json"
-        return _read_json(path)
+        key = self._onsets_key(audio_hash)
+        with self._env.begin() as txn:
+            data = txn.get(key)
+        if data is not None:
+            return json.loads(data)
+        return self._migrate_onsets(audio_hash, key)
+
+    def _migrate_onsets(self, audio_hash: str, key: bytes) -> dict | None:
+        old_path = self.cache_dir / "onsets" / self._onset_hash / f"{audio_hash}.json"
+        data = _read_json(old_path)
+        if data is not None:
+            with self._env.begin(write=True) as txn:
+                txn.put(key, json.dumps(data).encode())
+            old_path.unlink(missing_ok=True)
+        return data
 
     def save_onsets(self, audio_hash: str, data: dict) -> None:
-        d = self._onsets_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{audio_hash}.json"
-        path.write_text(json.dumps(data))
+        key = self._onsets_key(audio_hash)
+        with self._env.begin(write=True) as txn:
+            txn.put(key, json.dumps(data).encode())
 
     # ------------------------------------------------------------------
-    # Signals: .cache/signals/{signal_name}/{deps_hash}/{audio_hash}.json
+    # Signals: signals:{name}:{hash}:{audio_hash}
     # ------------------------------------------------------------------
-
-    def _signal_dir(self, signal_name: str) -> Path:
-        h = self._signal_hashes.get(signal_name, "unknown")
-        return self.cache_dir / "signals" / signal_name / h
 
     def load_signal(self, audio_hash: str, signal_name: str) -> dict | None:
-        path = self._signal_dir(signal_name) / f"{audio_hash}.json"
-        return _read_json(path)
+        key = self._signal_key(signal_name, audio_hash)
+        with self._env.begin() as txn:
+            data = txn.get(key)
+        if data is not None:
+            return json.loads(data)
+        return self._migrate_signal(audio_hash, signal_name, key)
+
+    def _migrate_signal(self, audio_hash: str, signal_name: str, key: bytes) -> dict | None:
+        h = self._signal_hashes.get(signal_name, "unknown")
+        old_path = self.cache_dir / "signals" / signal_name / h / f"{audio_hash}.json"
+        data = _read_json(old_path)
+        if data is not None:
+            with self._env.begin(write=True) as txn:
+                txn.put(key, json.dumps(data).encode())
+            old_path.unlink(missing_ok=True)
+        return data
 
     def save_signal(self, audio_hash: str, signal_name: str, scores: dict) -> None:
-        d = self._signal_dir(signal_name)
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{audio_hash}.json"
+        key = self._signal_key(signal_name, audio_hash)
         serializable = {_meter_key_to_str(k): v for k, v in scores.items()}
-        path.write_text(json.dumps(serializable))
+        with self._env.begin(write=True) as txn:
+            txn.put(key, json.dumps(serializable).encode())
+
+    # ------------------------------------------------------------------
+    # Batch reads
+    # ------------------------------------------------------------------
+
+    def load_all_for_audio(self, audio_hash: str) -> dict:
+        """Load all cached data for an audio file in a single LMDB transaction.
+
+        Returns dict with keys 'beats', 'onsets', 'signals' containing
+        all available cached data. Much faster than individual load_* calls
+        when multiple data types are needed (1 txn vs 20+ separate reads).
+        """
+        result: dict = {"beats": {}, "onsets": None, "signals": {}}
+        with self._env.begin() as txn:
+            for tracker in TRACKER_FILES:
+                data = txn.get(self._beats_key(tracker, audio_hash))
+                if data is not None:
+                    result["beats"][tracker] = json.loads(data)
+            data = txn.get(self._onsets_key(audio_hash))
+            if data is not None:
+                result["onsets"] = json.loads(data)
+            for sig_name in SIGNAL_DEPS:
+                data = txn.get(self._signal_key(sig_name, audio_hash))
+                if data is not None:
+                    result["signals"][sig_name] = json.loads(data)
+        return result
 
     # ------------------------------------------------------------------
     # Stats
@@ -239,31 +291,23 @@ class AnalysisCache:
         onsets_hit = 0
         signals_hit = 0
 
-        onsets_dir = self._onsets_dir()
+        with self._env.begin() as txn:
+            for ah in audio_hashes:
+                # Check if at least one beat tracker is cached
+                for tracker in TRACKER_FILES:
+                    if txn.get(self._beats_key(tracker, ah)) is not None:
+                        beats_hit += 1
+                        break
 
-        for ah in audio_hashes:
-            # Check if at least one beat tracker file exists
-            beat_found = False
-            for tracker in TRACKER_FILES:
-                d = self._beats_dir(tracker)
-                if d.exists() and (d / f"{ah}.json").exists():
-                    beat_found = True
-                    break
-            if beat_found:
-                beats_hit += 1
+                # Check onsets
+                if txn.get(self._onsets_key(ah)) is not None:
+                    onsets_hit += 1
 
-            if onsets_dir.exists() and (onsets_dir / f"{ah}.json").exists():
-                onsets_hit += 1
-
-            # Check if at least one signal file exists
-            sig_found = False
-            for sig_name in SIGNAL_DEPS:
-                d = self._signal_dir(sig_name)
-                if d.exists() and (d / f"{ah}.json").exists():
-                    sig_found = True
-                    break
-            if sig_found:
-                signals_hit += 1
+                # Check if at least one signal is cached
+                for sig_name in SIGNAL_DEPS:
+                    if txn.get(self._signal_key(sig_name, ah)) is not None:
+                        signals_hit += 1
+                        break
 
         return {
             "beats": f"{beats_hit}/{total}",
@@ -272,39 +316,51 @@ class AnalysisCache:
         }
 
     # ------------------------------------------------------------------
-    # Auto-cleanup: keep only _MAX_HASH_DIRS newest per hash level
+    # Stale entry cleanup
     # ------------------------------------------------------------------
 
-    def _cleanup_old_dirs(self) -> None:
-        """Remove old hash subdirectories, keeping only the newest ones."""
-        # Onsets: .cache/onsets/{hash}/
-        self._cleanup_level(self.cache_dir / "onsets")
-
-        # Beats: .cache/beats/{tracker}/{hash}/
-        beats_root = self.cache_dir / "beats"
-        if beats_root.exists():
-            for tracker_dir in beats_root.iterdir():
-                if tracker_dir.is_dir():
-                    self._cleanup_level(tracker_dir)
-
-        # Signals: .cache/signals/{signal_name}/{hash}/
-        signals_root = self.cache_dir / "signals"
-        if signals_root.exists():
-            for sig_dir in signals_root.iterdir():
-                if sig_dir.is_dir():
-                    self._cleanup_level(sig_dir)
-
-    @staticmethod
-    def _cleanup_level(level_dir: Path) -> None:
-        if not level_dir.exists():
+    def _cleanup_stale_entries(self) -> None:
+        """Remove LMDB entries whose hashes don't match current source code."""
+        stat = self._env.stat()
+        if stat["entries"] == 0:
             return
-        subdirs = [d for d in level_dir.iterdir() if d.is_dir()]
-        if len(subdirs) <= _MAX_HASH_DIRS:
-            return
-        subdirs.sort(key=lambda d: d.stat().st_mtime)
-        for d in subdirs[:-_MAX_HASH_DIRS]:
-            logger.info(f"Cache cleanup: removing old {d}")
-            _rmtree(d)
+
+        # Build set of valid prefixes (everything before the audio_hash)
+        valid_prefixes: set[str] = set()
+        for tracker, h in self._tracker_hashes.items():
+            valid_prefixes.add(f"beats:{tracker}:{h}:")
+        valid_prefixes.add(f"onsets:{self._onset_hash}:")
+        for sig, h in self._signal_hashes.items():
+            valid_prefixes.add(f"signals:{sig}:{h}:")
+
+        with self._env.begin(write=True) as txn:
+            cursor = txn.cursor()
+            stale: list[bytes] = []
+            for key_bytes, _ in cursor:
+                k = key_bytes.decode()
+                # Extract prefix = everything up to last ':'
+                last_colon = k.rfind(":")
+                if last_colon < 0:
+                    stale.append(key_bytes)
+                    continue
+                prefix = k[: last_colon + 1]
+                if prefix not in valid_prefixes:
+                    stale.append(key_bytes)
+            for key_bytes in stale:
+                txn.delete(key_bytes)
+
+        if stale:
+            logger.info("LMDB cleanup: removed %d stale entries", len(stale))
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the LMDB environment."""
+        if self._env:
+            self._env.close()
+            self._env = None
 
 
 # ======================================================================
@@ -344,7 +400,34 @@ def str_to_meter_key(s: str) -> tuple[int, int]:
     return (int(a), int(b))
 
 
-def _rmtree(path: Path) -> None:
-    """Remove a directory tree (shutil.rmtree equivalent)."""
-    import shutil
-    shutil.rmtree(path, ignore_errors=True)
+class NumpyLMDB:
+    """LMDB-backed cache for numpy feature arrays.
+
+    Stores arrays as raw float32 bytes — faster than np.save/np.load
+    (no .npy header parsing). Shape must be known by the caller.
+
+    Default location: data/features.lmdb
+    """
+
+    def __init__(self, path: str | Path = "data/features.lmdb", map_size: int = _MAP_SIZE):
+        Path(path).mkdir(parents=True, exist_ok=True)
+        self._env = lmdb.open(str(path), map_size=map_size, readahead=False)
+
+    def load(self, key: str) -> np.ndarray | None:
+        """Load a float32 array by key. Returns None on miss."""
+        with self._env.begin() as txn:
+            data = txn.get(key.encode())
+        if data is None:
+            return None
+        return np.frombuffer(data, dtype=np.float32).copy()
+
+    def save(self, key: str, arr: np.ndarray) -> None:
+        """Save a numpy array as raw float32 bytes."""
+        with self._env.begin(write=True) as txn:
+            txn.put(key.encode(), arr.astype(np.float32).tobytes())
+
+    def close(self) -> None:
+        """Close the LMDB environment."""
+        if self._env:
+            self._env.close()
+            self._env = None
