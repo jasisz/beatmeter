@@ -6,9 +6,15 @@ Cache structure:
     └── lock.mdb
 
 Key format:
-    beats:{tracker}:{tracker_hash}:{audio_hash}     → JSON string
-    onsets:{onset_hash}:{audio_hash}                 → JSON string
-    signals:{signal_name}:{deps_hash}:{audio_hash}   → JSON string
+    beats:{tracker}:{tracker_hash}:{audio_hash}       → JSON string
+    onsets:{onset_hash}:{audio_hash}                   → JSON string
+    signals:{signal_name}:{deps_hash}:{audio_hash}     → JSON string
+    features:{group}:{deps_hash}:{audio_hash}           → raw float32 bytes
+
+Feature groups (meter_net_audio, meter_net_ssm) are keyed on source code
+only — NOT on the model checkpoint. This means expensive audio feature
+extraction (~5s) survives model retraining; only the cheap forward pass
+(~10ms) is re-run. See SIGNAL_DEPS for per-group dependency files.
 
 Hash in the key provides automatic invalidation — changing source code
 produces a new hash, so old entries simply aren't read. Stale entries
@@ -61,11 +67,12 @@ SIGNAL_DEPS: dict[str, list[str]] = {
     "hcdf_meter": [
         "beatmeter/analysis/signals/hcdf_meter.py",
     ],
-    "meter_net": [
-        "beatmeter/analysis/meter.py",
-        "beatmeter/analysis/signals/meter_net_features.py",
+    # Feature cache groups (NO checkpoint dependency → survive model retraining)
+    "meter_net_audio": [
         "beatmeter/analysis/signals/onset_mlp_features.py",
-        "data/meter_net.pt",
+    ],
+    "meter_net_ssm": [
+        "beatmeter/analysis/signals/ssm_features.py",
     ],
     "tempo_librosa": [
         "beatmeter/analysis/tempo.py",
@@ -132,6 +139,10 @@ class AnalysisCache:
     def _signal_key(self, signal_name: str, audio_hash: str) -> bytes:
         h = self._signal_hashes.get(signal_name, "unknown")
         return f"signals:{signal_name}:{h}:{audio_hash}".encode()
+
+    def _features_key(self, group: str, audio_hash: str) -> bytes:
+        h = self._signal_hashes.get(group, "unknown")
+        return f"features:{group}:{h}:{audio_hash}".encode()
 
     # ------------------------------------------------------------------
     # Hashing helpers
@@ -255,6 +266,25 @@ class AnalysisCache:
             txn.put(key, json.dumps(serializable).encode())
 
     # ------------------------------------------------------------------
+    # Feature arrays: features:{group}:{hash}:{audio_hash}
+    # ------------------------------------------------------------------
+
+    def load_array(self, audio_hash: str, group: str) -> np.ndarray | None:
+        """Load a cached float32 feature array. Returns None on miss."""
+        key = self._features_key(group, audio_hash)
+        with self._env.begin() as txn:
+            data = txn.get(key)
+        if data is None:
+            return None
+        return np.frombuffer(data, dtype=np.float32).copy()
+
+    def save_array(self, audio_hash: str, group: str, arr: np.ndarray) -> None:
+        """Save a numpy feature array as raw float32 bytes."""
+        key = self._features_key(group, audio_hash)
+        with self._env.begin(write=True) as txn:
+            txn.put(key, arr.astype(np.float32).tobytes())
+
+    # ------------------------------------------------------------------
     # Batch reads
     # ------------------------------------------------------------------
 
@@ -265,7 +295,7 @@ class AnalysisCache:
         all available cached data. Much faster than individual load_* calls
         when multiple data types are needed (1 txn vs 20+ separate reads).
         """
-        result: dict = {"beats": {}, "onsets": None, "signals": {}}
+        result: dict = {"beats": {}, "onsets": None, "signals": {}, "features": {}}
         with self._env.begin() as txn:
             for tracker in TRACKER_FILES:
                 data = txn.get(self._beats_key(tracker, audio_hash))
@@ -278,6 +308,10 @@ class AnalysisCache:
                 data = txn.get(self._signal_key(sig_name, audio_hash))
                 if data is not None:
                     result["signals"][sig_name] = json.loads(data)
+            for group in ["meter_net_audio", "meter_net_ssm"]:
+                data = txn.get(self._features_key(group, audio_hash))
+                if data is not None:
+                    result["features"][group] = np.frombuffer(data, dtype=np.float32).copy()
         return result
 
     # ------------------------------------------------------------------
@@ -332,6 +366,7 @@ class AnalysisCache:
         valid_prefixes.add(f"onsets:{self._onset_hash}:")
         for sig, h in self._signal_hashes.items():
             valid_prefixes.add(f"signals:{sig}:{h}:")
+            valid_prefixes.add(f"features:{sig}:{h}:")
 
         with self._env.begin(write=True) as txn:
             cursor = txn.cursor()

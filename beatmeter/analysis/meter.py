@@ -153,8 +153,21 @@ def _load_meter_net():
         return None, None
 
 
+def _prepare_audio(audio: np.ndarray, sr: int, target_sr: int, max_duration_s: int) -> np.ndarray:
+    """Prepare audio for feature extraction (copy, trim to max_duration_s, resample)."""
+    audio_copy = audio.copy()
+    max_samples = sr * max_duration_s
+    if len(audio_copy) > max_samples:
+        start = (len(audio_copy) - max_samples) // 2
+        audio_copy = audio_copy[start:start + max_samples]
+    if sr != target_sr:
+        import librosa
+        audio_copy = librosa.resample(audio_copy, orig_sr=sr, target_sr=target_sr)
+    return audio_copy
+
+
 def _meter_net_predict(
-    audio: np.ndarray,
+    audio: np.ndarray | None,
     sr: int,
     signal_results: dict[str, dict[tuple[int, int], float]],
     beatnet_beats: list[Beat],
@@ -181,20 +194,47 @@ def _meter_net_predict(
             extract_tempo_features_live,
         )
         from beatmeter.analysis.signals.ssm_features import extract_ssm_features_live
-        import librosa
 
         t0 = time.perf_counter()
 
-        # Prepare audio
-        audio_copy = audio.copy()
-        max_samples = sr * MAX_DURATION_S
-        if len(audio_copy) > max_samples:
-            start = (len(audio_copy) - max_samples) // 2
-            audio_copy = audio_copy[start:start + max_samples]
-        if sr != SR:
-            audio_copy = librosa.resample(audio_copy, orig_sr=sr, target_sr=SR)
+        # 1. Audio features (1449d) — cached independently from checkpoint
+        audio_feat = None
+        audio_feat_cached = False
+        if cache and audio_hash:
+            audio_feat = cache.load_array(audio_hash, "meter_net_audio")
+            if audio_feat is not None:
+                audio_feat_cached = True
 
-        # Tempo info from cache/live
+        # 2. SSM features (75d) — cached independently from checkpoint
+        ssm_feat = None
+        ssm_feat_cached = False
+        if cache and audio_hash:
+            ssm_feat = cache.load_array(audio_hash, "meter_net_ssm")
+            if ssm_feat is not None:
+                ssm_feat_cached = True
+
+        # Lazy audio preparation: only when at least one feature is a cache miss
+        audio_copy = None
+        if audio_feat is None or ssm_feat is None:
+            if audio is None:
+                return None
+            audio_copy = _prepare_audio(audio, sr, SR, MAX_DURATION_S)
+
+        if audio_feat is None:
+            audio_feat = extract_features_v6(audio_copy, SR)
+            if audio_feat is None:
+                return None
+            if cache and audio_hash:
+                cache.save_array(audio_hash, "meter_net_audio", audio_feat)
+
+        if ssm_feat is None:
+            ssm_feat = extract_ssm_features_live(
+                audio_copy, SR, beatnet_beats, beat_this_beats, madmom_results,
+            )
+            if cache and audio_hash:
+                cache.save_array(audio_hash, "meter_net_ssm", ssm_feat)
+
+        # 3. Tempo info from cache/live
         tempo_lib = 0.0
         tempo_tg = 0.0
         if cache and audio_hash:
@@ -208,18 +248,8 @@ def _meter_net_predict(
             tempo_lib = tempo_bpm
             tempo_tg = tempo_bpm
 
-        # Audio features (v6: 1449d, tempos from internal tempogram)
-        audio_feat = extract_features_v6(audio_copy, SR)
-        if audio_feat is None:
-            return None
-
-        # Beat-synchronous chroma SSM (75 dims)
-        ssm_feat = extract_ssm_features_live(
-            audio_copy, SR, beatnet_beats, beat_this_beats, madmom_results,
-        )
-
-        # Beat features (42 dims)
-        duration = len(audio) / sr
+        # 4. Beat features (42 dims)
+        duration = len(audio) / sr if audio is not None else 30.0
         oet = onset_event_times if onset_event_times is not None else np.array([])
         beat_feat = extract_beat_features_live(
             beatnet_beats, beat_this_beats, madmom_results, oet, duration,
@@ -231,7 +261,7 @@ def _meter_net_predict(
         # Tempo features (4 dims)
         tempo_feat = extract_tempo_features_live(tempo_lib, tempo_tg)
 
-        # Concatenate
+        # 5. Concatenate
         full_feat = np.concatenate([
             audio_feat, ssm_feat,
             beat_feat, signal_feat, tempo_feat,
@@ -247,14 +277,17 @@ def _meter_net_predict(
         full_feat = full_feat.astype(np.float32)
         full_feat = (full_feat - feat_mean) / np.where(feat_std < 1e-8, 1.0, feat_std)
 
-        # Inference
+        # 6. Forward pass
         x = torch.tensor(full_feat, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             logits = model(x)
             probs = torch.sigmoid(logits).squeeze(0).numpy()
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("MeterNet inference: %.1f ms", elapsed_ms)
+        logger.debug("MeterNet: %.1f ms (audio=%s, ssm=%s)",
+                     elapsed_ms,
+                     "cached" if audio_feat_cached else "live",
+                     "cached" if ssm_feat_cached else "live")
 
         # Convert class probabilities to meter scores
         class_meters = meta["class_meters"]
@@ -386,9 +419,9 @@ def _collect_signal_scores(
             signal_results["autocorr"] = s3
 
     # Signal 7: Bar tracking (DBNBarTrackingProcessor)
-    if not skip_bar_tracking and audio is not None and len(beat_times) >= 6:
+    if not skip_bar_tracking and len(beat_times) >= 6:
         s7 = _try_cache("bar_tracking")
-        if s7 is None:
+        if s7 is None and audio is not None:
             if beat_this_beats and len(beat_this_beats) >= 6:
                 bar_beat_times = np.array([b.time for b in beat_this_beats])
             else:
@@ -513,26 +546,12 @@ def generate_hypotheses(
     )
 
     # Score combination: MeterNet → 4/4 fallback
-    meter_net_scores = None
-    meter_net_model, _ = _load_meter_net()
-    if meter_net_model is not None and audio is not None:
-        # Try cache first
-        if cache and audio_hash:
-            from beatmeter.analysis.cache import str_to_meter_key
-            cached_mn = cache.load_signal(audio_hash, "meter_net")
-            if cached_mn is not None:
-                meter_net_scores = {str_to_meter_key(k): v for k, v in cached_mn.items()}
-
-        if meter_net_scores is None:
-            meter_net_scores = _meter_net_predict(
-                audio, sr, signal_results,
-                beatnet_beats, beat_this_beats, madmom_results,
-                onset_event_times, tempo_bpm,
-                cache=cache, audio_hash=audio_hash,
-            )
-            # Cache the result for next run
-            if meter_net_scores and cache and audio_hash:
-                cache.save_signal(audio_hash, "meter_net", meter_net_scores)
+    meter_net_scores = _meter_net_predict(
+        audio, sr, signal_results,
+        beatnet_beats, beat_this_beats, madmom_results,
+        onset_event_times, tempo_bpm,
+        cache=cache, audio_hash=audio_hash,
+    )
 
     if meter_net_scores is not None:
         all_scores = meter_net_scores

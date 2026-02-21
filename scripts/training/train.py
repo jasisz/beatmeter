@@ -248,6 +248,7 @@ def extract_all_features(
     analysis_cache,
     label: str = "",
     workers: int = 1,
+    verbose: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Extract MeterNet features for all entries.
 
@@ -335,7 +336,7 @@ def extract_all_features(
         primary_meters.append(primary_meter)
 
     n_from_json = len(features_list) - n_full_cached
-    if n_full_cached or n_from_json:
+    if verbose and (n_full_cached or n_from_json):
         print(f"  {n_full_cached} full-cached, {n_from_json} from analysis cache, "
               f"{len(need_extract)} need audio extraction")
 
@@ -397,8 +398,16 @@ def extract_all_features(
                 if not _handle_extracted(audio_feat, audio_path, primary_meter, meters_dict):
                     skipped += 1
 
-    if skipped:
+    if verbose and skipped:
         print(f"  ({skipped} files skipped — feature extraction failed)")
+
+    n_extracted_ok = max(len(need_extract) - skipped, 0)
+    label_tag = label if label else "data"
+    print(
+        f"  [{label_tag}] ready={len(features_list)}  "
+        f"full_cache={n_full_cached}  reused={n_from_json}  "
+        f"extracted={n_extracted_ok}  skipped={skipped}"
+    )
 
     X = np.stack(features_list).astype(np.float32)
     y = np.stack(labels_list).astype(np.float32)
@@ -410,7 +419,13 @@ def _progress(iterable, desc="", total=None):
     try:
         from tqdm import tqdm
 
-        return tqdm(iterable, desc=desc, leave=False, total=total)
+        return tqdm(
+            iterable,
+            desc=desc,
+            leave=False,
+            total=total,
+            disable=not sys.stdout.isatty(),
+        )
     except ImportError:
         return iterable
 
@@ -599,6 +614,8 @@ def train_model(
     use_focal: bool = False,
     n_blocks: int = 1,
     bottleneck: int = 0,
+    verbose: bool = False,
+    log_every: int = 10,
 ) -> tuple[nn.Module, dict]:
     """Train MeterNet with BCE/Focal loss and balanced accuracy validation."""
     torch.manual_seed(seed)
@@ -668,6 +685,7 @@ def train_model(
     best_epoch = 0
     patience_counter = 0
     patience_limit = 50
+    print(f"  Watch: val_balanced (macro). Early stop patience={patience_limit} epochs")
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -738,18 +756,26 @@ def train_model(
         else:
             patience_counter += 1
 
-        if epoch % 10 == 0 or epoch <= 5 or is_best:
-            per_class_str = "  ".join(
-                f"{idx_to_meter[i]}/x:{val_correct_per_class.get(i, 0)}/{val_total_per_class.get(i, 0)}"
-                for i in sorted(val_total_per_class.keys())
+        log_every = max(log_every, 1)
+        should_log = epoch <= 3 or epoch % log_every == 0 or epoch == epochs
+        if verbose and is_best and not should_log:
+            should_log = True
+        if should_log:
+            marker = " *BEST" if is_best else ""
+            msg = (
+                f"  ep {epoch:3d}/{epochs}  "
+                f"train_acc {train_acc:.1%}  "
+                f"val_bal {val_balanced:.1%}  "
+                f"val_overall {val_overall:.1%}  "
+                f"best {best_val_metric:.1%} (ep {best_epoch}){marker}"
             )
-            marker = " *" if is_best else ""
-            print(
-                f"  ep {epoch:3d}  "
-                f"train {train_acc:.1%} loss {train_loss / train_total:.3f}  "
-                f"val_balanced {val_balanced:.1%} overall {val_overall:.1%}  "
-                f"[{per_class_str}]{marker}"
-            )
+            if verbose:
+                per_class_str = "  ".join(
+                    f"{idx_to_meter[i]}/x:{val_correct_per_class.get(i, 0)}/{val_total_per_class.get(i, 0)}"
+                    for i in sorted(val_total_per_class.keys())
+                )
+                msg += f"  [{per_class_str}]"
+            print(msg)
 
         if patience_counter >= patience_limit:
             print(f"  Early stopping at epoch {epoch} (best was ep {best_epoch})")
@@ -774,6 +800,7 @@ def evaluate(
     X_test: np.ndarray,
     y_test: np.ndarray,
     device: str = "cpu",
+    verbose: bool = False,
 ) -> dict:
     """Evaluate model on test set with per-class and overall accuracy."""
     idx_to_meter = {i: m for i, m in enumerate(CLASS_METERS_6)}
@@ -799,18 +826,29 @@ def evaluate(
     overall_correct = int((preds == true_primary).sum())
     overall_total = len(true_primary)
 
-    print(f"\nTest: {overall_correct}/{overall_total} = {overall_correct / overall_total:.1%}")
-    print(f"{'Meter':>6s}  {'Correct':>8s}  {'Total':>6s}  {'Acc':>6s}")
-    print("-" * 36)
+    overall_acc = overall_correct / max(overall_total, 1)
+    print(f"\nTest overall: {overall_correct}/{overall_total} = {overall_acc:.1%}")
+
+    class_parts = []
     for meter in sorted(per_class.keys()):
         info = per_class[meter]
         acc = info["correct"] / max(info["total"], 1)
-        print(f"{meter:>4d}/x  {info['correct']:>4d}/{info['total']:<4d}  {acc:>6.1%}")
-    print("-" * 36)
-    print(f"{'Total':>6s}  {overall_correct:>4d}/{overall_total:<4d}  {overall_correct / overall_total:>6.1%}")
+        class_parts.append(f"{meter}/x:{info['correct']}/{info['total']} ({acc:.1%})")
+
+    if verbose:
+        print(f"{'Meter':>6s}  {'Correct':>8s}  {'Total':>6s}  {'Acc':>6s}")
+        print("-" * 36)
+        for meter in sorted(per_class.keys()):
+            info = per_class[meter]
+            acc = info["correct"] / max(info["total"], 1)
+            print(f"{meter:>4d}/x  {info['correct']:>4d}/{info['total']:<4d}  {acc:>6.1%}")
+        print("-" * 36)
+        print(f"{'Total':>6s}  {overall_correct:>4d}/{overall_total:<4d}  {overall_acc:>6.1%}")
+    else:
+        print("  Per-class: " + " | ".join(class_parts))
 
     return {
-        "overall_acc": overall_correct / max(overall_total, 1),
+        "overall_acc": overall_acc,
         "overall_correct": overall_correct,
         "overall_total": overall_total,
         "per_class": per_class,
@@ -862,6 +900,10 @@ def main():
     parser.add_argument("--save", type=Path, default=None)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--log-every", type=int, default=10,
+                        help="Print epoch metrics every N epochs")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print detailed diagnostics")
     args = parser.parse_args()
 
     warnings.filterwarnings("ignore")
@@ -869,11 +911,10 @@ def main():
     valid_meters = set(CLASS_METERS_6)
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
 
-    print(f"MeterNet v6 (features={_TOTAL_FEATURES_ACTIVE})")
-    print(f"  Audio: {_AUDIO_FEATURES_ACTIVE}, SSM: {N_SSM_FEATURES}, "
-          f"Beat: {N_BEAT_FEATURES}, Signal: {N_SIGNAL_FEATURES}, Tempo: {N_TEMPO_FEATURES}")
-    print(f"Classes: {CLASS_METERS_6}")
-    print(f"Primary data: {args.data_dir}"
+    print(f"MeterNet v6 | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
+    print(f"  blocks: audio={_AUDIO_FEATURES_ACTIVE}, ssm={N_SSM_FEATURES}, "
+          f"beat={N_BEAT_FEATURES}, signal={N_SIGNAL_FEATURES}, tempo={N_TEMPO_FEATURES}")
+    print(f"  data: {args.data_dir}"
           + (f" + METER2800: {args.meter2800}" if args.meter2800 else ""))
 
     # Load WIKIMETER entries (split by hash)
@@ -911,10 +952,11 @@ def main():
 
     print(f"  Total: {len(train_entries)} train, {len(val_entries)} val, {len(test_entries)} test")
 
-    for name, entries in [("Train", train_entries), ("Val", val_entries), ("Test", test_entries)]:
-        dist = Counter(m for _, m, _ in entries)
-        dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
-        print(f"  {name}: {dist_str}")
+    if args.verbose:
+        for name, entries in [("Train", train_entries), ("Val", val_entries), ("Test", test_entries)]:
+            dist = Counter(m for _, m, _ in entries)
+            dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
+            print(f"  {name}: {dist_str}")
 
     # Initialize analysis cache + numpy LMDB
     from beatmeter.analysis.cache import AnalysisCache, NumpyLMDB
@@ -926,13 +968,13 @@ def main():
     t0 = time.time()
 
     X_train, y_train, pm_train = extract_all_features(
-        train_entries, feat_db, analysis_cache, "train", args.workers,
+        train_entries, feat_db, analysis_cache, "train", args.workers, args.verbose,
     )
     X_val, y_val, pm_val = extract_all_features(
-        val_entries, feat_db, analysis_cache, "val", args.workers,
+        val_entries, feat_db, analysis_cache, "val", args.workers, args.verbose,
     )
     X_test, y_test, pm_test = extract_all_features(
-        test_entries, feat_db, analysis_cache, "test", args.workers,
+        test_entries, feat_db, analysis_cache, "test", args.workers, args.verbose,
     )
 
     print(f"  Feature extraction: {time.time() - t0:.1f}s")
@@ -955,12 +997,13 @@ def main():
     # Check feature completeness (non-zero groups)
     from beatmeter.analysis.signals.meter_net_features import feature_groups
     fg = feature_groups(_AUDIO_FEATURES_ACTIVE)
-    for name, X in [("Train", X_train), ("Val", X_val)]:
-        counts = {}
-        for grp, (start, end) in fg.items():
-            counts[grp] = int(np.any(X[:, start:end] != 0, axis=1).sum())
-        parts = ", ".join(f"{g}={c}/{len(X)}" for g, c in counts.items())
-        print(f"  {name} non-zero: {parts}")
+    if args.verbose:
+        for name, X in [("Train", X_train), ("Val", X_val)]:
+            counts = {}
+            for grp, (start, end) in fg.items():
+                counts[grp] = int(np.any(X[:, start:end] != 0, axis=1).sum())
+            parts = ", ".join(f"{g}={c}/{len(X)}" for g, c in counts.items())
+            print(f"  {name} non-zero: {parts}")
 
     # Fail-fast: check if beat/signal/tempo features are populated
     train_beat_nz = np.any(X_train[:, fg["beat"][0]:fg["beat"][1]] != 0, axis=1).sum()
@@ -1035,11 +1078,13 @@ def main():
         use_focal=args.focal,
         n_blocks=args.n_blocks,
         bottleneck=args.bottleneck,
+        verbose=args.verbose,
+        log_every=args.log_every,
     )
     print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
 
     # Test
-    results = evaluate(model, X_test, y_test, args.device)
+    results = evaluate(model, X_test, y_test, args.device, verbose=args.verbose)
 
     # Save — always to unique path (promote via eval.py --promote)
     if args.save:
@@ -1080,7 +1125,10 @@ def main():
         train_size=len(X_train), val_size=len(X_val), test_size=len(X_test),
     )
     torch.save(ckpt, save_path)
-    print(f"\nModel saved to {save_path} (val_acc={info['best_val_acc']:.1%})")
+    print(
+        f"\nModel saved to {save_path}  "
+        f"(best_val={info['best_val_acc']:.1%}, test={results['overall_acc']:.1%})"
+    )
     if not args.save and not args.limit:
         print(f"To promote:  uv run python scripts/eval.py --promote {save_path}")
         _prune_staging(keep=5)

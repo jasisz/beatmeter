@@ -57,9 +57,38 @@ class AnalysisEngine:
             from beatmeter.analysis.cache import AnalysisCache
             self._audio_hash = AnalysisCache.audio_hash(file_path)
 
-        audio, sr = load_audio(file_path, sr=settings.sample_rate)
-        audio = preprocess(audio, sr)
+        # Fast path: skip expensive audio decoding if cache is fully warm
+        audio, sr = None, settings.sample_rate
+        if self.cache and self._audio_hash and self._is_cache_warm(self._audio_hash):
+            logger.debug("Fast path: skipping audio load for %s", file_path)
+        else:
+            audio, sr = load_audio(file_path, sr=settings.sample_rate)
+            audio = preprocess(audio, sr)
+
         return self.analyze_audio(audio, sr, skip_sections=skip_sections)
+
+    def _is_cache_warm(self, ah: str) -> bool:
+        """Check if all critical cache entries exist for fast path.
+
+        Checks beats, onsets, and MeterNet feature groups (audio + SSM).
+        Scores (meter_net) are NOT checked — they depend on the checkpoint
+        and may be missing after retraining, but features survive.
+        """
+        c = self.cache
+        if c.load_onsets(ah) is None:
+            return False
+        for tracker in ["beatnet", "beat_this", "librosa"]:
+            if c.load_beats(ah, tracker) is None:
+                return False
+        for bpb in [3, 4, 5, 7]:
+            if c.load_beats(ah, f"madmom_bpb{bpb}") is None:
+                return False
+        # MeterNet feature groups (no checkpoint dependency)
+        if c.load_array(ah, "meter_net_audio") is None:
+            return False
+        if c.load_array(ah, "meter_net_ssm") is None:
+            return False
+        return True
 
     def analyze_audio(self, audio: np.ndarray, sr: int = 22050, audio_hash: str | None = None, skip_sections: bool = False) -> AnalysisResult:
         """Analyze pre-loaded audio data.
@@ -70,7 +99,7 @@ class AnalysisEngine:
         """
         if audio_hash is not None:
             self._audio_hash = audio_hash
-        duration = len(audio) / sr
+        duration = len(audio) / sr if audio is not None else 0.0
         logger.info(f"Analyzing {duration:.1f}s of audio at {sr}Hz")
 
         ah = self._audio_hash  # may be None if called directly
@@ -86,7 +115,7 @@ class AnalysisEngine:
             onset_strengths = np.array(cached_onsets["onset_strengths"])
             onset_event_times = np.array(cached_onsets["onset_events"])
             logger.info("  Onsets loaded from cache")
-        else:
+        elif audio is not None:
             onsets = detect_onsets(audio, sr)
             onset_times, onset_strengths = onset_strength_envelope(audio, sr)
             onset_event_times = np.array([o.time for o in onsets])
@@ -96,6 +125,10 @@ class AnalysisEngine:
                     "onset_strengths": onset_strengths.tolist(),
                     "onset_events": onset_event_times.tolist(),
                 })
+        else:
+            onset_times = np.array([])
+            onset_strengths = np.array([])
+            onset_event_times = np.array([])
 
         tmp_wav_path: str | None = None
         try:
@@ -179,6 +212,10 @@ class AnalysisEngine:
             logger.info(f"  Primary: {best_name} (alignment={best_alignment:.3f}, "
                          f"{len(primary_beats)} beats)")
 
+            # Estimate duration from beats if audio was not loaded
+            if duration == 0.0 and primary_beats:
+                duration = round(primary_beats[-1].time + 1.0, 2)
+
             # Step 3: Tempo estimation
             logger.info("Step 3: Tempo estimation")
             candidates = []
@@ -199,7 +236,7 @@ class AnalysisEngine:
                 cached = self.cache.load_signal(ah, "tempo_librosa")
                 if cached is not None:
                     librosa_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
-            if librosa_est is None:
+            if librosa_est is None and audio is not None:
                 librosa_est = estimate_from_librosa(audio, sr)
                 if librosa_est and self.cache and ah:
                     self.cache.save_signal(ah, "tempo_librosa", {"bpm": librosa_est.bpm, "confidence": librosa_est.confidence, "method": librosa_est.method})
@@ -212,7 +249,7 @@ class AnalysisEngine:
                 cached = self.cache.load_signal(ah, "tempo_tempogram")
                 if cached is not None:
                     tempogram_est = BpmCandidate(bpm=cached["bpm"], confidence=cached["confidence"], method=cached["method"])
-            if tempogram_est is None:
+            if tempogram_est is None and audio is not None:
                 tempogram_est = estimate_from_tempogram(audio, sr)
                 if tempogram_est and self.cache and ah:
                     self.cache.save_signal(ah, "tempo_tempogram", {"bpm": tempogram_est.bpm, "confidence": tempogram_est.confidence, "method": tempogram_est.method})
@@ -326,6 +363,13 @@ class AnalysisEngine:
         if all_cached:
             logger.info("  All beats loaded from cache")
             return cached_beatnet, cached_beat_this, cached_madmom, cached_librosa, None
+
+        if audio is None:
+            # Partial cache — return what we have (no audio to compute missing)
+            return (
+                cached_beatnet or [], cached_beat_this or [],
+                cached_madmom, cached_librosa or [], None,
+            )
 
         # Pre-import madmom to avoid deadlock when threads import it concurrently
         import madmom  # noqa: F401

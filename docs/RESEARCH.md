@@ -686,6 +686,44 @@ The onset_mlp signal mapped its 6 output classes (3, 4, 5, 7, 9, 11) to 12 meter
 
 Cleaning echo mappings from onset_mlp is a pure improvement: simpler code, clearer signal semantics, and better arbiter performance. The grid search confirmed that the same sharpening config (autocorr:1.5) remains optimal, while boost_rare=1.0 (neutral) slightly outperforms the previous implicit default.
 
+### 4.14 Granular Feature Caching for MeterNet
+
+#### Motivation
+
+MeterNet's feature extraction pipeline produces a 1630-dim feature vector from multiple sources: audio features (1449d from autocorrelation, MFCC, tempogram, etc.), SSM features (75d from self-similarity matrix), beat features (42d), signal scores (60d), and tempo features (4d). Previously, the model's final meter scores were cached as a single `meter_net` signal entry keyed on the checkpoint hash. This meant that every model retraining invalidated the entire cache — forcing re-extraction of expensive audio features (~5s per file) even though only the cheap forward pass (~10ms) changed.
+
+#### Design
+
+Split the cache into **granular feature groups** that are keyed on their extraction code, not on the model checkpoint:
+
+| Cache group | Dims | LMDB key | Depends on | Cost |
+|-------------|------|----------|------------|------|
+| `meter_net_audio` | 1449 | `features:meter_net_audio:{hash}:{ah}` | `onset_mlp_features.py` | ~5s |
+| `meter_net_ssm` | 75 | `features:meter_net_ssm:{hash}:{ah}` | `ssm_features.py` | ~2s |
+| Beat features | 42 | computed live from cached beats | — | <1ms |
+| Signal scores | 60 | computed live from cached signals | — | <1ms |
+| Tempo features | 4 | computed live from cached tempo | — | <1ms |
+
+The `meter_net` score cache was removed entirely — scores are always recomputed from cached features + current checkpoint.
+
+#### Implementation
+
+1. **`cache.py`**: Added `features:{group}:{hash}:{audio_hash}` key format with `load_array`/`save_array` methods storing raw float32 bytes (faster than JSON for numpy arrays). Feature groups `meter_net_audio` and `meter_net_ssm` added to `SIGNAL_DEPS` with only their extraction code as dependencies.
+
+2. **`meter.py` (`_meter_net_predict`)**: Checks for cached feature arrays before extraction. Lazy audio preparation — only decodes audio when at least one feature group is a cache miss.
+
+3. **`engine.py` (`_is_cache_warm`)**: Fast path checks for `meter_net_audio` and `meter_net_ssm` arrays (not meter_net scores). When all feature groups are cached, the engine skips audio file decoding entirely.
+
+#### Results
+
+- **Eval after model retraining**: ~10 seconds for 700 files (previously ~10 minutes)
+- **Speedup**: ~60× for the retrain→eval cycle
+- **No accuracy impact**: Feature extraction is identical; only the caching granularity changed
+
+#### Conclusion
+
+Granular feature caching is a pure infrastructure improvement that dramatically accelerates the iteration loop. The key insight is separating the "what depends on the model checkpoint" (forward pass) from "what depends only on the audio" (feature extraction), and caching them independently.
+
 ## 5. Failure Analysis
 
 We analyzed incorrectly classified files and identified three recurring failure patterns.
