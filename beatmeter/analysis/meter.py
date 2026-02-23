@@ -27,8 +27,7 @@ _meter_net_model = None
 _meter_net_meta = None  # feat_mean, feat_std, class_meters, etc.
 
 
-def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks,
-                     bottleneck=0, ac_split=1024):
+def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
     """Build MeterNet model (must match MeterNet in scripts/training/train.py)."""
     import torch
     import torch.nn as nn
@@ -49,20 +48,8 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks,
     class MeterNetModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.bottleneck_dim = bottleneck
-            self.ac_split = ac_split
-
-            if bottleneck > 0:
-                self.ac_compress = nn.Sequential(
-                    nn.Linear(ac_split, bottleneck), nn.ReLU(),
-                )
-                proj_input = bottleneck + (input_dim - ac_split)
-            else:
-                self.ac_compress = None
-                proj_input = input_dim
-
             self.input_proj = nn.Sequential(
-                nn.Linear(proj_input, hidden), nn.BatchNorm1d(hidden), nn.ReLU(),
+                nn.Linear(input_dim, hidden), nn.BatchNorm1d(hidden), nn.ReLU(),
                 nn.Dropout(min(0.3 * ds, 0.5)),
             )
             self.residual = nn.Sequential(
@@ -75,11 +62,8 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks,
                 nn.Dropout(min(0.15 * ds, 0.5)),
                 nn.Linear(h4, n_classes),
             )
+
         def forward(self, x):
-            if self.ac_compress is not None:
-                ac = x[:, :self.ac_split]
-                rest = x[:, self.ac_split:]
-                x = torch.cat([self.ac_compress(ac), rest], dim=1)
             return self.head(self.residual(self.input_proj(x)))
 
     return MeterNetModel()
@@ -118,9 +102,7 @@ def _load_meter_net():
         ds = ckpt.get("dropout_scale", 1.0)
         n_blocks = ckpt.get("n_blocks", 1)
 
-        bottleneck = ckpt.get("bottleneck", 0)
-        model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks,
-                                 bottleneck=bottleneck)
+        model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks)
 
         # Backward compat: old checkpoints (pre-n_blocks) have "residual.block.*"
         # instead of "residual.0.block.*".
@@ -141,6 +123,9 @@ def _load_meter_net():
             "class_meters": ckpt["class_meters"],
             "meter_to_idx": ckpt["meter_to_idx"],
             "feature_version": ckpt.get("feature_version", "mn_v3"),
+            "n_mert_features": ckpt.get("n_mert_features", 0),
+            "mert_layer": ckpt.get("mert_layer", 3),
+            "included_groups": ckpt.get("included_groups"),  # None = all groups
         }
         logger.info(
             "MeterNet loaded: dim=%d, hidden=%d, blocks=%d, classes=%d",
@@ -197,37 +182,44 @@ def _meter_net_predict(
 
         t0 = time.perf_counter()
 
+        # Check which groups the model needs
+        included_groups = meta.get("included_groups")  # None = all
+        need_audio = included_groups is None or "audio" in included_groups
+        need_ssm = included_groups is None or "ssm" in included_groups
+
         # 1. Audio features (1449d) — cached independently from checkpoint
         audio_feat = None
         audio_feat_cached = False
-        if cache and audio_hash:
-            audio_feat = cache.load_array(audio_hash, "meter_net_audio")
-            if audio_feat is not None:
-                audio_feat_cached = True
+        if need_audio:
+            if cache and audio_hash:
+                audio_feat = cache.load_array(audio_hash, "meter_net_audio")
+                if audio_feat is not None:
+                    audio_feat_cached = True
 
         # 2. SSM features (75d) — cached independently from checkpoint
         ssm_feat = None
         ssm_feat_cached = False
-        if cache and audio_hash:
-            ssm_feat = cache.load_array(audio_hash, "meter_net_ssm")
-            if ssm_feat is not None:
-                ssm_feat_cached = True
+        if need_ssm:
+            if cache and audio_hash:
+                ssm_feat = cache.load_array(audio_hash, "meter_net_ssm")
+                if ssm_feat is not None:
+                    ssm_feat_cached = True
 
-        # Lazy audio preparation: only when at least one feature is a cache miss
+        # Lazy audio preparation: only when at least one needed feature is a cache miss
         audio_copy = None
-        if audio_feat is None or ssm_feat is None:
+        if (need_audio and audio_feat is None) or (need_ssm and ssm_feat is None):
             if audio is None:
                 return None
             audio_copy = _prepare_audio(audio, sr, SR, MAX_DURATION_S)
 
-        if audio_feat is None:
+        if need_audio and audio_feat is None:
             audio_feat = extract_features_v6(audio_copy, SR)
             if audio_feat is None:
                 return None
             if cache and audio_hash:
                 cache.save_array(audio_hash, "meter_net_audio", audio_feat)
 
-        if ssm_feat is None:
+        if need_ssm and ssm_feat is None:
             ssm_feat = extract_ssm_features_live(
                 audio_copy, SR, beatnet_beats, beat_this_beats, madmom_results,
             )
@@ -248,24 +240,50 @@ def _meter_net_predict(
             tempo_lib = tempo_bpm
             tempo_tg = tempo_bpm
 
-        # 4. Beat features (42 dims)
-        duration = len(audio) / sr if audio is not None else 30.0
-        oet = onset_event_times if onset_event_times is not None else np.array([])
-        beat_feat = extract_beat_features_live(
-            beatnet_beats, beat_this_beats, madmom_results, oet, duration,
-        )
+        # Build a dict of available feature groups
+        n_mert = meta.get("n_mert_features", 0)
+        group_feats: dict[str, np.ndarray] = {}
+        if audio_feat is not None:
+            group_feats["audio"] = audio_feat
+        if ssm_feat is not None:
+            group_feats["ssm"] = ssm_feat
 
-        # Signal scores (60 dims) — 5 signals, excludes onset_mlp
-        signal_feat = extract_signal_scores_live(signal_results)
+        # 4. Beat features (42 dims) — only if needed
+        if included_groups is None or "beat" in included_groups:
+            duration = len(audio) / sr if audio is not None else 30.0
+            oet = onset_event_times if onset_event_times is not None else np.array([])
+            group_feats["beat"] = extract_beat_features_live(
+                beatnet_beats, beat_this_beats, madmom_results, oet, duration,
+            )
 
-        # Tempo features (4 dims)
-        tempo_feat = extract_tempo_features_live(tempo_lib, tempo_tg)
+        # Signal scores (60 dims) — only if needed
+        if included_groups is None or "signal" in included_groups:
+            group_feats["signal"] = extract_signal_scores_live(signal_results)
 
-        # 5. Concatenate
-        full_feat = np.concatenate([
-            audio_feat, ssm_feat,
-            beat_feat, signal_feat, tempo_feat,
-        ])
+        # Tempo features (4 dims) — only if needed
+        if included_groups is None or "tempo" in included_groups:
+            group_feats["tempo"] = extract_tempo_features_live(tempo_lib, tempo_tg)
+
+        # MERT embedding — only if needed
+        if n_mert > 0 and (included_groups is None or "mert" in included_groups):
+            mert_feat = None
+            if cache and audio_hash:
+                mert_feat = cache.load_array(audio_hash, "meter_net_mert")
+            if mert_feat is None:
+                from beatmeter.analysis.signals.meter_net_features import N_MERT_FEATURES
+                mert_feat = np.zeros(N_MERT_FEATURES, dtype=np.float32)
+            group_feats["mert"] = mert_feat
+
+        # 5. Concatenate in canonical order (only included groups)
+        from beatmeter.analysis.signals.meter_net_features import ALL_GROUP_NAMES
+        if included_groups is not None:
+            parts = [group_feats[g] for g in ALL_GROUP_NAMES
+                     if g in included_groups and g in group_feats]
+        else:
+            # Legacy / no ablation: all available groups in canonical order
+            parts = [group_feats[g] for g in ALL_GROUP_NAMES if g in group_feats]
+        full_feat = np.concatenate(parts)
+
         expected_dim = len(meta["feat_mean"])
         if full_feat.shape[0] != expected_dim:
             logger.warning("MeterNet feature dim mismatch: %d != %d", full_feat.shape[0], expected_dim)

@@ -65,6 +65,10 @@ from beatmeter.analysis.signals.meter_net_features import (
     N_BEAT_FEATURES,
     N_SIGNAL_FEATURES,
     N_TEMPO_FEATURES,
+    N_MERT_FEATURES,
+    MERT_LAYER,
+    ALL_GROUP_NAMES,
+    GROUP_DIMS,
     extract_beat_features,
     extract_signal_scores,
     extract_tempo_features,
@@ -165,6 +169,39 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[Entry]:
 _TOTAL_FEATURES_ACTIVE = TOTAL_FEATURES
 _AUDIO_FEATURES_ACTIVE = TOTAL_FEATURES_V6
 
+# Active feature groups (set by --ablate; used for column removal)
+_INCLUDED_GROUPS: list[str] | None = None  # None = all groups (no ablation)
+
+# MERT configuration (set by main() based on CLI args)
+_MERT_LOOKUP: dict[str, Path] | None = None  # stem -> .npy path
+_MERT_LAYER_ACTIVE: int = MERT_LAYER
+_N_MERT_ACTIVE: int = 0  # 0 = no MERT, N_MERT_FEATURES = with MERT
+
+
+def _build_mert_lookup(*dirs: Path) -> dict[str, Path]:
+    """Build stem -> .npy path lookup from MERT embedding directories."""
+    lookup: dict[str, Path] = {}
+    for d in dirs:
+        if not d.exists():
+            continue
+        for npy in d.glob("*.npy"):
+            lookup[npy.stem] = npy
+    return lookup
+
+
+def _load_mert_embedding(audio_path: Path) -> np.ndarray:
+    """Load MERT embedding for an audio file. Returns zeros if not found."""
+    if _MERT_LOOKUP is None:
+        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+    npy_path = _MERT_LOOKUP.get(audio_path.stem)
+    if npy_path is None:
+        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+    try:
+        emb = np.load(npy_path)  # shape (12, 1536)
+        return emb[_MERT_LAYER_ACTIVE].astype(np.float32)
+    except Exception:
+        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+
 
 def _extract_audio_from_path(audio_path_str: str) -> np.ndarray | None:
     """Load audio and extract v6 features. Picklable for multiprocessing."""
@@ -185,9 +222,17 @@ def _onset_cache_key(audio_path: Path) -> str:
 
 
 def _full_cache_key(audio_path: Path) -> str:
-    """Cache key for full MeterNet feature vector (v7 = with SSM)."""
+    """Cache key for full MeterNet feature vector.
+
+    Version suffix encodes which feature groups are active, so adding/removing
+    MERT automatically invalidates old cache entries.
+    """
+    if _N_MERT_ACTIVE == 0:
+        suffix = "meter_net_v7"
+    else:
+        suffix = f"meter_net_v7_mert{_N_MERT_ACTIVE}_L{_MERT_LAYER_ACTIVE}"
     st = audio_path.stat()
-    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::meter_net_v7"
+    raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{suffix}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -215,7 +260,7 @@ def _build_full_features(
             if old_path.exists():
                 ssm_feat = np.load(old_path)
                 feat_db.save(f"ssm:{ssm_key}", ssm_feat)
-                old_path.unlink()
+                old_path.unlink(missing_ok=True)
 
     if ssm_feat is None:
         import librosa
@@ -233,10 +278,14 @@ def _build_full_features(
     signal_feat = extract_signal_scores(analysis_cache, audio_hash, preloaded=preloaded)
     tempo_feat = extract_tempo_features(analysis_cache, audio_hash, preloaded=preloaded)
 
-    full = np.concatenate([
-        audio_feat, ssm_feat,
-        beat_feat, signal_feat, tempo_feat,
-    ])
+    parts = [audio_feat, ssm_feat, beat_feat, signal_feat, tempo_feat]
+
+    # Optional MERT embedding
+    if _N_MERT_ACTIVE > 0:
+        mert_feat = _load_mert_embedding(audio_path)
+        parts.append(mert_feat)
+
+    full = np.concatenate(parts)
     if full.shape[0] != _TOTAL_FEATURES_ACTIVE:
         return None
     return full
@@ -289,7 +338,7 @@ def extract_all_features(
             if old_path.exists():
                 full = np.load(old_path)
                 feat_db.save(f"full:{full_key}", full)
-                old_path.unlink()
+                old_path.unlink(missing_ok=True)
 
         if full is not None and full.shape[0] == _TOTAL_FEATURES_ACTIVE:
             features_list.append(full)
@@ -312,7 +361,7 @@ def extract_all_features(
             if old_path.exists():
                 audio_feat = np.load(old_path)
                 feat_db.save(f"onset:v6:{onset_key}", audio_feat)
-                old_path.unlink()
+                old_path.unlink(missing_ok=True)
 
         if audio_feat is None or audio_feat.shape[0] != _AUDIO_FEATURES_ACTIVE:
             need_extract.append((i, audio_path, primary_meter, meters_dict))
@@ -452,15 +501,7 @@ class ResidualBlock(nn.Module):
 class MeterNet(nn.Module):
     """Residual MLP for unified meter classification.
 
-    Architecture:
-      If bottleneck > 0:
-        autocorr (ac_split dims) -> Linear(ac_split, bottleneck) -> ReLU
-        rest (input_dim - ac_split dims) -> pass through
-        concat (bottleneck + rest) -> input_proj -> ...
-      Else:
-        input -> input_proj -> ...
-
-      input_proj -> hidden -> N x hidden (residual) -> hidden*0.4 -> hidden*0.2 -> n_classes
+    Architecture: input -> input_proj -> hidden -> N x residual -> head -> n_classes
     """
 
     def __init__(
@@ -470,29 +511,14 @@ class MeterNet(nn.Module):
         hidden: int = 640,
         dropout_scale: float = 1.0,
         n_blocks: int = 1,
-        bottleneck: int = 0,
-        ac_split: int = 1024,
     ):
         super().__init__()
         ds = dropout_scale
 
-        self.bottleneck_dim = bottleneck
-        self.ac_split = ac_split
-
-        if bottleneck > 0:
-            self.ac_compress = nn.Sequential(
-                nn.Linear(ac_split, bottleneck),
-                nn.ReLU(),
-            )
-            proj_input = bottleneck + (input_dim - ac_split)
-        else:
-            self.ac_compress = None
-            proj_input = input_dim
-
         h2 = max(int(hidden * 0.4), 64)
         h4 = max(int(hidden * 0.2), 32)
         self.input_proj = nn.Sequential(
-            nn.Linear(proj_input, hidden),
+            nn.Linear(input_dim, hidden),
             nn.BatchNorm1d(hidden),
             nn.ReLU(),
             nn.Dropout(min(0.3 * ds, 0.5)),
@@ -513,10 +539,6 @@ class MeterNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.ac_compress is not None:
-            ac = x[:, :self.ac_split]
-            rest = x[:, self.ac_split:]
-            x = torch.cat([self.ac_compress(ac), rest], dim=1)
         x = self.input_proj(x)
         x = self.residual(x)
         return self.head(x)
@@ -550,6 +572,56 @@ def _cutmix_batch(
     mixed_y = actual_lam * yb + (1 - actual_lam) * yb[idx]
 
     return mixed_x, mixed_y
+
+
+def _mixup_batch(
+    xb: torch.Tensor, yb: torch.Tensor, alpha: float = CUTMIX_ALPHA,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mixup: linear interpolation of full feature vectors."""
+    if alpha <= 0:
+        return xb, yb
+
+    lam = np.random.beta(alpha, alpha)
+    idx = torch.randperm(xb.size(0), device=xb.device)
+
+    mixed_x = lam * xb + (1 - lam) * xb[idx]
+    mixed_y = lam * yb + (1 - lam) * yb[idx]
+
+    return mixed_x, mixed_y
+
+
+def _stratified_kfold(
+    primary_meters: list[int], n_folds: int, seed: int = 42,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Stratified K-fold split. Returns list of (train_indices, val_indices).
+
+    Each fold has approximately equal class distribution.
+    """
+    rng = np.random.RandomState(seed)
+
+    # Group indices by class
+    class_indices: dict[int, list[int]] = {}
+    for i, m in enumerate(primary_meters):
+        class_indices.setdefault(m, []).append(i)
+
+    # Shuffle within each class
+    for m in class_indices:
+        rng.shuffle(class_indices[m])
+
+    # Round-robin assign each sample to a fold
+    fold_assignments = np.zeros(len(primary_meters), dtype=int)
+    for indices in class_indices.values():
+        for i, idx in enumerate(indices):
+            fold_assignments[idx] = i % n_folds
+
+    # Build fold splits
+    folds = []
+    all_indices = np.arange(len(primary_meters))
+    for k in range(n_folds):
+        val_mask = fold_assignments == k
+        folds.append((all_indices[~val_mask], all_indices[val_mask]))
+
+    return folds
 
 
 FOCAL_GAMMA = 2.0
@@ -613,9 +685,9 @@ def train_model(
     seed: int = 42,
     use_focal: bool = False,
     n_blocks: int = 1,
-    bottleneck: int = 0,
     verbose: bool = False,
     log_every: int = 10,
+    aug_mode: str = "cutmix",
 ) -> tuple[nn.Module, dict]:
     """Train MeterNet with BCE/Focal loss and balanced accuracy validation."""
     torch.manual_seed(seed)
@@ -667,7 +739,7 @@ def train_model(
 
     model = MeterNet(
         input_dim, n_classes, hidden=hidden, dropout_scale=dropout_scale,
-        n_blocks=n_blocks, bottleneck=bottleneck,
+        n_blocks=n_blocks,
     ).to(device)
     if use_focal:
         def criterion(logits, targets):
@@ -675,6 +747,7 @@ def train_model(
         print(f"  Loss: Focal BCE (gamma={FOCAL_GAMMA})")
     else:
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=50, T_mult=2,
@@ -701,8 +774,13 @@ def train_model(
             scale = 1.0 + (torch.rand(xb.size(0), 1, device=device) - 0.5) * 0.1
             xb = xb * scale + noise
 
-            # CutMix
-            xb_mixed, yb_mixed = _cutmix_batch(xb, yb)
+            # Sample mixing augmentation
+            if aug_mode == "cutmix":
+                xb_mixed, yb_mixed = _cutmix_batch(xb, yb)
+            elif aug_mode == "mixup":
+                xb_mixed, yb_mixed = _mixup_batch(xb, yb)
+            else:
+                xb_mixed, yb_mixed = xb, yb
 
             optimizer.zero_grad()
             logits = model(xb_mixed)
@@ -890,11 +968,16 @@ def main():
     parser.add_argument("--focal", action="store_true", help="Use focal BCE loss")
     parser.add_argument("--ablate", type=str, default=None,
                         help="Comma-separated feature names to zero out (e.g. beat_beatnet,sig_hcdf)")
-    parser.add_argument("--pca-autocorr", type=int, default=0,
-                        help="PCA-compress autocorr block (1024d) to N dims (0=disabled)")
-    parser.add_argument("--bottleneck", type=int, default=0,
-                        help="Learned autocorr bottleneck dim (0=disabled, e.g. 80)")
+    parser.add_argument("--aug-mode", type=str, default="cutmix",
+                        choices=["cutmix", "mixup", "none"],
+                        help="Sample mixing augmentation (default: cutmix)")
+    parser.add_argument("--no-mert", action="store_true",
+                        help="Disable MERT embeddings (train without them)")
+    parser.add_argument("--mert-layer", type=int, default=MERT_LAYER,
+                        help=f"MERT layer to use (default {MERT_LAYER})")
 
+    parser.add_argument("--kfold", type=int, default=0,
+                        help="K-fold CV (0=off, 5=recommended). Pools train+val, reports mean±std.")
     parser.add_argument("--limit", type=int, default=0, help="Limit entries (0=all)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--save", type=Path, default=None)
@@ -911,9 +994,27 @@ def main():
     valid_meters = set(CLASS_METERS_6)
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
 
+    # MERT configuration
+    global _MERT_LOOKUP, _MERT_LAYER_ACTIVE, _N_MERT_ACTIVE, _TOTAL_FEATURES_ACTIVE
+    if not args.no_mert:
+        _MERT_LAYER_ACTIVE = args.mert_layer
+        _MERT_LOOKUP = _build_mert_lookup(
+            Path("data/mert_embeddings/meter2800"),
+            Path("data/mert_embeddings/wikimeter"),
+        )
+        if _MERT_LOOKUP:
+            _N_MERT_ACTIVE = N_MERT_FEATURES
+            _TOTAL_FEATURES_ACTIVE = TOTAL_FEATURES + N_MERT_FEATURES
+            print(f"MERT: {len(_MERT_LOOKUP)} embeddings, layer={_MERT_LAYER_ACTIVE}, dims={N_MERT_FEATURES}")
+        else:
+            print("MERT: no embeddings found, training without MERT")
+    else:
+        print("MERT: disabled (--no-mert)")
+
     print(f"MeterNet v6 | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
+    mert_str = f", mert={_N_MERT_ACTIVE}" if _N_MERT_ACTIVE > 0 else ""
     print(f"  blocks: audio={_AUDIO_FEATURES_ACTIVE}, ssm={N_SSM_FEATURES}, "
-          f"beat={N_BEAT_FEATURES}, signal={N_SIGNAL_FEATURES}, tempo={N_TEMPO_FEATURES}")
+          f"beat={N_BEAT_FEATURES}, signal={N_SIGNAL_FEATURES}, tempo={N_TEMPO_FEATURES}{mert_str}")
     print(f"  data: {args.data_dir}"
           + (f" + METER2800: {args.meter2800}" if args.meter2800 else ""))
 
@@ -931,32 +1032,66 @@ def main():
             wiki_test.append(entry)
     print(f"  WIKIMETER: {len(wiki_train)} train, {len(wiki_val)} val, {len(wiki_test)} test")
 
-    train_entries = list(wiki_train)
-    val_entries = list(wiki_val)
-    test_entries = list(wiki_test)
+    # Build entry pools based on mode
+    use_kfold = args.kfold > 1
+    pool_entries: list[Entry] = []  # M2800 tuning pool for K-fold splits
+    wiki_pool: list[Entry] = []     # WIKI entries always in training
+    test_entries: list[Entry] = list(wiki_test)
 
-    # Extra: METER2800 — each split goes where it belongs
-    if args.meter2800:
-        m2800_train = load_meter2800_split(args.meter2800, "train", valid_meters)
-        m2800_val = load_meter2800_split(args.meter2800, "val", valid_meters)
-        m2800_test = load_meter2800_split(args.meter2800, "test", valid_meters)
-        print(f"  METER2800: {len(m2800_train)} train, {len(m2800_val)} val, {len(m2800_test)} test")
-        train_entries.extend(m2800_train)
-        val_entries.extend(m2800_val)
-        test_entries.extend(m2800_test)
-
-    if args.limit:
-        train_entries = train_entries[:args.limit]
-        val_entries = val_entries[:args.limit]
-        test_entries = test_entries[:args.limit]
-
-    print(f"  Total: {len(train_entries)} train, {len(val_entries)} val, {len(test_entries)} test")
+    if use_kfold:
+        # K-fold on METER2800 only; WIKIMETER always in training
+        wiki_pool = list(wiki_train) + list(wiki_val)
+        if args.meter2800:
+            m2800_train = load_meter2800_split(args.meter2800, "train", valid_meters)
+            m2800_val = load_meter2800_split(args.meter2800, "val", valid_meters)
+            m2800_test = load_meter2800_split(args.meter2800, "test", valid_meters)
+            print(f"  METER2800: {len(m2800_train)} train, {len(m2800_val)} val, {len(m2800_test)} test")
+            pool_entries = list(m2800_train) + list(m2800_val)
+            test_entries.extend(m2800_test)
+        else:
+            print("  WARNING: --kfold without --meter2800 not supported")
+            sys.exit(1)
+        if args.limit:
+            pool_entries = pool_entries[:args.limit]
+            wiki_pool = wiki_pool[:args.limit]
+            test_entries = test_entries[:args.limit]
+        print(f"  K-fold mode: {args.kfold} folds, M2800 pool={len(pool_entries)}, "
+              f"WIKI train={len(wiki_pool)} (always in train), test={len(test_entries)}")
+    else:
+        # Standard mode: fixed train/val split
+        train_entries = list(wiki_train)
+        val_entries = list(wiki_val)
+        n_wiki_val = len(wiki_val)
+        if args.meter2800:
+            m2800_train = load_meter2800_split(args.meter2800, "train", valid_meters)
+            m2800_val = load_meter2800_split(args.meter2800, "val", valid_meters)
+            m2800_test = load_meter2800_split(args.meter2800, "test", valid_meters)
+            print(f"  METER2800: {len(m2800_train)} train, {len(m2800_val)} val, {len(m2800_test)} test")
+            train_entries.extend(wiki_val)
+            val_entries = list(m2800_val)
+            train_entries.extend(m2800_train)
+            test_entries.extend(m2800_test)
+            print(f"  Val strategy: METER2800 val only ({len(m2800_val)} files), "
+                  f"WIKIMETER val ({n_wiki_val}) moved to training")
+        if args.limit:
+            train_entries = train_entries[:args.limit]
+            val_entries = val_entries[:args.limit]
+            test_entries = test_entries[:args.limit]
+        print(f"  Total: {len(train_entries)} train, {len(val_entries)} val, {len(test_entries)} test")
 
     if args.verbose:
-        for name, entries in [("Train", train_entries), ("Val", val_entries), ("Test", test_entries)]:
-            dist = Counter(m for _, m, _ in entries)
+        if use_kfold:
+            dist = Counter(m for _, m, _ in pool_entries)
             dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
-            print(f"  {name}: {dist_str}")
+            print(f"  M2800 pool: {dist_str}")
+            dist2 = Counter(m for _, m, _ in wiki_pool)
+            dist_str2 = "  ".join(f"{m}/x:{dist2[m]}" for m in sorted(dist2.keys()))
+            print(f"  WIKI train: {dist_str2}")
+        else:
+            for name, entries in [("Train", train_entries), ("Val", val_entries), ("Test", test_entries)]:
+                dist = Counter(m for _, m, _ in entries)
+                dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
+                print(f"  {name}: {dist_str}")
 
     # Initialize analysis cache + numpy LMDB
     from beatmeter.analysis.cache import AnalysisCache, NumpyLMDB
@@ -967,48 +1102,38 @@ def main():
     print("\nExtracting features (cache: data/features.lmdb)...")
     t0 = time.time()
 
-    X_train, y_train, pm_train = extract_all_features(
-        train_entries, feat_db, analysis_cache, "train", args.workers, args.verbose,
-    )
-    X_val, y_val, pm_val = extract_all_features(
-        val_entries, feat_db, analysis_cache, "val", args.workers, args.verbose,
-    )
-    X_test, y_test, pm_test = extract_all_features(
+    if use_kfold:
+        X_pool, y_pool, pm_pool = extract_all_features(
+            pool_entries, feat_db, analysis_cache, "M2800 pool", args.workers, args.verbose,
+        )
+        X_wiki, y_wiki, pm_wiki = extract_all_features(
+            wiki_pool, feat_db, analysis_cache, "WIKI train", args.workers, args.verbose,
+        )
+    else:
+        X_pool = None  # not used
+        X_train, y_train, pm_train = extract_all_features(
+            train_entries, feat_db, analysis_cache, "train", args.workers, args.verbose,
+        )
+        X_val, y_val, _ = extract_all_features(
+            val_entries, feat_db, analysis_cache, "val", args.workers, args.verbose,
+        )
+    X_test, y_test, _ = extract_all_features(
         test_entries, feat_db, analysis_cache, "test", args.workers, args.verbose,
     )
 
     print(f"  Feature extraction: {time.time() - t0:.1f}s")
-    print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
+    if use_kfold:
+        print(f"  Shapes: M2800 pool {X_pool.shape}, WIKI {X_wiki.shape}, test {X_test.shape}")
+    else:
+        print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
 
-    # Ablation: zero out selected features
-    if args.ablate:
-        from beatmeter.analysis.signals.meter_net_features import ABLATION_TARGETS
-        for name in args.ablate.split(","):
-            name = name.strip()
-            if name not in ABLATION_TARGETS:
-                print(f"  WARNING: unknown ablation target '{name}', valid: {sorted(ABLATION_TARGETS.keys())}")
-                continue
-            start, end = ABLATION_TARGETS[name]
-            X_train[:, start:end] = 0.0
-            X_val[:, start:end] = 0.0
-            X_test[:, start:end] = 0.0
-            print(f"  ABLATION: {name} zeroed (dims {start}:{end}, {end - start}d)")
-
-    # Check feature completeness (non-zero groups)
+    # Check feature completeness (non-zero groups) — before ablation
     from beatmeter.analysis.signals.meter_net_features import feature_groups
-    fg = feature_groups(_AUDIO_FEATURES_ACTIVE)
-    if args.verbose:
-        for name, X in [("Train", X_train), ("Val", X_val)]:
-            counts = {}
-            for grp, (start, end) in fg.items():
-                counts[grp] = int(np.any(X[:, start:end] != 0, axis=1).sum())
-            parts = ", ".join(f"{g}={c}/{len(X)}" for g, c in counts.items())
-            print(f"  {name} non-zero: {parts}")
-
-    # Fail-fast: check if beat/signal/tempo features are populated
-    train_beat_nz = np.any(X_train[:, fg["beat"][0]:fg["beat"][1]] != 0, axis=1).sum()
-    train_signal_nz = np.any(X_train[:, fg["signal"][0]:fg["signal"][1]] != 0, axis=1).sum()
-    cache_pct = (train_beat_nz + train_signal_nz) / (2 * len(X_train)) * 100
+    fg = feature_groups(_AUDIO_FEATURES_ACTIVE, n_mert=_N_MERT_ACTIVE)
+    X_check = X_pool if use_kfold else X_train
+    train_beat_nz = np.any(X_check[:, fg["beat"][0]:fg["beat"][1]] != 0, axis=1).sum()
+    train_signal_nz = np.any(X_check[:, fg["signal"][0]:fg["signal"][1]] != 0, axis=1).sum()
+    cache_pct = (train_beat_nz + train_signal_nz) / (2 * len(X_check)) * 100
     if cache_pct < 10:
         print(f"\n  Beat/signal features populated for {cache_pct:.0f}% of train files.")
         print("  MeterNet needs cached beat tracker + signal data to train properly.")
@@ -1016,58 +1141,68 @@ def main():
         print("    uv run python scripts/setup/warm.py -w 4")
         sys.exit(1)
 
-    # PCA compression of autocorrelation block
-    pca_info = None
-    if args.pca_autocorr > 0:
-        from sklearn.decomposition import PCA
-        from beatmeter.analysis.signals.onset_mlp_features import N_AUTOCORR_V5
+    # Ablation: remove feature group columns (proper ablation, not zeroing)
+    global _INCLUDED_GROUPS
+    if args.ablate:
+        from beatmeter.analysis.signals.meter_net_features import (
+            ABLATION_TARGETS, feature_groups as fg_func,
+        )
+        ablate_names = [n.strip() for n in args.ablate.split(",")]
 
-        n_pca = min(args.pca_autocorr, X_train.shape[0] - 1)
-        ac_end = N_AUTOCORR_V5  # 1024
+        # Check if all ablation targets are top-level groups
+        valid_groups = set(ALL_GROUP_NAMES)
+        all_are_groups = all(n in valid_groups for n in ablate_names)
 
-        # Fit PCA on train autocorr block
-        pca = PCA(n_components=n_pca)
-        ac_train = pca.fit_transform(X_train[:, :ac_end])
-        ac_val = pca.transform(X_val[:, :ac_end])
-        ac_test = pca.transform(X_test[:, :ac_end])
+        if all_are_groups:
+            # Proper ablation: physically remove columns
+            # Determine which groups to keep (in canonical order)
+            ablate_set = set(ablate_names)
+            # Include mert in active groups if MERT is active
+            all_active = [g for g in ALL_GROUP_NAMES
+                          if g != "mert" or _N_MERT_ACTIVE > 0]
+            included = [g for g in all_active if g not in ablate_set]
+            _INCLUDED_GROUPS = included
 
-        explained = pca.explained_variance_ratio_.sum()
-        print(f"  PCA autocorr: {ac_end}d -> {n_pca}d ({explained:.1%} variance explained)")
+            # Build column mask: keep only columns from included groups
+            fg = fg_func(_AUDIO_FEATURES_ACTIVE, n_mert=_N_MERT_ACTIVE)
+            keep_cols = []
+            for g in included:
+                start, end = fg[g]
+                keep_cols.extend(range(start, end))
+            keep_cols = sorted(keep_cols)
 
-        # Reconstruct: PCA(autocorr) + rest_of_features
-        rest_train = X_train[:, ac_end:]
-        rest_val = X_val[:, ac_end:]
-        rest_test = X_test[:, ac_end:]
+            if use_kfold:
+                X_pool = X_pool[:, keep_cols]
+                X_wiki = X_wiki[:, keep_cols]
+            else:
+                X_train = X_train[:, keep_cols]
+                X_val = X_val[:, keep_cols]
+            X_test = X_test[:, keep_cols]
 
-        X_train = np.hstack([ac_train, rest_train]).astype(np.float32)
-        X_val = np.hstack([ac_val, rest_val]).astype(np.float32)
-        X_test = np.hstack([ac_test, rest_test]).astype(np.float32)
+            removed_dim = _TOTAL_FEATURES_ACTIVE - len(keep_cols)
+            _TOTAL_FEATURES_ACTIVE = len(keep_cols)
+            print(f"  ABLATION (column removal): removed {ablate_names} "
+                  f"(-{removed_dim}d), kept {included} ({_TOTAL_FEATURES_ACTIVE}d)")
+        else:
+            # Granular ablation (sub-group): fall back to zeroing
+            for name in ablate_names:
+                if name not in ABLATION_TARGETS:
+                    print(f"  WARNING: unknown ablation target '{name}', "
+                          f"valid: {sorted(ABLATION_TARGETS.keys())}")
+                    continue
+                start, end = ABLATION_TARGETS[name]
+                if use_kfold:
+                    X_pool[:, start:end] = 0.0
+                    X_wiki[:, start:end] = 0.0
+                else:
+                    X_train[:, start:end] = 0.0
+                    X_val[:, start:end] = 0.0
+                X_test[:, start:end] = 0.0
+                print(f"  ABLATION (zeroing): {name} zeroed "
+                      f"(dims {start}:{end}, {end - start}d)")
 
-        new_dim = X_train.shape[1]
-        print(f"  New feature dim: {new_dim} (was {TOTAL_FEATURES})")
-
-        pca_info = {
-            "pca_components": pca.components_,  # (n_pca, 1024)
-            "pca_mean": pca.mean_,              # (1024,)
-            "pca_n": n_pca,
-            "pca_ac_end": ac_end,
-            "pca_explained": float(explained),
-        }
-
-    # Standardize
-    X_train, X_val, X_test, feat_mean, feat_std = _standardize(X_train, X_val, X_test)
-    print("  Features standardized (z-score, fit on train)")
-
-    # Train
-    bn_label = f", bottleneck={args.bottleneck}" if args.bottleneck else ""
-    print(
-        f"\nTraining MeterNet (input={X_train.shape[1]}, hidden={args.hidden}, "
-        f"blocks={args.n_blocks}, dropout_scale={args.dropout_scale}{bn_label}, "
-        f"classes={len(CLASS_METERS_6)})..."
-    )
-    model, info = train_model(
-        X_train, y_train, pm_train,
-        X_val, y_val,
+    # Common training kwargs
+    train_kwargs = dict(
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
@@ -1077,16 +1212,169 @@ def main():
         seed=args.seed,
         use_focal=args.focal,
         n_blocks=args.n_blocks,
-        bottleneck=args.bottleneck,
         verbose=args.verbose,
         log_every=args.log_every,
+        aug_mode=args.aug_mode,
     )
-    print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
 
-    # Test
-    results = evaluate(model, X_test, y_test, args.device, verbose=args.verbose)
+    # -----------------------------------------------------------------------
+    # K-fold cross-validation
+    # -----------------------------------------------------------------------
+    if use_kfold:
+        n_folds = args.kfold
+        folds = _stratified_kfold(pm_pool, n_folds, seed=args.seed)
+        print(f"\n{'='*60}")
+        print(f"STRATIFIED {n_folds}-FOLD CROSS-VALIDATION")
+        print(f"  M2800 pool: {len(pm_pool)} files (K-fold split)")
+        print(f"  WIKI train: {len(X_wiki)} files (always in train)")
+        print(f"{'='*60}")
 
-    # Save — always to unique path (promote via eval.py --promote)
+        # Show fold class distribution
+        for k, (_, val_idx) in enumerate(folds):
+            dist = Counter(pm_pool[i] for i in val_idx)
+            dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
+            print(f"  Fold {k+1} val: {len(val_idx)} M2800 files ({dist_str})")
+
+        fold_val_accs: list[float] = []
+        fold_test_accs: list[float] = []
+        fold_test_correct: list[int] = []
+        fold_epochs: list[int] = []
+
+        for k, (train_idx, val_idx) in enumerate(folds):
+            # Train = M2800 from (K-1) folds + ALL WIKI
+            X_m2800_train_k = X_pool[train_idx]
+            y_m2800_train_k = y_pool[train_idx]
+            pm_m2800_train_k = [pm_pool[i] for i in train_idx]
+
+            X_train_k = np.concatenate([X_m2800_train_k, X_wiki], axis=0)
+            y_train_k = np.concatenate([y_m2800_train_k, y_wiki], axis=0)
+            pm_train_k = pm_m2800_train_k + list(pm_wiki)
+
+            # Val = M2800 from this fold only
+            X_val_k = X_pool[val_idx]
+            y_val_k = y_pool[val_idx]
+
+            # Standardize per fold (fit on this fold's full train)
+            X_train_k, X_val_k, X_test_k, _, _ = _standardize(
+                X_train_k, X_val_k, X_test,
+            )
+
+            n_m2800_train = len(train_idx)
+            n_wiki_train = len(X_wiki)
+            print(
+                f"\n--- Fold {k+1}/{n_folds} "
+                f"(train={n_m2800_train}+{n_wiki_train}={len(X_train_k)}, "
+                f"val={len(val_idx)} M2800) ---"
+            )
+            model_k, info_k = train_model(
+                X_train_k, y_train_k, pm_train_k,
+                X_val_k, y_val_k,
+                **train_kwargs,
+            )
+            val_acc = info_k["best_val_acc"]
+            fold_val_accs.append(val_acc)
+            fold_epochs.append(info_k["best_epoch"])
+
+            # Per-fold test evaluation
+            model_k.eval()
+            with torch.no_grad():
+                X_t = torch.tensor(X_test_k, dtype=torch.float32).to(args.device)
+                probs = torch.sigmoid(model_k(X_t))
+                preds = probs.argmax(1).cpu().numpy()
+                true_primary = y_test.argmax(axis=1)
+                test_correct_k = int((preds == true_primary).sum())
+                test_total_k = len(true_primary)
+                test_acc_k = test_correct_k / max(test_total_k, 1)
+            fold_test_accs.append(test_acc_k)
+            fold_test_correct.append(test_correct_k)
+            # Machine-parseable marker for grid.py fold tracking
+            print(f"  FOLD_DONE fold={k+1}/{n_folds} val={val_acc:.4f} "
+                  f"test={test_correct_k}/{test_total_k} ep={info_k['best_epoch']}")
+
+        mean_val = float(np.mean(fold_val_accs))
+        std_val = float(np.std(fold_val_accs))
+        mean_test = float(np.mean(fold_test_accs))
+        std_test = float(np.std(fold_test_accs))
+        mean_epoch = int(np.mean(fold_epochs))
+        print(f"\n{'='*60}")
+        print(f"K-FOLD RESULTS")
+        print(f"  Val balanced: {mean_val:.1%} ± {std_val:.1%}")
+        print(f"  Test overall: {mean_test:.1%} ± {std_test:.1%}")
+        print(f"{'='*60}")
+        for k in range(len(fold_val_accs)):
+            print(f"  Fold {k+1}: val={fold_val_accs[k]:.1%}  test={fold_test_correct[k]}/{len(y_test)} ({fold_test_accs[k]:.1%})  ep={fold_epochs[k]}")
+        print(f"  Mean epoch: {mean_epoch}")
+
+        # Retrain on ALL data with fixed epochs = mean_epoch from K-fold
+        print(f"\n--- RETRAIN on full pool (epochs={mean_epoch}) ---")
+        X_full = np.concatenate([X_pool, X_wiki], axis=0)
+        y_full = np.concatenate([y_pool, y_wiki], axis=0)
+        pm_full = list(pm_pool) + list(pm_wiki)
+
+        # Use last fold's val as dummy val for early stopping format
+        # (retrain uses fixed epochs, but train_model needs val for logging)
+        last_val_idx = folds[-1][1]
+        X_retrain_val = X_pool[last_val_idx]
+        y_retrain_val = y_pool[last_val_idx]
+
+        X_full_s, X_retrain_val_s, X_test_s, feat_mean, feat_std = _standardize(
+            X_full, X_retrain_val, X_test,
+        )
+
+        retrain_kwargs = dict(train_kwargs)
+        retrain_kwargs["epochs"] = mean_epoch  # fixed from K-fold
+        model, retrain_info = train_model(
+            X_full_s, y_full, pm_full,
+            X_retrain_val_s, y_retrain_val,
+            **retrain_kwargs,
+        )
+        print(f"  Retrain done (epoch {retrain_info['best_epoch']}/{mean_epoch})")
+
+        # Evaluate retrained model on test
+        results = evaluate(model, X_test_s, y_test, args.device, verbose=args.verbose)
+
+        info = {
+            "best_val_acc": mean_val,  # K-fold mean (for grid ranking)
+            "best_epoch": mean_epoch,
+            "kfold_val_accs": fold_val_accs,
+            "kfold_mean": mean_val,
+            "kfold_std": std_val,
+            "kfold_test_accs": fold_test_accs,
+            "kfold_test_mean": mean_test,
+            "kfold_test_std": std_test,
+            "kfold_epochs": fold_epochs,
+        }
+        n_train_effective = len(X_full)
+        n_val_effective = len(X_pool) // n_folds
+
+    # -----------------------------------------------------------------------
+    # Standard single-run training
+    # -----------------------------------------------------------------------
+    else:
+        # Standardize
+        X_train, X_val, X_test, feat_mean, feat_std = _standardize(X_train, X_val, X_test)
+        print("  Features standardized (z-score, fit on train)")
+
+        print(
+            f"\nTraining MeterNet (input={X_train.shape[1]}, hidden={args.hidden}, "
+            f"blocks={args.n_blocks}, dropout_scale={args.dropout_scale}, "
+            f"classes={len(CLASS_METERS_6)})..."
+        )
+        model, info = train_model(
+            X_train, y_train, pm_train,
+            X_val, y_val,
+            **train_kwargs,
+        )
+        print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
+
+        # Test
+        results = evaluate(model, X_test, y_test, args.device, verbose=args.verbose)
+        n_train_effective = len(X_train)
+        n_val_effective = len(X_val)
+
+    # -----------------------------------------------------------------------
+    # Save checkpoint
+    # -----------------------------------------------------------------------
     if args.save:
         save_path = args.save
     elif args.limit:
@@ -1104,7 +1392,7 @@ def main():
         "model_state": model.state_dict(),
         "class_meters": CLASS_METERS_6,
         "meter_to_idx": {m: i for i, m in enumerate(CLASS_METERS_6)},
-        "input_dim": X_train.shape[1],
+        "input_dim": _TOTAL_FEATURES_ACTIVE,
         "n_classes": len(CLASS_METERS_6),
         "best_epoch": info["best_epoch"],
         "best_val_acc": info["best_val_acc"],
@@ -1116,18 +1404,34 @@ def main():
         "hidden_dim": args.hidden,
         "dropout_scale": args.dropout_scale,
         "n_blocks": args.n_blocks,
-        "bottleneck": args.bottleneck,
     }
-    if pca_info:
-        ckpt["pca"] = pca_info
+    # MERT metadata
+    if _N_MERT_ACTIVE > 0:
+        ckpt["mert_layer"] = _MERT_LAYER_ACTIVE
+        ckpt["n_mert_features"] = _N_MERT_ACTIVE
+    # Included groups (for proper ablation — inference knows which features to build)
+    if _INCLUDED_GROUPS is not None:
+        ckpt["included_groups"] = _INCLUDED_GROUPS
+    # K-fold metadata
+    if use_kfold:
+        ckpt["kfold"] = args.kfold
+        ckpt["kfold_val_accs"] = info["kfold_val_accs"]
+        ckpt["kfold_mean"] = info["kfold_mean"]
+        ckpt["kfold_std"] = info["kfold_std"]
+        ckpt["kfold_test_accs"] = info["kfold_test_accs"]
+        ckpt["kfold_test_mean"] = info["kfold_test_mean"]
+        ckpt["kfold_test_std"] = info["kfold_test_std"]
     ckpt = enrich_checkpoint(
         ckpt, args=args,
-        train_size=len(X_train), val_size=len(X_val), test_size=len(X_test),
+        train_size=n_train_effective, val_size=n_val_effective, test_size=len(X_test),
     )
     torch.save(ckpt, save_path)
+    val_str = f"{info['best_val_acc']:.1%}"
+    if use_kfold:
+        val_str += f" ± {info['kfold_std']:.1%} ({args.kfold}-fold)"
     print(
         f"\nModel saved to {save_path}  "
-        f"(best_val={info['best_val_acc']:.1%}, test={results['overall_acc']:.1%})"
+        f"(val={val_str}, test={results['overall_acc']:.1%})"
     )
     if not args.save and not args.limit:
         print(f"To promote:  uv run python scripts/eval.py --promote {save_path}")
@@ -1136,15 +1440,18 @@ def main():
     log_experiment(make_experiment_record(
         type="train", model="meter_net",
         params={"hidden": args.hidden, "n_blocks": args.n_blocks, "lr": args.lr,
-                "dropout_scale": args.dropout_scale, "bottleneck": args.bottleneck,
+                "dropout_scale": args.dropout_scale,
                 "epochs": args.epochs, "batch_size": args.batch_size, "seed": args.seed,
-                "focal": args.focal},
+                "focal": args.focal, "no_mert": args.no_mert,
+                "kfold": args.kfold if use_kfold else None,
+                "mert_layer": _MERT_LAYER_ACTIVE if _N_MERT_ACTIVE > 0 else None},
         results={"best_val_acc": info["best_val_acc"], "best_epoch": info["best_epoch"],
                  "test_acc": results["overall_acc"], "test_correct": results["overall_correct"],
                  "test_total": results["overall_total"]},
         checkpoint=str(save_path),
-        extra={"train_size": len(X_train), "val_size": len(X_val), "test_size": len(X_test),
-               "feature_version": FEATURE_VERSION, "input_dim": X_train.shape[1]},
+        extra={"train_size": n_train_effective, "val_size": n_val_effective,
+               "test_size": len(X_test),
+               "feature_version": FEATURE_VERSION, "input_dim": _TOTAL_FEATURES_ACTIVE},
     ))
 
 

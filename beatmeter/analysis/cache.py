@@ -74,6 +74,8 @@ SIGNAL_DEPS: dict[str, list[str]] = {
     "meter_net_ssm": [
         "beatmeter/analysis/signals/ssm_features.py",
     ],
+    # Static pre-extracted MERT embeddings — no code dependency
+    "meter_net_mert": [],
     "tempo_librosa": [
         "beatmeter/analysis/tempo.py",
     ],
@@ -308,7 +310,7 @@ class AnalysisCache:
                 data = txn.get(self._signal_key(sig_name, audio_hash))
                 if data is not None:
                     result["signals"][sig_name] = json.loads(data)
-            for group in ["meter_net_audio", "meter_net_ssm"]:
+            for group in ["meter_net_audio", "meter_net_ssm", "meter_net_mert"]:
                 data = txn.get(self._features_key(group, audio_hash))
                 if data is not None:
                     result["features"][group] = np.frombuffer(data, dtype=np.float32).copy()

@@ -47,10 +47,16 @@ N_SIGNAL_FEATURES = N_SIGNAL_NAMES * N_METER_KEYS  # 60
 
 N_TEMPO_FEATURES = 4
 
+# MERT-v1-95M embedding (single layer, 1536 dims)
+N_MERT_FEATURES = 1536
+MERT_LAYER = 3  # best layer from prior experiments
+
 TOTAL_FEATURES = (
     N_AUDIO_FEATURES + N_SSM_FEATURES
     + N_BEAT_FEATURES + N_SIGNAL_FEATURES + N_TEMPO_FEATURES
-)  # 1630
+)  # 1630 (without MERT — actual dim determined by checkpoint input_dim)
+
+TOTAL_FEATURES_WITH_MERT = TOTAL_FEATURES + N_MERT_FEATURES  # 3166
 
 FEATURE_VERSION = "mn_v6"  # v6 = v4 + SSM (75)
 
@@ -94,30 +100,54 @@ FEATURE_GROUPS = {
     "tempo": (_AFTER_SIGNAL, _AFTER_TEMPO),
 }
 
+# Canonical group ordering (determines concatenation order in feature vectors)
+ALL_GROUP_NAMES = ["audio", "ssm", "beat", "signal", "tempo", "mert"]
 
-def feature_groups(n_audio: int | None = None) -> dict[str, tuple[int, int]]:
-    """Return feature group offsets for a given audio feature size."""
-    if n_audio is None:
+# Per-group dimensions (used by ablation to compute reduced input_dim)
+GROUP_DIMS = {
+    "audio": N_AUDIO_FEATURES,
+    "ssm": N_SSM_FEATURES,
+    "beat": N_BEAT_FEATURES,
+    "signal": N_SIGNAL_FEATURES,
+    "tempo": N_TEMPO_FEATURES,
+    "mert": N_MERT_FEATURES,
+}
+
+
+def feature_groups(n_audio: int | None = None, n_mert: int = 0) -> dict[str, tuple[int, int]]:
+    """Return feature group offsets for a given audio feature size.
+
+    Args:
+        n_audio: Audio feature dimensionality (None = default N_AUDIO_FEATURES).
+        n_mert: MERT embedding dimensionality (0 = no MERT block).
+    """
+    if n_audio is None and n_mert == 0:
         return FEATURE_GROUPS
-    a = n_audio
+    a = n_audio if n_audio is not None else N_AUDIO_FEATURES
     ssm = a + N_SSM_FEATURES
     b = ssm + N_BEAT_FEATURES
     s = b + N_SIGNAL_FEATURES
     t = s + N_TEMPO_FEATURES
-    return {
+    groups = {
         "audio": (0, a),
         "ssm": (a, ssm),
         "beat": (ssm, b),
         "signal": (b, s),
         "tempo": (s, t),
     }
+    if n_mert > 0:
+        groups["mert"] = (t, t + n_mert)
+    return groups
 
 # Granular ablation targets (individual features within groups)
 _BT = N_BEAT_FEATURES_PER_TRACKER  # 12
 _MK = N_METER_KEYS  # 12
 ABLATION_TARGETS = {
-    # SSM feature group
+    # Full feature groups
+    "audio": (0, _AFTER_AUDIO),
     "ssm": (_AFTER_AUDIO, _AFTER_SSM),
+    "beat": (_AFTER_SSM, _AFTER_BEAT),
+    "signal": (_AFTER_BEAT, _AFTER_SIGNAL),
     # Beat trackers (12 dims each)
     "beat_beatnet": (_AFTER_SSM, _AFTER_SSM + _BT),
     "beat_beat_this": (_AFTER_SSM + _BT, _AFTER_SSM + 2 * _BT),
@@ -130,6 +160,8 @@ ABLATION_TARGETS = {
     "sig_hcdf": (_AFTER_BEAT + 4 * _MK, _AFTER_BEAT + 5 * _MK),
     # Tempo (4 dims)
     "tempo": (_AFTER_SIGNAL, _AFTER_TEMPO),
+    # MERT (1536 dims, only present when model trained with MERT)
+    "mert": (_AFTER_TEMPO, _AFTER_TEMPO + N_MERT_FEATURES),
 }
 
 

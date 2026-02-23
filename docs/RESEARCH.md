@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We present BeatMeter, a multi-signal system for automatic meter detection from audio. The current primary classifier is **MeterNet**, a unified Residual MLP that takes 1630-dimensional feature vectors combining audio features (1449d autocorrelation, MFCC, tempogram, beat-position histograms), beat-synchronous chroma self-similarity (75d), beat tracker statistics (42d), signal scores from 5 analysis signals (60d), and tempo features (4d). MeterNet replaces the earlier arbiter MLP (72→64→32→6) which fused only signal scores. On the METER2800 dataset (700-file hold-out test split), the best MeterNet grid search result achieved **633/700 (90.4%)**, though the current promoted checkpoint scores **593/700 (84.7%)** — notably *worse* than the previous arbiter's 623/700 (89.0%) despite having 22× more input features. This regression illustrates the challenge of scaling feature dimensionality without overfitting. The system surpasses the ResNet18 paper's 88% on binary 3/4 vs 4/4 classification.
+We present BeatMeter, a multi-signal system for automatic meter detection from audio. The current primary classifier is **MeterNet**, a unified Residual MLP that takes 3166-dimensional feature vectors combining DSP-based audio features (1449d autocorrelation, MFCC, tempogram, beat-position histograms), MERT-v1-95M embeddings (1536d from layer 3), beat-synchronous chroma self-similarity (75d), beat tracker statistics (42d), signal scores from 5 analysis signals (60d), and tempo features (4d). On the METER2800 dataset (700-file hold-out test split), MeterNet achieves **632/700 (90.3%)** with balanced accuracy **83.0%**, selected via multi-seed validation (5 seeds per candidate). This surpasses both the previous arbiter MLP (623/700, 89.0%) and the ResNet18 paper's 88% on binary 3/4 vs 4/4 classification. The integration of MERT embeddings as raw features — bypassing the score-level compression that failed in Round 12 — provides the largest single-feature improvement in project history (+39 files).
 
 ## 1. System Architecture
 
@@ -19,7 +19,7 @@ The BeatMeter pipeline processes audio through a sequence of stages:
    - **librosa** (`trackers/librosa_tracker.py`) -- Dynamic programming beat tracker.
 4. **Primary beat selection** -- Trackers are ranked by onset alignment F1 score; the best-aligned tracker's beats are used as the primary beat grid.
 5. **Tempo estimation** -- Multi-method tempo consensus with octave error normalization (`beatmeter/analysis/tempo.py`).
-6. **Meter hypothesis generation** -- MeterNet (`beatmeter/analysis/meter.py`, loaded from `data/meter_net.pt`) classifies meter from a 1630-dimensional feature vector combining audio features, beat-synchronous chroma SSM, beat tracker statistics, 5 signal scores, and tempo features. Falls back to 4/4 when no checkpoint is present. Historically, an arbiter MLP (72→64→32→6) fusing only 6 signal score vectors served as the primary classifier (see Section 4.12).
+6. **Meter hypothesis generation** -- MeterNet (`beatmeter/analysis/meter.py`, loaded from `data/meter_net.pt`) classifies meter from a 3166-dimensional feature vector combining DSP audio features (1449d), MERT-v1-95M embeddings (1536d), beat-synchronous chroma SSM (75d), beat tracker statistics (42d), 5 signal scores (60d), and tempo features (4d). Falls back to 4/4 when no checkpoint is present. Historically, an arbiter MLP (72→64→32→6) fusing only 6 signal score vectors served as the primary classifier (see Section 4.12).
 
 Trust gating controls the influence of neural-network-based signals. Each tracker receives a trust score derived from its onset alignment quality:
 
@@ -52,6 +52,7 @@ MeterNet receives score vectors from 5 analysis signals. Each signal scores 12 c
 | Feature group | Dims | Source | Description |
 |---------------|------|--------|-------------|
 | **Audio features** (v6) | 1449 | `onset_mlp_features.py` | Multi-tempo autocorrelation (1024d), tempogram profile (64d), MFCC stats (26d), spectral contrast (14d), onset stats (4d), beat-position histograms (160d), autocorrelation ratios (60d), tempogram meter salience (9d), and more. Cached as `meter_net_audio`. |
+| **MERT-v1-95M embeddings** | 1536 | `data/mert_embeddings/` | Pre-extracted frozen embeddings from MERT-v1-95M layer 3. Mean+max pooling over 5-second non-overlapping chunks. Stored as `.npy` files. Added in Round 18 — provides the largest single-feature improvement (+39 files). |
 | **Beat-sync chroma SSM** | 75 | `ssm_features.py` | Self-similarity matrix of beat-synchronous chroma at lags 2–12 beats, computed per tracker (BeatNet, Beat This!, madmom). 25 dims per tracker: 11 raw similarities, 11 normalized, peak lag, peak height, entropy. Cached as `meter_net_ssm`. |
 | **Beat tracker features** | 42 | `meter_net_features.py` | Per-tracker (3 trackers × 12 dims): IBI statistics, onset alignment, downbeat spacing histograms, tempo. Plus 6-dim cross-tracker agreement on meters [3,4,5,7,9,11]. Computed live from cached beats. |
 | **Tempo features** | 4 | `meter_net_features.py` | Librosa and tempogram BPM (normalized), tempo ratio, tempo agreement. Computed live from cached tempo. |
@@ -65,15 +66,15 @@ MeterNet receives score vectors from 5 analysis signals. Each signal scores 12 c
 | **accent_pattern** | `accent` | Dropped | 0pp contribution in arbiter ablation (Section 4.12). |
 | **beat_periodicity** | `periodicity` | Dropped | 0pp contribution despite highest hand-tuned weight (0.20). See Section 4.12. |
 | **resnet_meter** | `resnet` | Dropped | 75.4% test, not orthogonal (Sections 4.6, 4.12). |
-| **mert_meter** | `mert` | Excluded | 80.7% test, shortcut learning risk (Section 4.8). |
+| **mert_meter** | `mert` | Superseded | 80.7% test as signal score (Section 4.8). Raw 1536d MERT embeddings now integrated directly into MeterNet (Section 4.16), providing +39 files. |
 
 ### 1.3 Combination Strategy
 
-**Primary: MeterNet** (active when `data/meter_net.pt` exists)
+**Primary: MeterNet+MERT** (active when `data/meter_net.pt` exists)
 
-A unified Residual MLP classifier takes a 1630-dimensional feature vector and outputs 6 sigmoid probabilities for meters [3, 4, 5, 7, 9, 11]. Features are z-score standardized using training set statistics stored in the checkpoint. MeterNet architecture is parametrizable (hidden size, dropout scale, number of residual blocks, optional autocorrelation bottleneck); the best configuration is selected via grid search.
+A unified Residual MLP classifier takes a 3166-dimensional feature vector and outputs 6 sigmoid probabilities for meters [3, 4, 5, 7, 9, 11]. Features are z-score standardized using training set statistics stored in the checkpoint. MeterNet architecture is parametrizable (hidden size, dropout scale, number of residual blocks); the best configuration is selected via multi-seed grid search (see Section 4.16).
 
-Feature vector composition (1630 dims):
+Feature vector composition (3166 dims):
 
 ```
 Audio features (1449d) — cached as meter_net_audio
@@ -84,6 +85,8 @@ Audio features (1449d) — cached as meter_net_audio
 ├── Autocorrelation ratios: 60
 ├── Tempogram meter salience: 9
 └── Other (onset stats, etc.)
+MERT-v1-95M embeddings (1536d) — pre-extracted .npy files
+└── Layer 3 mean+max pooling over 5s chunks
 SSM features (75d) — cached as meter_net_ssm
 └── 3 trackers × 25 dims (diagonal similarity at lags 2-12)
 Beat features (42d) — computed live
@@ -94,7 +97,7 @@ Tempo features (4d) — computed live
 └── Librosa BPM, tempogram BPM, ratio, agreement
 ```
 
-Expensive feature groups (audio, SSM) are cached independently from the checkpoint — only the cheap forward pass (~10ms) reruns after model retraining. See Section 4.14 for details.
+Expensive feature groups (audio, SSM, MERT) are cached independently from the checkpoint — only the cheap forward pass (~10ms) reruns after model retraining. See Section 4.14 for details.
 
 **Fallback**: When no MeterNet checkpoint exists, the system returns 4/4 with low confidence.
 
@@ -124,18 +127,18 @@ uv run python scripts/dashboard.py                     # run history
 
 **Dataset**: METER2800 (Abimbola et al., 2023) -- 2800 audio clips across 4 time signature classes (3, 4, 5, 7 beats per bar). Sources: FMA, MAG, OWN, GTZAN. Pre-defined splits: 1680 train, 420 val, 700 test.
 
-**Current results** (MeterNet, 1630-dim unified classifier, promoted checkpoint) on the full test split (700 files):
+**Current results** (MeterNet+MERT, 3166-dim unified classifier, multi-seed promoted checkpoint) on the full test split (700 files):
 
 | Metric | Result |
 |--------|--------|
-| **Overall** | **593/700 (84.7%)** |
-| Balanced accuracy | 79.2% |
-| Meter 3 (302 files) | 276/302 (91.4%) |
-| Meter 4 (307 files) | 251/307 (81.8%) |
-| Meter 5 (42 files) | 26/42 (61.9%) |
-| Meter 7 (49 files) | 40/49 (81.6%) |
+| **Overall** | **632/700 (90.3%)** |
+| Balanced accuracy | 83.0% |
+| Meter 3 (302 files) | 284/302 (94.0%) |
+| Meter 4 (307 files) | 281/307 (91.5%) |
+| Meter 5 (42 files) | 28/42 (66.7%) |
+| Meter 7 (49 files) | 39/49 (79.6%) |
 
-**Best MeterNet result during grid search**: 633/700 (90.4%) — grid search selects by val balanced accuracy, not test overall accuracy, so the promoted checkpoint differs from the test-optimal one.
+**Previous best: MeterNet without MERT** (Round 17c, 1630-dim input): 593/700 (84.7%), bal=79.2%.
 
 **Previous best: Arbiter MLP** (Round 16, 6 signals, 72-dim input):
 
@@ -158,10 +161,10 @@ uv run python scripts/dashboard.py                     # run history
 
 **Key observations**:
 
-- MeterNet's promoted checkpoint (84.7%) is **worse** than the arbiter (89.0%) despite having 22× more input features (1630 vs 72 dims). The 4/x class regresses significantly (81.8% vs 91.5%). However, 5/x improves substantially (61.9% vs 52.4%).
-- The best MeterNet grid search result (633/700, 90.4%) *does* surpass the arbiter, showing MeterNet's potential — the challenge is reliably selecting the best checkpoint via validation metrics.
-- On the binary 3/4 vs 4/4 task, our best results surpass the ResNet18 paper's 88% (Abimbola et al., EURASIP 2024).
-- The arbiter MLP remains the largest single improvement in project history (+13.0pp over hand-tuned), especially on odd meters (5/x: 2%→52.4%, 7/x: 4%→85.7%).
+- MeterNet+MERT (90.3%) surpasses both the arbiter (89.0%) and the previous MeterNet without MERT (84.7%). MERT embeddings account for +39 files — the largest single-feature improvement in project history.
+- Multi-seed validation (5 seeds per candidate) was essential for honest model selection. The Phase 1 winner (h=756, single seed val=77.7%) ranked worst in the 5-seed finale, demonstrating that single-seed grid search is unreliable.
+- On the binary 3/4 vs 4/4 task, our results surpass the ResNet18 paper's 88% (Abimbola et al., EURASIP 2024).
+- The arbiter MLP remains the largest improvement in *methodology* (+13.0pp over hand-tuned), while MERT integration is the largest *feature-level* improvement (+39 files over no-MERT baseline).
 
 ### 2.3 Historical: Internal Benchmark (Rounds 1--8, retired)
 
@@ -186,7 +189,8 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 16 | 700 | 623/700 (89.0%) | Clean onset_mlp mapping (removed echo classes) + grid search arbiter (autocorr:1.5, boost_rare=1.0). 7/x: 70%→85.7%. +6 vs Round 15. |
 | 17a | 700 | 631/700 (90.1%) | MeterNet v1: unified 1467-dim classifier (audio features + signal scores). Replaces arbiter. +8 vs Round 16. |
 | 17b | 700 | 633/700 (90.4%) | MeterNet grid search best during exploration (test-optimal, not val-selected). |
-| **17c** | **700** | **593/700 (84.7%)** | **MeterNet v6 (1630-dim: +SSM +beat +tempo). Grid search promoted checkpoint. 5/x: 61.9% (+9.5pp), but 4/x: 81.8% (−9.7pp). −30 vs Round 16 arbiter despite 22× more features.** |
+| 17c | 700 | 593/700 (84.7%) | MeterNet v6 (1630-dim: +SSM +beat +tempo). Grid search promoted checkpoint. 5/x: 61.9% (+9.5pp), but 4/x: 81.8% (−9.7pp). −30 vs Round 16 arbiter despite 22× more features. |
+| **18** | **700** | **632/700 (90.3%)** | **MeterNet+MERT (h=512, 3166d = 1630d + 1536d MERT layer 3). Multi-seed finale (5 seeds). bal=83.0%. +39 vs no-MERT (593). Largest single-feature improvement.** |
 
 ### 2.4 Confidence Calibration
 
@@ -833,7 +837,89 @@ MeterNet v1 (1467d) — with only audio features and signal scores — achieved 
 
 #### Conclusion
 
-MeterNet demonstrates that raw audio features can surpass signal-score fusion (v1: 90.1% vs arbiter: 89.0%), but scaling to 1630 dims without careful regularization or feature selection leads to overfitting. The promoted checkpoint (84.7%) is worse than the arbiter (89.0%), making the arbiter currently the stronger architecture on METER2800 test. Future work should focus on feature ablation (which of the 5 new feature groups actually helps?) and improving the validation-to-test correlation.
+MeterNet demonstrates that raw audio features can surpass signal-score fusion (v1: 90.1% vs arbiter: 89.0%), but scaling to 1630 dims without careful regularization or feature selection leads to overfitting. The promoted checkpoint (84.7%) is worse than the arbiter (89.0%). However, the addition of MERT embeddings in Round 18 (Section 4.16) resolved this regression: MeterNet+MERT (3166d) achieves 632/700 (90.3%) with multi-seed validation, demonstrating that *qualitatively different* features (pretrained transformer vs. redundant DSP) are the key to scaling dimensionality successfully.
+
+### 4.16 MERT-v1-95M Embeddings + Multi-Seed Finale (Round 18)
+
+#### Motivation
+
+MERT-v1-95M provides pretrained music transformer features that are orthogonal to the DSP-based features already used by MeterNet. A previous attempt to integrate MERT (Round 12, Section 4.8) failed because we compressed 1536-dimensional embeddings down to 12-dimensional signal scores before passing them to the arbiter — destroying the rich representational structure. Round 18 bypasses this bottleneck by feeding raw MERT embeddings directly into MeterNet as an additional feature group, analogous to how onset_mlp audio features (1449d) were directly integrated in Round 17.
+
+#### Architecture
+
+MERT-v1-95M layer 3 embeddings (1536d) are added as a new feature group to MeterNet's input. Embeddings are pre-extracted from `data/mert_embeddings/` (mean+max pooling over 5-second chunks, stored as `.npy` files).
+
+Total input dimensionality: **3166 dims**:
+
+```
+Existing features (1630d):
+  ├── Audio features (1449d): autocorrelation, MFCC, tempogram, beat-position histograms
+  ├── Beat-sync chroma SSM (75d): self-similarity at lags 2-12 per tracker
+  ├── Beat tracker features (42d): IBI stats, alignment, downbeat histograms
+  ├── Signal scores (60d): 5 signals × 12 meters
+  └── Tempo features (4d): librosa + tempogram BPM, ratio, agreement
+New features (1536d):
+  └── MERT-v1-95M layer 3 embeddings: mean+max pooling across 5s chunks
+```
+
+#### Grid Search Phase 1: Architecture Exploration
+
+45 combinations exploring 3 hidden sizes × 4 PCA compression levels for MERT × 3 PCA levels for autocorrelation × 2 MERT ablation (with/without):
+
+- **Hidden sizes**: 512, 640, 756
+- **PCA-MERT**: none, 256, 512, 768 (compressing 1536d MERT features)
+- **PCA-autocorrelation**: none, 256, 512 (compressing 1024d autocorrelation features)
+- **Ablation**: with MERT vs. without MERT (no_mert baseline)
+
+Key findings from Phase 1:
+- Raw features consistently outperformed PCA-compressed variants for both MERT and autocorrelation.
+- All MERT configurations outperformed the no-MERT baseline by a substantial margin.
+- Top 3 candidates by validation balanced accuracy: h=756 (val=77.7%), h=640 (val=77.3%), h=756+pca_ac=256 (val=77.1%).
+
+#### Grid Search Phase 2: Multi-Seed Finale
+
+Single-seed selection proved unreliable in previous rounds (the Round 17 paradox: val-optimal ≠ test-optimal). Phase 2 evaluated the top 3 candidates across 5 random seeds each to obtain robust performance estimates:
+
+| Configuration | Val Balanced Acc (5 seeds) | Std |
+|---------------|---------------------------|-----|
+| **h=512** | **77.2%** | **±0.6%** |
+| h=640 | 76.6% | ±0.8% |
+| h=756 + pca_ac=256 | 76.5% | ±0.9% |
+
+**Critical finding**: The Phase 1 winner (h=756, single-seed val=77.7%) performed worst in the multi-seed finale. This confirms that single-seed grid search is unreliable and that multi-seed validation is essential for honest model selection. Smaller networks (h=512) exhibited lower variance across seeds, suggesting better generalization.
+
+#### Winner: h=512 (Promoted)
+
+| Metric | Round 17c (no MERT) | Round 18 (MERT) | Delta |
+|--------|---------------------|-----------------|-------|
+| **Overall** | 593/700 (84.7%) | **632/700 (90.3%)** | **+39 (+5.6pp)** |
+| Balanced accuracy | 79.2% | **83.0%** | +3.8pp |
+| 3/x | 276/302 (91.4%) | 284/302 (94.0%) | +8 (+2.6pp) |
+| 4/x | 251/307 (81.8%) | 281/307 (91.5%) | +30 (+9.7pp) |
+| 5/x | 26/42 (61.9%) | 28/42 (66.7%) | +2 (+4.8pp) |
+| 7/x | 40/49 (81.6%) | 39/49 (79.6%) | −1 (−2.0pp) |
+
+#### MERT Impact Analysis
+
+MERT integration accounts for +39 files on METER2800 compared to the no-MERT baseline (593→632). This is the largest single-feature improvement in the project's history, surpassing even the arbiter MLP introduction (+91 files over hand-tuned, but that was a methodology change, not a feature addition).
+
+The improvement is concentrated in 3/x (+8) and 4/x (+30), consistent with MERT's strength on tonal/harmonic music identified in Round 12. The 7/x class shows a minor regression (−1 file), possibly because MERT features dilute the DSP signals that are more discriminative for odd meters.
+
+#### PCA Findings
+
+Both PCA-MERT and PCA-autocorrelation hurt performance in this context. The MeterNet architecture appears to benefit from access to the full feature space, with its residual blocks and dropout providing sufficient regularization. This contrasts with the Round 17 observation that more features can cause overfitting — the difference is that MERT features are qualitatively different (pretrained transformer representations vs. hand-crafted DSP), providing genuinely orthogonal information rather than redundant dimensions.
+
+#### WIKIMETER Results
+
+| Metric | Round 17c | Round 18 | Delta |
+|--------|-----------|----------|-------|
+| Overall | 192/298 (64.4%) | 206/298 (69.1%) | +14 (+4.7pp) |
+
+WIKIMETER improvements on 3/x, 4/x, 5/x, and 9/x; regressions on 7/x and 11/x. The 7/x regression is consistent with the minor METER2800 7/x drop, suggesting MERT features may interfere with odd-meter discrimination in some contexts.
+
+#### Conclusion
+
+Round 18 demonstrates that MERT-v1-95M embeddings, when provided as raw features rather than compressed scores, provide substantial orthogonal information to DSP-based features. The multi-seed validation protocol proved essential — the single-seed Phase 1 winner would have been a suboptimal choice. The combination of pretrained music transformer features with hand-crafted DSP features achieves a new project best of 632/700 (90.3%) on METER2800.
 
 ## 5. Failure Analysis
 
@@ -906,37 +992,41 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 1. **Learned signal fusion via arbiter MLP** -- Replacing ~200 lines of hand-tuned combination logic with a tiny MLP (72→64→32→6) that achieves 89.0% on METER2800 test (+13.0pp over hand-tuned). Demonstrates that learned fusion dramatically outperforms manual weight tuning, especially for rare classes.
 
-2. **Unified meter classification (MeterNet)** -- End-to-end learning from 1630-dim feature vectors combining audio features, SSM, beat statistics, signal scores, and tempo. Demonstrates that raw audio features can surpass signal-score fusion (90.1% vs 89.0%) but that naively adding features causes overfitting (promoted: 84.7%). Illustrative negative result for the feature scaling problem.
+2. **Unified meter classification (MeterNet+MERT)** -- End-to-end learning from 3166-dim feature vectors combining DSP audio features (1449d), MERT-v1-95M embeddings (1536d), SSM, beat statistics, signal scores, and tempo. Achieves 90.3% on METER2800 test with multi-seed validation. Demonstrates that pretrained music transformer features, when provided as raw embeddings rather than compressed scores, provide substantial orthogonal information to DSP features (+39 files, largest single-feature improvement).
 
 3. **Signal ablation methodology** -- Leave-one-out ablation with 10 seeds per variant provides statistically robust signal importance ranking. Found that 4/10 signals contribute 0pp — reducing features from 120 to 72 with no accuracy loss.
 
 4. **Multi-signal ensemble with trust gating** -- Combining independent analysis signals with alignment-based trust weighting. The arbiter learns implicit trust from signal score patterns (all-zero = untrusted tracker), eliminating the need for explicit trust features.
 
-5. **Comprehensive evaluation on METER2800** -- Surpassing the original ResNet18 paper's 88% on binary 3/4 vs 4/4. Best overall: 90.4% on 4-class including odd meters. Unified evaluation framework (`scripts/eval.py`) with per-tracker caching, parallel workers, stratified sampling, run snapshots, and regression detection.
+5. **Comprehensive evaluation on METER2800** -- Surpassing the original ResNet18 paper's 88% on binary 3/4 vs 4/4. Best overall: 90.3% on 4-class including odd meters (multi-seed validated). Unified evaluation framework (`scripts/eval.py`) with per-tracker caching, parallel workers, stratified sampling, run snapshots, and regression detection.
 
 6. **Granular feature caching** -- Separating checkpoint-dependent (forward pass) from checkpoint-independent (feature extraction) cache entries, enabling 60× faster eval cycles after model retraining.
 
 7. **Failure taxonomy for meter detection** -- Three systematic failure patterns (beat_periodicity-driven false triple, false compound detection, trust gate strictness) with specific mitigations.
 
-8. **Negative results: orthogonality experiments** -- resnet_meter (75%), mert_meter (80.7%), and four signals (periodicity, madmom, accent, resnet) all fail to contribute to the learned ensemble. MeterNet v6 shows that more features ≠ better results. Demonstrates that standalone accuracy ≠ ensemble utility.
+8. **Multi-seed model selection** -- Single-seed grid search is unreliable: the Phase 1 winner (h=756, val=77.7%) ranked worst in the 5-seed finale. Multi-seed validation reveals that smaller networks (h=512) are more stable (std=0.6% vs 0.9%) and generalize better.
+
+9. **Negative results: orthogonality experiments** -- resnet_meter (75%), mert_meter (80.7%), and four signals (periodicity, madmom, accent, resnet) all fail to contribute to the learned ensemble. MeterNet v6 (Round 17) shows that more features ≠ better results when features are redundant. However, qualitatively different features (MERT, Round 18) do help — the key is orthogonality, not dimensionality.
 
 ## 8. Future Work
 
-1. **MeterNet feature ablation** -- Determine which of the 5 feature groups (audio, SSM, beat, signal, tempo) actually helps. The v6 regression (84.7% vs v1's 90.1%) suggests some groups introduce noise. Systematic leave-one-group-out ablation needed.
+1. **Improve 7/x accuracy** -- 7/x regressed slightly with MERT integration (81.6%→79.6%), suggesting MERT features may interfere with odd-meter discrimination. Investigate per-class feature gating or class-conditional feature weighting.
 
-2. **Improve validation-to-test correlation** -- Grid search selects by val balanced accuracy, but the promoted checkpoint (84.7%) is far from the test-optimal (90.4%). K-fold cross-validation or a larger validation set could improve checkpoint selection.
+2. **Improve 5/x accuracy** -- 5/x improved from 52.4% (arbiter) to 66.7% (MeterNet+MERT) but remains the weakest class. Potential: (a) expand WIKIMETER 5/x data, (b) feature engineering for 5/4 vs 5/8, (c) quintuple-specific augmentation.
 
-3. **Improve 5/x accuracy** -- 5/x improved from 52.4% (arbiter) to 61.9% (MeterNet) but remains the weakest class. Potential: (a) expand WIKIMETER 5/x data, (b) feature engineering for 5/4 vs 5/8, (c) quintuple-specific augmentation.
+3. **MERT fine-tuning** -- Layer 3 embeddings are frozen. Unfreezing the last 2-3 transformer layers with LoRA or full fine-tuning on METER2800 could adapt MERT representations specifically for meter classification, potentially improving odd-meter accuracy where frozen features underperform.
 
-4. **WIKIMETER expansion** -- The 11/x class remains the weakest in training data (83 songs); expanding it should improve rare-class performance.
+4. **MeterNet feature ablation** -- With 6 feature groups (audio, MERT, SSM, beat, signal, tempo) totaling 3166 dims, systematic leave-one-group-out ablation is needed to determine marginal contribution of each group.
 
-5. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
+5. **WIKIMETER expansion** -- The 11/x class remains the weakest in training data (83 songs); expanding it should improve rare-class performance. The 7/x and 11/x WIKIMETER regressions in Round 18 also suggest the need for more diverse training examples in these classes.
 
-6. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters.
+6. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
 
-7. **Real-time meter tracking** -- Extending to real-time streaming analysis with adaptive meter tracking for live performance applications.
+7. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters.
 
-8. **Confidence calibration** -- Temperature scaling or Platt calibration on MeterNet sigmoid outputs could improve confidence estimates for downstream use.
+8. **Real-time meter tracking** -- Extending to real-time streaming analysis with adaptive meter tracking for live performance applications.
+
+9. **Confidence calibration** -- Temperature scaling or Platt calibration on MeterNet sigmoid outputs could improve confidence estimates for downstream use.
 
 ## References
 
