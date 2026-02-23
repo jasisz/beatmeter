@@ -1,25 +1,14 @@
 #!/usr/bin/env python3
-"""Train MeterNet — unified meter classification from audio + beat + signal + tempo features.
+"""Train MeterNet — unified meter classification from audio + MERT features.
 
-MeterNet sees everything the pipeline produces:
+MeterNet sees:
 - 1449 audio features (from onset_mlp_features.py v6)
-- 75 beat-synchronous chroma SSM (from ssm_features.py)
-- 42 beat tracker features (IBI stats, alignment, downbeat spacing, cross-tracker agreement)
-- 60 signal scores (5 signals x 12 meters, from warm cache)
-- 4 tempo features (from warm cache)
-Total: 1630 dimensions.
-
-v6 audio features extend v5 with rare-meter support:
-- beat-position histograms: [2,3,4,5,7,9,11] (was [2,3,4,5,7]) → 224d (was 160)
-- autocorrelation ratios: lags [2..7,9,11] + 4 new pairs → 84d (was 60)
+- 1536 MERT-v1-95M embedding (layer 3)
+Total: 2985 dimensions.
 
 Architecture: Residual MLP (parameterized via grid search).
 Loss: BCEWithLogitsLoss (multi-label, supports WIKIMETER polymetric annotations).
 Val metric: balanced accuracy (macro per-class, prevents rare-class sacrifice).
-
-Prerequisites:
-- Warm cache complete (all phases: beatnet, beat_this, madmom, librosa, onsets,
-  signals, tempo, hcdf, ssm)
 
 Usage:
     # Smoke test
@@ -27,9 +16,6 @@ Usage:
 
     # Full training
     uv run python scripts/training/train.py --meter2800 data/meter2800 --workers 4
-
-    # Custom hyperparameters
-    uv run python scripts/training/train.py --meter2800 data/meter2800 --hidden 1024 --lr 3e-4
 """
 
 import argparse
@@ -61,19 +47,11 @@ from beatmeter.analysis.signals.meter_net_features import (
     TOTAL_FEATURES,
     FEATURE_VERSION,
     N_AUDIO_FEATURES,
-    N_SSM_FEATURES,
-    N_BEAT_FEATURES,
-    N_SIGNAL_FEATURES,
-    N_TEMPO_FEATURES,
     N_MERT_FEATURES,
     MERT_LAYER,
     ALL_GROUP_NAMES,
     GROUP_DIMS,
-    extract_beat_features,
-    extract_signal_scores,
-    extract_tempo_features,
 )
-from beatmeter.analysis.signals.ssm_features import extract_ssm_features_cached
 from scripts.utils import (
     load_meter2800_entries as _load_meter2800_base,
     split_by_stem,
@@ -165,15 +143,12 @@ def load_wikimeter(data_dir: Path, valid_meters: set[int]) -> list[Entry]:
 # ---------------------------------------------------------------------------
 
 
-# Feature dimensions (v6)
+# Feature dimensions
 _TOTAL_FEATURES_ACTIVE = TOTAL_FEATURES
 _AUDIO_FEATURES_ACTIVE = TOTAL_FEATURES_V6
 
-# Active feature groups (set by --ablate; used for column removal)
-_INCLUDED_GROUPS: list[str] | None = None  # None = all groups (no ablation)
-
 # MERT configuration (set by main() based on CLI args)
-_MERT_LOOKUP: dict[str, Path] | None = None  # stem -> .npy path
+_MERT_LOOKUP: dict[str, Path] | None = None
 _MERT_LAYER_ACTIVE: int = MERT_LAYER
 _N_MERT_ACTIVE: int = 0  # 0 = no MERT, N_MERT_FEATURES = with MERT
 
@@ -222,15 +197,11 @@ def _onset_cache_key(audio_path: Path) -> str:
 
 
 def _full_cache_key(audio_path: Path) -> str:
-    """Cache key for full MeterNet feature vector.
-
-    Version suffix encodes which feature groups are active, so adding/removing
-    MERT automatically invalidates old cache entries.
-    """
+    """Cache key for full MeterNet feature vector."""
     if _N_MERT_ACTIVE == 0:
-        suffix = "meter_net_v7"
+        suffix = "meter_net_v8_slim"
     else:
-        suffix = f"meter_net_v7_mert{_N_MERT_ACTIVE}_L{_MERT_LAYER_ACTIVE}"
+        suffix = f"meter_net_v8_slim_mert{_N_MERT_ACTIVE}_L{_MERT_LAYER_ACTIVE}"
     st = audio_path.stat()
     raw = f"{audio_path.resolve()}::{st.st_size}::{st.st_mtime_ns}::{suffix}"
     return hashlib.sha1(raw.encode()).hexdigest()
@@ -239,46 +210,10 @@ def _full_cache_key(audio_path: Path) -> str:
 def _build_full_features(
     audio_feat: np.ndarray,
     audio_path: Path,
-    analysis_cache,
     feat_db=None,
 ) -> np.ndarray | None:
-    """Combine audio + SSM + beat/signal/tempo from analysis cache.
-
-    Uses load_all_for_audio() for batch LMDB reads (1 txn, no duplicates).
-    SSM features are read from NumpyLMDB with lazy migration from old .npy.
-    """
-    audio_hash = analysis_cache.audio_hash(str(audio_path))
-
-    # SSM features: from NumpyLMDB or extract from audio
-    ssm_key = _onset_cache_key(audio_path).replace(FEATURE_VERSION_V6, "ssm_v1")
-    ssm_feat = None
-    if feat_db:
-        ssm_feat = feat_db.load(f"ssm:{ssm_key}")
-        # Lazy migration from old .npy
-        if ssm_feat is None:
-            old_path = Path("data/ssm_cache_v1") / f"{ssm_key}.npy"
-            if old_path.exists():
-                ssm_feat = np.load(old_path)
-                feat_db.save(f"ssm:{ssm_key}", ssm_feat)
-                old_path.unlink(missing_ok=True)
-
-    if ssm_feat is None:
-        import librosa
-        try:
-            y, _ = librosa.load(str(audio_path), sr=SR, duration=MAX_DURATION_S)
-            ssm_feat = extract_ssm_features_cached(y, SR, analysis_cache, audio_hash)
-            if feat_db:
-                feat_db.save(f"ssm:{ssm_key}", ssm_feat)
-        except Exception:
-            ssm_feat = np.zeros(N_SSM_FEATURES)
-
-    # Batch preload: 1 transaction for all beats + onsets + signals
-    preloaded = analysis_cache.load_all_for_audio(audio_hash)
-    beat_feat = extract_beat_features(analysis_cache, audio_hash, preloaded=preloaded)
-    signal_feat = extract_signal_scores(analysis_cache, audio_hash, preloaded=preloaded)
-    tempo_feat = extract_tempo_features(analysis_cache, audio_hash, preloaded=preloaded)
-
-    parts = [audio_feat, ssm_feat, beat_feat, signal_feat, tempo_feat]
+    """Combine audio + MERT features."""
+    parts = [audio_feat]
 
     # Optional MERT embedding
     if _N_MERT_ACTIVE > 0:
@@ -294,27 +229,16 @@ def _build_full_features(
 def extract_all_features(
     entries: list[Entry],
     feat_db,
-    analysis_cache,
     label: str = "",
     workers: int = 1,
     verbose: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Extract MeterNet features for all entries.
 
-    Uses NumpyLMDB (data/features.lmdb) with two-level cache:
-    1. Full feature vector (key: full:{hash}) — instant
-    2. Fallback: v6 audio features (key: onset:v6:{hash}) + analysis cache
-
-    Lazy migration from old .npy files on LMDB miss.
-
     Returns (X, y_multi_hot, primary_meters).
     """
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
     n_classes = len(CLASS_METERS_6)
-
-    # Old .npy dirs for lazy migration
-    _old_full_dir = Path("data/meter_net_features_cache")
-    _old_onset_dir = Path(f"data/onset_features_cache_{FEATURE_VERSION_V6}")
 
     features_list: list[np.ndarray] = []
     labels_list: list[np.ndarray] = []
@@ -325,20 +249,13 @@ def extract_all_features(
 
     desc = f"Loading {label}" if label else "Loading"
 
-    # Phase 1: Load from LMDB cache (full or onset + analysis)
+    # Phase 1: Load from LMDB cache
     for i, (audio_path, primary_meter, meters_dict) in enumerate(
         _progress(entries, desc)
     ):
         # Try full feature cache first
         full_key = _full_cache_key(audio_path)
         full = feat_db.load(f"full:{full_key}")
-        # Lazy migration from old .npy
-        if full is None:
-            old_path = _old_full_dir / f"{full_key}.npy"
-            if old_path.exists():
-                full = np.load(old_path)
-                feat_db.save(f"full:{full_key}", full)
-                old_path.unlink(missing_ok=True)
 
         if full is not None and full.shape[0] == _TOTAL_FEATURES_ACTIVE:
             features_list.append(full)
@@ -352,41 +269,29 @@ def extract_all_features(
             n_full_cached += 1
             continue
 
-        # Try onset cache + analysis cache
+        # Try onset cache
         onset_key = _onset_cache_key(audio_path)
         audio_feat = feat_db.load(f"onset:v6:{onset_key}")
-        # Lazy migration from old .npy
-        if audio_feat is None:
-            old_path = _old_onset_dir / f"{onset_key}.npy"
-            if old_path.exists():
-                audio_feat = np.load(old_path)
-                feat_db.save(f"onset:v6:{onset_key}", audio_feat)
-                old_path.unlink(missing_ok=True)
 
-        if audio_feat is None or audio_feat.shape[0] != _AUDIO_FEATURES_ACTIVE:
-            need_extract.append((i, audio_path, primary_meter, meters_dict))
-            continue
+        if audio_feat is not None and audio_feat.shape[0] == _AUDIO_FEATURES_ACTIVE:
+            full = _build_full_features(audio_feat, audio_path, feat_db)
+            if full is not None:
+                feat_db.save(f"full:{full_key}", full)
+                features_list.append(full)
+                y = np.zeros(n_classes, dtype=np.float32)
+                for m, w in meters_dict.items():
+                    idx = meter_to_idx.get(m)
+                    if idx is not None:
+                        y[idx] = float(w)
+                labels_list.append(y)
+                primary_meters.append(primary_meter)
+                continue
 
-        full = _build_full_features(audio_feat, audio_path, analysis_cache, feat_db)
-        if full is None:
-            need_extract.append((i, audio_path, primary_meter, meters_dict))
-            continue
+        need_extract.append((i, audio_path, primary_meter, meters_dict))
 
-        # Save to full feature cache for next time
-        feat_db.save(f"full:{full_key}", full)
-
-        features_list.append(full)
-        y = np.zeros(n_classes, dtype=np.float32)
-        for m, w in meters_dict.items():
-            idx = meter_to_idx.get(m)
-            if idx is not None:
-                y[idx] = float(w)
-        labels_list.append(y)
-        primary_meters.append(primary_meter)
-
-    n_from_json = len(features_list) - n_full_cached
-    if verbose and (n_full_cached or n_from_json):
-        print(f"  {n_full_cached} full-cached, {n_from_json} from analysis cache, "
+    n_from_cache = len(features_list) - n_full_cached
+    if verbose and (n_full_cached or n_from_cache):
+        print(f"  {n_full_cached} full-cached, {n_from_cache} from onset cache, "
               f"{len(need_extract)} need audio extraction")
 
     # Phase 2: Extract missing audio features
@@ -397,12 +302,12 @@ def extract_all_features(
             if audio_feat is None:
                 return False
 
-            # Save onset cache to LMDB
+            # Save onset cache
             onset_key = _onset_cache_key(audio_path)
             feat_db.save(f"onset:v6:{onset_key}", audio_feat)
 
             # Build and save full features
-            full = _build_full_features(audio_feat, audio_path, analysis_cache, feat_db)
+            full = _build_full_features(audio_feat, audio_path, feat_db)
             if full is None:
                 return False
 
@@ -454,7 +359,7 @@ def extract_all_features(
     label_tag = label if label else "data"
     print(
         f"  [{label_tag}] ready={len(features_list)}  "
-        f"full_cache={n_full_cached}  reused={n_from_json}  "
+        f"full_cache={n_full_cached}  reused={n_from_cache}  "
         f"extracted={n_extracted_ok}  skipped={skipped}"
     )
 
@@ -499,10 +404,7 @@ class ResidualBlock(nn.Module):
 
 
 class MeterNet(nn.Module):
-    """Residual MLP for unified meter classification.
-
-    Architecture: input -> input_proj -> hidden -> N x residual -> head -> n_classes
-    """
+    """Residual MLP for unified meter classification."""
 
     def __init__(
         self,
@@ -593,28 +495,21 @@ def _mixup_batch(
 def _stratified_kfold(
     primary_meters: list[int], n_folds: int, seed: int = 42,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Stratified K-fold split. Returns list of (train_indices, val_indices).
-
-    Each fold has approximately equal class distribution.
-    """
+    """Stratified K-fold split. Returns list of (train_indices, val_indices)."""
     rng = np.random.RandomState(seed)
 
-    # Group indices by class
     class_indices: dict[int, list[int]] = {}
     for i, m in enumerate(primary_meters):
         class_indices.setdefault(m, []).append(i)
 
-    # Shuffle within each class
     for m in class_indices:
         rng.shuffle(class_indices[m])
 
-    # Round-robin assign each sample to a fold
     fold_assignments = np.zeros(len(primary_meters), dtype=int)
     for indices in class_indices.values():
         for i, idx in enumerate(indices):
             fold_assignments[idx] = i % n_folds
 
-    # Build fold splits
     folds = []
     all_indices = np.arange(len(primary_meters))
     for k in range(n_folds):
@@ -633,16 +528,11 @@ def _focal_bce_loss(
     pos_weight: torch.Tensor,
     gamma: float = FOCAL_GAMMA,
 ) -> torch.Tensor:
-    """Focal loss for multi-label BCE (sigmoid).
-
-    Down-weights well-classified examples, focusing on hard ones.
-    """
+    """Focal loss for multi-label BCE (sigmoid)."""
     probs = torch.sigmoid(logits)
-    # p_t: probability of correct class
     p_t = probs * targets + (1 - probs) * (1 - targets)
     focal_weight = (1 - p_t) ** gamma
 
-    # Standard BCE with pos_weight
     bce = F.binary_cross_entropy_with_logits(
         logits, targets, pos_weight=pos_weight, reduction="none",
     )
@@ -698,12 +588,10 @@ def train_model(
     meter_to_idx = {m: i for i, m in enumerate(CLASS_METERS_6)}
     idx_to_meter = {i: m for m, i in meter_to_idx.items()}
 
-    # Class weights: inverse frequency of primary meter
     primary_idx = np.array([meter_to_idx[m] for m in primary_train])
     counts = Counter(primary_idx)
     total = len(primary_idx)
 
-    # pos_weight for BCE loss (balance positive/negative per class)
     pos_counts = y_train.sum(axis=0)
     neg_counts = len(y_train) - pos_counts
     raw_pw = neg_counts / np.maximum(pos_counts, 1)
@@ -711,7 +599,6 @@ def train_model(
         np.clip(raw_pw, 0.5, 10.0), dtype=torch.float32,
     ).to(device)
 
-    # WeightedRandomSampler based on primary meter
     sample_weights = np.array(
         [total / (n_classes * counts[c]) for c in primary_idx],
         dtype=np.float64,
@@ -769,12 +656,10 @@ def train_model(
         for xb, yb in train_dl:
             xb, yb = xb.to(device), yb.to(device)
 
-            # Feature augmentation: small noise + random scaling
             noise = torch.randn_like(xb) * 0.02
             scale = 1.0 + (torch.rand(xb.size(0), 1, device=device) - 0.5) * 0.1
             xb = xb * scale + noise
 
-            # Sample mixing augmentation
             if aug_mode == "cutmix":
                 xb_mixed, yb_mixed = _cutmix_batch(xb, yb)
             elif aug_mode == "mixup":
@@ -966,8 +851,6 @@ def main():
     parser.add_argument("--dropout-scale", type=float, default=1.0)
     parser.add_argument("--n-blocks", type=int, default=1, help="Number of residual blocks (1-3)")
     parser.add_argument("--focal", action="store_true", help="Use focal BCE loss")
-    parser.add_argument("--ablate", type=str, default=None,
-                        help="Comma-separated feature names to zero out (e.g. beat_beatnet,sig_hcdf)")
     parser.add_argument("--aug-mode", type=str, default="cutmix",
                         choices=["cutmix", "mixup", "none"],
                         help="Sample mixing augmentation (default: cutmix)")
@@ -977,7 +860,7 @@ def main():
                         help=f"MERT layer to use (default {MERT_LAYER})")
 
     parser.add_argument("--kfold", type=int, default=0,
-                        help="K-fold CV (0=off, 5=recommended). Pools train+val, reports mean±std.")
+                        help="K-fold CV (0=off, 5=recommended)")
     parser.add_argument("--limit", type=int, default=0, help="Limit entries (0=all)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--save", type=Path, default=None)
@@ -1004,17 +887,18 @@ def main():
         )
         if _MERT_LOOKUP:
             _N_MERT_ACTIVE = N_MERT_FEATURES
-            _TOTAL_FEATURES_ACTIVE = TOTAL_FEATURES + N_MERT_FEATURES
+            _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES + N_MERT_FEATURES
             print(f"MERT: {len(_MERT_LOOKUP)} embeddings, layer={_MERT_LAYER_ACTIVE}, dims={N_MERT_FEATURES}")
         else:
+            _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES
             print("MERT: no embeddings found, training without MERT")
     else:
+        _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES
         print("MERT: disabled (--no-mert)")
 
-    print(f"MeterNet v6 | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
+    print(f"MeterNet v7-slim | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
     mert_str = f", mert={_N_MERT_ACTIVE}" if _N_MERT_ACTIVE > 0 else ""
-    print(f"  blocks: audio={_AUDIO_FEATURES_ACTIVE}, ssm={N_SSM_FEATURES}, "
-          f"beat={N_BEAT_FEATURES}, signal={N_SIGNAL_FEATURES}, tempo={N_TEMPO_FEATURES}{mert_str}")
+    print(f"  blocks: audio={_AUDIO_FEATURES_ACTIVE}{mert_str}")
     print(f"  data: {args.data_dir}"
           + (f" + METER2800: {args.meter2800}" if args.meter2800 else ""))
 
@@ -1034,12 +918,11 @@ def main():
 
     # Build entry pools based on mode
     use_kfold = args.kfold > 1
-    pool_entries: list[Entry] = []  # M2800 tuning pool for K-fold splits
-    wiki_pool: list[Entry] = []     # WIKI entries always in training
+    pool_entries: list[Entry] = []
+    wiki_pool: list[Entry] = []
     test_entries: list[Entry] = list(wiki_test)
 
     if use_kfold:
-        # K-fold on METER2800 only; WIKIMETER always in training
         wiki_pool = list(wiki_train) + list(wiki_val)
         if args.meter2800:
             m2800_train = load_meter2800_split(args.meter2800, "train", valid_meters)
@@ -1058,7 +941,6 @@ def main():
         print(f"  K-fold mode: {args.kfold} folds, M2800 pool={len(pool_entries)}, "
               f"WIKI train={len(wiki_pool)} (always in train), test={len(test_entries)}")
     else:
-        # Standard mode: fixed train/val split
         train_entries = list(wiki_train)
         val_entries = list(wiki_val)
         n_wiki_val = len(wiki_val)
@@ -1093,9 +975,8 @@ def main():
                 dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
                 print(f"  {name}: {dist_str}")
 
-    # Initialize analysis cache + numpy LMDB
-    from beatmeter.analysis.cache import AnalysisCache, NumpyLMDB
-    analysis_cache = AnalysisCache()
+    # Initialize numpy LMDB (no analysis cache needed — just audio + MERT features)
+    from beatmeter.analysis.cache import NumpyLMDB
     feat_db = NumpyLMDB("data/features.lmdb")
 
     # Extract features
@@ -1104,21 +985,21 @@ def main():
 
     if use_kfold:
         X_pool, y_pool, pm_pool = extract_all_features(
-            pool_entries, feat_db, analysis_cache, "M2800 pool", args.workers, args.verbose,
+            pool_entries, feat_db, "M2800 pool", args.workers, args.verbose,
         )
         X_wiki, y_wiki, pm_wiki = extract_all_features(
-            wiki_pool, feat_db, analysis_cache, "WIKI train", args.workers, args.verbose,
+            wiki_pool, feat_db, "WIKI train", args.workers, args.verbose,
         )
     else:
-        X_pool = None  # not used
+        X_pool = None
         X_train, y_train, pm_train = extract_all_features(
-            train_entries, feat_db, analysis_cache, "train", args.workers, args.verbose,
+            train_entries, feat_db, "train", args.workers, args.verbose,
         )
         X_val, y_val, _ = extract_all_features(
-            val_entries, feat_db, analysis_cache, "val", args.workers, args.verbose,
+            val_entries, feat_db, "val", args.workers, args.verbose,
         )
     X_test, y_test, _ = extract_all_features(
-        test_entries, feat_db, analysis_cache, "test", args.workers, args.verbose,
+        test_entries, feat_db, "test", args.workers, args.verbose,
     )
 
     print(f"  Feature extraction: {time.time() - t0:.1f}s")
@@ -1126,80 +1007,6 @@ def main():
         print(f"  Shapes: M2800 pool {X_pool.shape}, WIKI {X_wiki.shape}, test {X_test.shape}")
     else:
         print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
-
-    # Check feature completeness (non-zero groups) — before ablation
-    from beatmeter.analysis.signals.meter_net_features import feature_groups
-    fg = feature_groups(_AUDIO_FEATURES_ACTIVE, n_mert=_N_MERT_ACTIVE)
-    X_check = X_pool if use_kfold else X_train
-    train_beat_nz = np.any(X_check[:, fg["beat"][0]:fg["beat"][1]] != 0, axis=1).sum()
-    train_signal_nz = np.any(X_check[:, fg["signal"][0]:fg["signal"][1]] != 0, axis=1).sum()
-    cache_pct = (train_beat_nz + train_signal_nz) / (2 * len(X_check)) * 100
-    if cache_pct < 10:
-        print(f"\n  Beat/signal features populated for {cache_pct:.0f}% of train files.")
-        print("  MeterNet needs cached beat tracker + signal data to train properly.")
-        print("  Run warm first:")
-        print("    uv run python scripts/setup/warm.py -w 4")
-        sys.exit(1)
-
-    # Ablation: remove feature group columns (proper ablation, not zeroing)
-    global _INCLUDED_GROUPS
-    if args.ablate:
-        from beatmeter.analysis.signals.meter_net_features import (
-            ABLATION_TARGETS, feature_groups as fg_func,
-        )
-        ablate_names = [n.strip() for n in args.ablate.split(",")]
-
-        # Check if all ablation targets are top-level groups
-        valid_groups = set(ALL_GROUP_NAMES)
-        all_are_groups = all(n in valid_groups for n in ablate_names)
-
-        if all_are_groups:
-            # Proper ablation: physically remove columns
-            # Determine which groups to keep (in canonical order)
-            ablate_set = set(ablate_names)
-            # Include mert in active groups if MERT is active
-            all_active = [g for g in ALL_GROUP_NAMES
-                          if g != "mert" or _N_MERT_ACTIVE > 0]
-            included = [g for g in all_active if g not in ablate_set]
-            _INCLUDED_GROUPS = included
-
-            # Build column mask: keep only columns from included groups
-            fg = fg_func(_AUDIO_FEATURES_ACTIVE, n_mert=_N_MERT_ACTIVE)
-            keep_cols = []
-            for g in included:
-                start, end = fg[g]
-                keep_cols.extend(range(start, end))
-            keep_cols = sorted(keep_cols)
-
-            if use_kfold:
-                X_pool = X_pool[:, keep_cols]
-                X_wiki = X_wiki[:, keep_cols]
-            else:
-                X_train = X_train[:, keep_cols]
-                X_val = X_val[:, keep_cols]
-            X_test = X_test[:, keep_cols]
-
-            removed_dim = _TOTAL_FEATURES_ACTIVE - len(keep_cols)
-            _TOTAL_FEATURES_ACTIVE = len(keep_cols)
-            print(f"  ABLATION (column removal): removed {ablate_names} "
-                  f"(-{removed_dim}d), kept {included} ({_TOTAL_FEATURES_ACTIVE}d)")
-        else:
-            # Granular ablation (sub-group): fall back to zeroing
-            for name in ablate_names:
-                if name not in ABLATION_TARGETS:
-                    print(f"  WARNING: unknown ablation target '{name}', "
-                          f"valid: {sorted(ABLATION_TARGETS.keys())}")
-                    continue
-                start, end = ABLATION_TARGETS[name]
-                if use_kfold:
-                    X_pool[:, start:end] = 0.0
-                    X_wiki[:, start:end] = 0.0
-                else:
-                    X_train[:, start:end] = 0.0
-                    X_val[:, start:end] = 0.0
-                X_test[:, start:end] = 0.0
-                print(f"  ABLATION (zeroing): {name} zeroed "
-                      f"(dims {start}:{end}, {end - start}d)")
 
     # Common training kwargs
     train_kwargs = dict(
@@ -1229,7 +1036,6 @@ def main():
         print(f"  WIKI train: {len(X_wiki)} files (always in train)")
         print(f"{'='*60}")
 
-        # Show fold class distribution
         for k, (_, val_idx) in enumerate(folds):
             dist = Counter(pm_pool[i] for i in val_idx)
             dist_str = "  ".join(f"{m}/x:{dist[m]}" for m in sorted(dist.keys()))
@@ -1241,7 +1047,6 @@ def main():
         fold_epochs: list[int] = []
 
         for k, (train_idx, val_idx) in enumerate(folds):
-            # Train = M2800 from (K-1) folds + ALL WIKI
             X_m2800_train_k = X_pool[train_idx]
             y_m2800_train_k = y_pool[train_idx]
             pm_m2800_train_k = [pm_pool[i] for i in train_idx]
@@ -1250,11 +1055,9 @@ def main():
             y_train_k = np.concatenate([y_m2800_train_k, y_wiki], axis=0)
             pm_train_k = pm_m2800_train_k + list(pm_wiki)
 
-            # Val = M2800 from this fold only
             X_val_k = X_pool[val_idx]
             y_val_k = y_pool[val_idx]
 
-            # Standardize per fold (fit on this fold's full train)
             X_train_k, X_val_k, X_test_k, _, _ = _standardize(
                 X_train_k, X_val_k, X_test,
             )
@@ -1275,7 +1078,6 @@ def main():
             fold_val_accs.append(val_acc)
             fold_epochs.append(info_k["best_epoch"])
 
-            # Per-fold test evaluation
             model_k.eval()
             with torch.no_grad():
                 X_t = torch.tensor(X_test_k, dtype=torch.float32).to(args.device)
@@ -1287,7 +1089,6 @@ def main():
                 test_acc_k = test_correct_k / max(test_total_k, 1)
             fold_test_accs.append(test_acc_k)
             fold_test_correct.append(test_correct_k)
-            # Machine-parseable marker for grid.py fold tracking
             print(f"  FOLD_DONE fold={k+1}/{n_folds} val={val_acc:.4f} "
                   f"test={test_correct_k}/{test_total_k} ep={info_k['best_epoch']}")
 
@@ -1305,14 +1106,12 @@ def main():
             print(f"  Fold {k+1}: val={fold_val_accs[k]:.1%}  test={fold_test_correct[k]}/{len(y_test)} ({fold_test_accs[k]:.1%})  ep={fold_epochs[k]}")
         print(f"  Mean epoch: {mean_epoch}")
 
-        # Retrain on ALL data with fixed epochs = mean_epoch from K-fold
+        # Retrain on ALL data
         print(f"\n--- RETRAIN on full pool (epochs={mean_epoch}) ---")
         X_full = np.concatenate([X_pool, X_wiki], axis=0)
         y_full = np.concatenate([y_pool, y_wiki], axis=0)
         pm_full = list(pm_pool) + list(pm_wiki)
 
-        # Use last fold's val as dummy val for early stopping format
-        # (retrain uses fixed epochs, but train_model needs val for logging)
         last_val_idx = folds[-1][1]
         X_retrain_val = X_pool[last_val_idx]
         y_retrain_val = y_pool[last_val_idx]
@@ -1322,7 +1121,7 @@ def main():
         )
 
         retrain_kwargs = dict(train_kwargs)
-        retrain_kwargs["epochs"] = mean_epoch  # fixed from K-fold
+        retrain_kwargs["epochs"] = mean_epoch
         model, retrain_info = train_model(
             X_full_s, y_full, pm_full,
             X_retrain_val_s, y_retrain_val,
@@ -1330,11 +1129,10 @@ def main():
         )
         print(f"  Retrain done (epoch {retrain_info['best_epoch']}/{mean_epoch})")
 
-        # Evaluate retrained model on test
         results = evaluate(model, X_test_s, y_test, args.device, verbose=args.verbose)
 
         info = {
-            "best_val_acc": mean_val,  # K-fold mean (for grid ranking)
+            "best_val_acc": mean_val,
             "best_epoch": mean_epoch,
             "kfold_val_accs": fold_val_accs,
             "kfold_mean": mean_val,
@@ -1351,7 +1149,6 @@ def main():
     # Standard single-run training
     # -----------------------------------------------------------------------
     else:
-        # Standardize
         X_train, X_val, X_test, feat_mean, feat_std = _standardize(X_train, X_val, X_test)
         print("  Features standardized (z-score, fit on train)")
 
@@ -1367,7 +1164,6 @@ def main():
         )
         print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
 
-        # Test
         results = evaluate(model, X_test, y_test, args.device, verbose=args.verbose)
         n_train_effective = len(X_train)
         n_val_effective = len(X_val)
@@ -1409,9 +1205,6 @@ def main():
     if _N_MERT_ACTIVE > 0:
         ckpt["mert_layer"] = _MERT_LAYER_ACTIVE
         ckpt["n_mert_features"] = _N_MERT_ACTIVE
-    # Included groups (for proper ablation — inference knows which features to build)
-    if _INCLUDED_GROUPS is not None:
-        ckpt["included_groups"] = _INCLUDED_GROUPS
     # K-fold metadata
     if use_kfold:
         ckpt["kfold"] = args.kfold

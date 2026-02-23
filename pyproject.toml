@@ -16,14 +16,11 @@ dependencies = [
     "numpy<2.0",
     "scipy>=1.12.0",
     "soundfile>=0.12.0",
-    "madmom",
     "websockets>=12.0",
     "torch>=2.1.0",
     "torchaudio>=2.1.0",
     "torchvision>=0.16.0",
-    "BeatNet",
     "numba>=0.59.0",
-    "beat-this",
     "pyaudio>=0.2.14",
     "transformers>=4.38.0",
     "tqdm>=4.60.0",
@@ -39,11 +36,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["beatmeter"]
-
-[tool.uv.sources]
-madmom = { git = "https://github.com/CPJKU/madmom.git", rev = "27f032e8" }
-BeatNet = { git = "https://github.com/mjhydri/BeatNet.git", rev = "40336132" }
-beat-this = { git = "https://github.com/CPJKU/beat_this.git", rev = "2c0389b0" }
 
 [tool.uv]
 override-dependencies = [

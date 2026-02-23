@@ -27,20 +27,13 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from beatmeter.analysis.cache import AnalysisCache
+from beatmeter.analysis.cache import AnalysisCache, NumpyLMDB
 from beatmeter.analysis.meter import _build_meter_net
 from beatmeter.analysis.signals.meter_net_features import (
-    extract_beat_features,
-    extract_signal_scores,
-    extract_tempo_features,
     TOTAL_FEATURES,
     N_AUDIO_FEATURES,
-    N_SSM_FEATURES,
-    N_BEAT_FEATURES,
-    N_SIGNAL_FEATURES,
-    N_TEMPO_FEATURES,
-    SIGNAL_NAMES,
-    METER_KEYS,
+    N_MERT_FEATURES,
+    feature_groups,
 )
 from beatmeter.analysis.signals.onset_mlp_features import (
     SR, MAX_DURATION_S, extract_features_v6,
@@ -49,9 +42,6 @@ from beatmeter.analysis.signals.onset_mlp_features import (
     N_BEAT_POSITION_FEATURES_V6, N_AUTOCORR_RATIO_FEATURES_V6,
     N_TEMPOGRAM_SALIENCE, BAR_BEAT_LENGTHS_V6,
     N_BEAT_POSITION_BINS,
-)
-from beatmeter.analysis.signals.meter_net_features import (
-    feature_groups,
 )
 
 
@@ -93,6 +83,7 @@ def load_model():
         "feat_std": ckpt.get("feat_std"),
         "input_dim": ckpt["input_dim"],
         "n_audio": ckpt.get("n_audio_features", N_AUDIO_FEATURES),
+        "n_mert": ckpt.get("n_mert_features", 0),
     }
     return model, info
 
@@ -177,27 +168,50 @@ def collect_samples(
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction
+# Feature extraction (audio + MERT only)
 # ---------------------------------------------------------------------------
 
-def extract_features(path: Path, cache: AnalysisCache) -> np.ndarray:
-    """Extract full MeterNet feature vector (v6 audio + SSM)."""
-    from beatmeter.analysis.signals.ssm_features import extract_ssm_features_cached
+_MERT_LOOKUP: dict[str, Path] | None = None
 
+
+def _build_mert_lookup() -> dict[str, Path]:
+    """Build stem -> .npy path lookup from MERT embedding directories."""
+    lookup: dict[str, Path] = {}
+    for d in [
+        PROJECT_ROOT / "data" / "mert_embeddings" / "meter2800",
+        PROJECT_ROOT / "data" / "mert_embeddings" / "wikimeter",
+    ]:
+        if not d.exists():
+            continue
+        for npy in d.glob("*.npy"):
+            lookup[npy.stem] = npy
+    return lookup
+
+
+def _load_mert_embedding(path: Path, layer: int = 3) -> np.ndarray:
+    """Load pre-extracted MERT embedding for a file."""
+    global _MERT_LOOKUP
+    if _MERT_LOOKUP is None:
+        _MERT_LOOKUP = _build_mert_lookup()
+
+    npy_path = _MERT_LOOKUP.get(path.stem)
+    if npy_path is None:
+        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+    try:
+        emb = np.load(npy_path)  # shape (12, 1536)
+        return emb[layer].astype(np.float32)
+    except Exception:
+        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+
+
+def extract_features(path: Path) -> np.ndarray:
+    """Extract full MeterNet feature vector (audio 1449d + MERT 1536d = 2985d)."""
     y, sr = librosa.load(str(path), sr=SR, duration=MAX_DURATION_S)
-    audio_hash = cache.audio_hash(str(path))
 
     audio_feat = extract_features_v6(y, sr)
-    ssm_feat = extract_ssm_features_cached(y, sr, cache, audio_hash)
+    mert_feat = _load_mert_embedding(path)
 
-    beat_feat = extract_beat_features(cache, audio_hash)
-    signal_feat = extract_signal_scores(cache, audio_hash)
-    tempo_feat = extract_tempo_features(cache, audio_hash)
-
-    full = np.concatenate([
-        audio_feat, ssm_feat,
-        beat_feat, signal_feat, tempo_feat,
-    ])
+    full = np.concatenate([audio_feat, mert_feat])
     assert full.shape[0] == TOTAL_FEATURES, f"Expected {TOTAL_FEATURES}, got {full.shape[0]}"
     return full
 
@@ -240,28 +254,27 @@ def plot(
     model_info: dict,
     output_path: Path,
 ):
-    """Generate the visualization."""
+    """Generate the activation visualization."""
     active_meters = [m for m in meters if m in all_data]
     n = len(active_meters)
     if n == 0:
         print("No data to plot.")
         return
     hidden = model_info["hidden"]
-    n_audio = model_info.get("n_audio", N_AUDIO_FEATURES)
-    fg = feature_groups(n_audio)
+    fg = feature_groups()
 
     # Compute grid size for fingerprint heatmaps
     side = int(np.ceil(np.sqrt(hidden)))
 
-    fig = plt.figure(figsize=(4.5 * n, 28))
+    fig = plt.figure(figsize=(4.5 * n, 22))
     title = (
-        f"MeterNet v6 Activations — hidden={model_info['hidden']}, "
+        f"MeterNet v7-slim Activations — hidden={model_info['hidden']}, "
         f"blocks={model_info['n_blocks']}, "
         f"dropout={model_info['dropout_scale']}"
     )
     fig.suptitle(title, fontsize=14, fontweight="bold", y=0.99)
-    gs = gridspec.GridSpec(8, n, hspace=0.5, wspace=0.3,
-                           height_ratios=[1.0, 0.7, 0.4, 0.6, 1.2, 1.2, 0.7, 0.9])
+    gs = gridspec.GridSpec(6, n, hspace=0.5, wspace=0.3,
+                           height_ratios=[1.0, 0.7, 1.2, 1.2, 0.7, 0.9])
 
     # Collect all activations for shared color scale
     all_proj = [all_data[m][2]["proj"] for m in active_meters]
@@ -273,9 +286,8 @@ def plot(
         feat_z, probs, acts = all_data[meter]
         label = labels.get(meter, METER_LABELS.get(meter, str(meter)))
 
-        # --- Row 0: Audio features top block ---
+        # --- Row 0: Audio features — autocorrelation matrix (16 channels x 64 lags) ---
         ax = fig.add_subplot(gs[0, col])
-        # v6: autocorrelation matrix (16 channels x 64 lags)
         autocorr = feat_z[:1024].reshape(16, 64)
         ax.imshow(autocorr, aspect="auto", cmap="RdBu_r", vmin=-3, vmax=3,
                   interpolation="nearest")
@@ -301,44 +313,8 @@ def plot(
         if col == 0:
             ax.set_ylabel(f"Beat-pos hist\n(7x{N_BEAT_POSITION_BINS})", fontsize=10)
 
-        # --- Row 2: Beat-sync chroma SSM (3 trackers × 11 lags) ---
+        # --- Row 2: Projection activations as fingerprint ---
         ax = fig.add_subplot(gs[2, col])
-        ssm_start = fg["ssm"][0]
-        ssm_end = fg["ssm"][1]
-        # 3 trackers × 25 dims; show raw similarity profiles (first 11 per tracker)
-        ssm_raw = feat_z[ssm_start:ssm_end]
-        ssm_profiles = np.zeros((3, 11))
-        for ti in range(3):
-            ssm_profiles[ti] = ssm_raw[ti * 25: ti * 25 + 11]
-        ax.imshow(ssm_profiles, aspect="auto", cmap="YlOrRd",
-                  vmin=0, vmax=max(ssm_profiles.max(), 0.1), interpolation="nearest")
-        ax.set_yticks(range(3))
-        ax.set_yticklabels(["beatnet", "beat_this", "madmom"], fontsize=6)
-        ax.set_xticks(range(11))
-        ax.set_xticklabels([str(i) for i in range(2, 13)], fontsize=6)
-        ax.set_xlabel("beat lag", fontsize=7)
-        if col == 0:
-            ax.set_ylabel("Chroma SSM\n(3×11)", fontsize=10)
-
-        # --- Row 3: Signal scores heatmap (5 signals × 12 meters) ---
-        ax = fig.add_subplot(gs[3, col])
-        sig_start = fg["signal"][0]
-        sig_end = fg["signal"][1]
-        sig_data = feat_z[sig_start:sig_end].reshape(5, 12)
-        sig_names = ["beatnet", "beat_this", "autocorr", "bar_trk", "hcdf"]
-        m_names = ["2/4", "3/4", "4/4", "5/4", "5/8", "6/8",
-                   "7/4", "7/8", "9/8", "10/8", "11/8", "12/8"]
-        ax.imshow(sig_data, aspect="auto", cmap="YlOrRd",
-                  vmin=0, vmax=max(sig_data.max(), 0.1), interpolation="nearest")
-        ax.set_yticks(range(5))
-        ax.set_yticklabels(sig_names, fontsize=6)
-        ax.set_xticks(range(12))
-        ax.set_xticklabels(m_names, fontsize=5, rotation=45, ha="right")
-        if col == 0:
-            ax.set_ylabel("Signal scores\n(5×12)", fontsize=10)
-
-        # --- Row 4: Projection activations as fingerprint ---
-        ax = fig.add_subplot(gs[4, col])
         act_proj = acts["proj"]
         padded = np.zeros(side * side)
         padded[:len(act_proj)] = act_proj
@@ -354,8 +330,8 @@ def plot(
         if col == 0:
             ax.set_ylabel(f"Projection\n({hidden}d)", fontsize=10)
 
-        # --- Row 5: Residual activations as fingerprint ---
-        ax = fig.add_subplot(gs[5, col])
+        # --- Row 3: Residual activations as fingerprint ---
+        ax = fig.add_subplot(gs[3, col])
         act_res = acts["residual"]
         padded = np.zeros(side * side)
         padded[:len(act_res)] = act_res
@@ -371,8 +347,8 @@ def plot(
         if col == 0:
             ax.set_ylabel(f"Residual\n({hidden}d)", fontsize=10)
 
-        # --- Row 6: Activation distribution (histogram overlay) ---
-        ax = fig.add_subplot(gs[6, col])
+        # --- Row 4: Activation distribution (histogram overlay) ---
+        ax = fig.add_subplot(gs[4, col])
         ax.hist(act_proj, bins=50, alpha=0.5, color="#4CAF50", label="proj",
                 density=True, edgecolor="none")
         ax.hist(act_res, bins=50, alpha=0.5, color="#FF9800", label="res",
@@ -384,8 +360,8 @@ def plot(
         if col == 0:
             ax.set_ylabel("Distribution", fontsize=10)
 
-        # --- Row 7: Prediction ---
-        ax = fig.add_subplot(gs[7, col])
+        # --- Row 5: Prediction ---
+        ax = fig.add_subplot(gs[5, col])
         class_labels = [METER_LABELS[m] for m in CLASS_METERS[:len(probs)]]
         bar_colors = []
         pred_idx = np.argmax(probs)
@@ -412,7 +388,6 @@ def plot(
 
     fig.text(0.02, 0.005,
              "Autocorr: blue=neg, red=pos (z-scored) | "
-             "Signals: yellow=low, red=high | "
              "Fingerprints: red=neg, green=pos (shared scale) | "
              "Prediction: red=truth, orange=pred",
              fontsize=7, color="gray")
@@ -422,11 +397,7 @@ def plot(
 
 
 # ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Sub-groups within the 1555-dim feature vector (for redundancy analysis)
+# Sub-groups within the 2985-dim feature vector (for redundancy analysis)
 # ---------------------------------------------------------------------------
 
 _BPH_START = N_AUTOCORR_V5 + N_TEMPOGRAM_BINS + N_MFCC * 2 + N_CONTRAST_DIMS + N_ONSET_STATS
@@ -447,32 +418,12 @@ AUDIO_SUBGROUPS = {
     "tg_salience\n(9d)": (N_AUDIO_FEATURES - N_TEMPOGRAM_SALIENCE, N_AUDIO_FEATURES),
 }
 
-# New feature groups (between audio and beat)
-_SSM_START = N_AUDIO_FEATURES
-_BEAT_START = _SSM_START + N_SSM_FEATURES
-
-# Non-audio groups
-EXTRA_SUBGROUPS = {
-    "ssm\n(75d)": (_SSM_START, _SSM_START + N_SSM_FEATURES),
-    "beat_beatnet\n(12d)": (_BEAT_START, _BEAT_START + 12),
-    "beat_beat_this\n(12d)": (_BEAT_START + 12, _BEAT_START + 24),
-    "beat_madmom\n(12d)": (_BEAT_START + 24, _BEAT_START + 36),
-    "beat_agree\n(6d)": (_BEAT_START + 36, _BEAT_START + 42),
-    "sig_beatnet\n(12d)": (_BEAT_START + N_BEAT_FEATURES,
-                            _BEAT_START + N_BEAT_FEATURES + 12),
-    "sig_beat_this\n(12d)": (_BEAT_START + N_BEAT_FEATURES + 12,
-                              _BEAT_START + N_BEAT_FEATURES + 24),
-    "sig_autocorr\n(12d)": (_BEAT_START + N_BEAT_FEATURES + 24,
-                              _BEAT_START + N_BEAT_FEATURES + 36),
-    "sig_bar_trk\n(12d)": (_BEAT_START + N_BEAT_FEATURES + 36,
-                             _BEAT_START + N_BEAT_FEATURES + 48),
-    "sig_hcdf\n(12d)": (_BEAT_START + N_BEAT_FEATURES + 48,
-                          _BEAT_START + N_BEAT_FEATURES + 60),
-    "tempo\n(4d)": (_BEAT_START + N_BEAT_FEATURES + N_SIGNAL_FEATURES,
-                     TOTAL_FEATURES),
+# MERT embedding (after audio features)
+MERT_SUBGROUP = {
+    f"MERT\n({N_MERT_FEATURES}d)": (N_AUDIO_FEATURES, N_AUDIO_FEATURES + N_MERT_FEATURES),
 }
 
-ALL_SUBGROUPS = {**AUDIO_SUBGROUPS, **EXTRA_SUBGROUPS}
+ALL_SUBGROUPS = {**AUDIO_SUBGROUPS, **MERT_SUBGROUP}
 
 
 def _collect_raw_features(
@@ -481,14 +432,13 @@ def _collect_raw_features(
     """Collect raw (un-normalized) feature vectors and labels."""
     n_per = max(1, n_samples // len(meters))
     samples = collect_samples(meters, n_per)
-    cache = AnalysisCache()
 
     feats = []
     labels = []
     for meter in meters:
         for path in samples.get(meter, []):
             try:
-                feat = extract_features(path, cache)
+                feat = extract_features(path)
                 feats.append(feat)
                 labels.append(meter)
             except Exception as e:
@@ -536,7 +486,8 @@ def plot_redundancy(
     # 3. Plot
     fig, axes = plt.subplots(1, 3, figsize=(28, 10),
                               gridspec_kw={"width_ratios": [1.2, 0.4, 0.4]})
-    fig.suptitle(f"MeterNet Feature Redundancy ({X.shape[0]} samples)", fontsize=14, fontweight="bold")
+    fig.suptitle(f"MeterNet v7-slim Feature Redundancy ({X.shape[0]} samples, {TOTAL_FEATURES}d)",
+                 fontsize=14, fontweight="bold")
 
     # Heatmap
     ax = axes[0]
@@ -554,14 +505,14 @@ def plot_redundancy(
     ax.set_title("Mean-aggregated inter-group correlation", fontsize=11)
     fig.colorbar(im, ax=ax, shrink=0.7)
 
-    # Divider between audio and non-audio groups
+    # Divider between audio and MERT groups
     n_audio = len(AUDIO_SUBGROUPS)
     ax.axhline(n_audio - 0.5, color="black", linewidth=2)
     ax.axvline(n_audio - 0.5, color="black", linewidth=2)
 
     # PCA effective rank bar chart
     ax = axes[1]
-    colors = ["#4CAF50"] * len(AUDIO_SUBGROUPS) + ["#FF9800"] * len(EXTRA_SUBGROUPS)
+    colors = ["#4CAF50"] * len(AUDIO_SUBGROUPS) + ["#FF9800"] * len(MERT_SUBGROUP)
     short_names = [n.split("\n")[0] for n in names]
     bars = ax.barh(range(n_groups), eff_ranks, color=colors, edgecolor="black", linewidth=0.5)
     ax.set_yticks(range(n_groups))
@@ -634,7 +585,6 @@ def main():
         print(f"  {METER_LABELS.get(m, str(m))}: {len(paths)} files")
 
     print("Extracting features...")
-    cache = AnalysisCache()
     all_data = {}
     act_labels = {}
 
@@ -650,7 +600,7 @@ def main():
 
         for i, path in enumerate(paths):
             try:
-                feat = extract_features(path, cache)
+                feat = extract_features(path)
             except Exception as e:
                 print(f"  {path.name}: SKIP ({e})")
                 continue

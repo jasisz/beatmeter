@@ -1,7 +1,6 @@
 """Meter (time signature) hypothesis generation.
 
-Score combination chain: MeterNet → 4/4 fallback.
-Signal functions live in beatmeter.analysis.signals/.
+Score combination chain: MeterNet (audio+MERT) → 4/4 fallback.
 """
 
 import logging
@@ -10,12 +9,7 @@ import time
 
 import numpy as np
 
-from beatmeter.analysis.models import Beat, MeterHypothesis
-from beatmeter.analysis.signals import (
-    signal_downbeat_spacing,
-    signal_onset_autocorrelation,
-    signal_bar_tracking,
-)
+from beatmeter.analysis.models import MeterHypothesis
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +65,7 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
 
 
 def _load_meter_net():
-    """Load MeterNet checkpoint once. Returns (model, meta) or (None, None).
-
-    Respects env var:
-      METER_NET_CHECKPOINT → custom checkpoint path (default: data/meter_net.pt)
-    """
+    """Load MeterNet checkpoint once. Returns (model, meta) or (None, None)."""
     global _meter_net_model, _meter_net_meta
     if _meter_net_model is not None:
         return _meter_net_model, _meter_net_meta
@@ -93,7 +83,6 @@ def _load_meter_net():
 
     try:
         import torch
-        import torch.nn as nn
 
         ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
         input_dim = ckpt["input_dim"]
@@ -125,7 +114,6 @@ def _load_meter_net():
             "feature_version": ckpt.get("feature_version", "mn_v3"),
             "n_mert_features": ckpt.get("n_mert_features", 0),
             "mert_layer": ckpt.get("mert_layer", 3),
-            "included_groups": ckpt.get("included_groups"),  # None = all groups
         }
         logger.info(
             "MeterNet loaded: dim=%d, hidden=%d, blocks=%d, classes=%d",
@@ -154,12 +142,6 @@ def _prepare_audio(audio: np.ndarray, sr: int, target_sr: int, max_duration_s: i
 def _meter_net_predict(
     audio: np.ndarray | None,
     sr: int,
-    signal_results: dict[str, dict[tuple[int, int], float]],
-    beatnet_beats: list[Beat],
-    beat_this_beats: list[Beat] | None,
-    madmom_results: dict[int, list[Beat]],
-    onset_event_times: np.ndarray | None,
-    tempo_bpm: float | None,
     cache=None,
     audio_hash: str | None = None,
 ) -> dict[tuple[int, int], float] | None:
@@ -173,115 +155,53 @@ def _meter_net_predict(
         from beatmeter.analysis.signals.onset_mlp_features import (
             extract_features_v6, SR, MAX_DURATION_S,
         )
-        from beatmeter.analysis.signals.meter_net_features import (
-            extract_beat_features_live,
-            extract_signal_scores_live,
-            extract_tempo_features_live,
-        )
-        from beatmeter.analysis.signals.ssm_features import extract_ssm_features_live
+        from beatmeter.analysis.signals.meter_net_features import N_MERT_FEATURES
 
         t0 = time.perf_counter()
-
-        # Check which groups the model needs
-        included_groups = meta.get("included_groups")  # None = all
-        need_audio = included_groups is None or "audio" in included_groups
-        need_ssm = included_groups is None or "ssm" in included_groups
 
         # 1. Audio features (1449d) — cached independently from checkpoint
         audio_feat = None
         audio_feat_cached = False
-        if need_audio:
-            if cache and audio_hash:
-                audio_feat = cache.load_array(audio_hash, "meter_net_audio")
-                if audio_feat is not None:
-                    audio_feat_cached = True
+        if cache and audio_hash:
+            audio_feat = cache.load_array(audio_hash, "meter_net_audio")
+            if audio_feat is not None:
+                audio_feat_cached = True
 
-        # 2. SSM features (75d) — cached independently from checkpoint
-        ssm_feat = None
-        ssm_feat_cached = False
-        if need_ssm:
-            if cache and audio_hash:
-                ssm_feat = cache.load_array(audio_hash, "meter_net_ssm")
-                if ssm_feat is not None:
-                    ssm_feat_cached = True
-
-        # Lazy audio preparation: only when at least one needed feature is a cache miss
-        audio_copy = None
-        if (need_audio and audio_feat is None) or (need_ssm and ssm_feat is None):
+        if audio_feat is None:
             if audio is None:
                 return None
             audio_copy = _prepare_audio(audio, sr, SR, MAX_DURATION_S)
-
-        if need_audio and audio_feat is None:
             audio_feat = extract_features_v6(audio_copy, SR)
             if audio_feat is None:
                 return None
             if cache and audio_hash:
                 cache.save_array(audio_hash, "meter_net_audio", audio_feat)
 
-        if need_ssm and ssm_feat is None:
-            ssm_feat = extract_ssm_features_live(
-                audio_copy, SR, beatnet_beats, beat_this_beats, madmom_results,
-            )
-            if cache and audio_hash:
-                cache.save_array(audio_hash, "meter_net_ssm", ssm_feat)
-
-        # 3. Tempo info from cache/live
-        tempo_lib = 0.0
-        tempo_tg = 0.0
-        if cache and audio_hash:
-            td = cache.load_signal(audio_hash, "tempo_librosa")
-            if td:
-                tempo_lib = td.get("bpm", 0.0)
-            td = cache.load_signal(audio_hash, "tempo_tempogram")
-            if td:
-                tempo_tg = td.get("bpm", 0.0)
-        if tempo_lib == 0 and tempo_tg == 0 and tempo_bpm:
-            tempo_lib = tempo_bpm
-            tempo_tg = tempo_bpm
-
-        # Build a dict of available feature groups
+        # 2. MERT embedding (1536d) — from cache or runtime extraction
         n_mert = meta.get("n_mert_features", 0)
-        group_feats: dict[str, np.ndarray] = {}
-        if audio_feat is not None:
-            group_feats["audio"] = audio_feat
-        if ssm_feat is not None:
-            group_feats["ssm"] = ssm_feat
+        mert_feat = None
+        mert_cached = False
 
-        # 4. Beat features (42 dims) — only if needed
-        if included_groups is None or "beat" in included_groups:
-            duration = len(audio) / sr if audio is not None else 30.0
-            oet = onset_event_times if onset_event_times is not None else np.array([])
-            group_feats["beat"] = extract_beat_features_live(
-                beatnet_beats, beat_this_beats, madmom_results, oet, duration,
-            )
-
-        # Signal scores (60 dims) — only if needed
-        if included_groups is None or "signal" in included_groups:
-            group_feats["signal"] = extract_signal_scores_live(signal_results)
-
-        # Tempo features (4 dims) — only if needed
-        if included_groups is None or "tempo" in included_groups:
-            group_feats["tempo"] = extract_tempo_features_live(tempo_lib, tempo_tg)
-
-        # MERT embedding — only if needed
-        if n_mert > 0 and (included_groups is None or "mert" in included_groups):
-            mert_feat = None
+        if n_mert > 0:
             if cache and audio_hash:
                 mert_feat = cache.load_array(audio_hash, "meter_net_mert")
-            if mert_feat is None:
-                from beatmeter.analysis.signals.meter_net_features import N_MERT_FEATURES
-                mert_feat = np.zeros(N_MERT_FEATURES, dtype=np.float32)
-            group_feats["mert"] = mert_feat
+                if mert_feat is not None:
+                    mert_cached = True
 
-        # 5. Concatenate in canonical order (only included groups)
-        from beatmeter.analysis.signals.meter_net_features import ALL_GROUP_NAMES
-        if included_groups is not None:
-            parts = [group_feats[g] for g in ALL_GROUP_NAMES
-                     if g in included_groups and g in group_feats]
-        else:
-            # Legacy / no ablation: all available groups in canonical order
-            parts = [group_feats[g] for g in ALL_GROUP_NAMES if g in group_feats]
+            if mert_feat is None:
+                if audio is not None:
+                    from beatmeter.analysis.mert import extract_mert_embedding
+                    mert_layer = meta.get("mert_layer", 3)
+                    mert_feat = extract_mert_embedding(audio, sr, layer=mert_layer)
+                    if cache and audio_hash:
+                        cache.save_array(audio_hash, "meter_net_mert", mert_feat)
+                else:
+                    mert_feat = np.zeros(N_MERT_FEATURES, dtype=np.float32)
+
+        # 3. Concatenate: audio + MERT
+        parts = [audio_feat]
+        if mert_feat is not None:
+            parts.append(mert_feat)
         full_feat = np.concatenate(parts)
 
         expected_dim = len(meta["feat_mean"])
@@ -295,17 +215,17 @@ def _meter_net_predict(
         full_feat = full_feat.astype(np.float32)
         full_feat = (full_feat - feat_mean) / np.where(feat_std < 1e-8, 1.0, feat_std)
 
-        # 6. Forward pass
+        # 4. Forward pass
         x = torch.tensor(full_feat, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             logits = model(x)
             probs = torch.sigmoid(logits).squeeze(0).numpy()
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("MeterNet: %.1f ms (audio=%s, ssm=%s)",
+        logger.debug("MeterNet: %.1f ms (audio=%s, mert=%s)",
                      elapsed_ms,
                      "cached" if audio_feat_cached else "live",
-                     "cached" if ssm_feat_cached else "live")
+                     "cached" if mert_cached else "live")
 
         # Convert class probabilities to meter scores
         class_meters = meta["class_meters"]
@@ -314,17 +234,9 @@ def _meter_net_predict(
             prob = float(probs[cls_idx])
             if prob < 0.01:
                 continue
-            # Find best denominator from signal_results
-            best_den = None
-            best_sig_score = -1.0
-            for sig_scores in signal_results.values():
-                for (num, den), sc in sig_scores.items():
-                    if num == meter_num and sc > best_sig_score:
-                        best_sig_score = sc
-                        best_den = den
-            if best_den is None:
-                best_den = 4 if meter_num <= 7 else 8
-            scores[(meter_num, best_den)] = prob
+            # Default denominator: 4 for common meters, 8 for larger
+            den = 4 if meter_num <= 7 else 8
+            scores[(meter_num, den)] = prob
 
         return scores
 
@@ -372,90 +284,6 @@ def _get_description(num: int, den: int) -> str:
 def _get_grouping(num: int, den: int) -> str | None:
     groupings = GROUPINGS.get((num, den))
     return groupings[0] if groupings else None
-
-
-# ---------------------------------------------------------------------------
-# Signal collection — compute signals needed by MeterNet
-# ---------------------------------------------------------------------------
-
-
-def _collect_signal_scores(
-    beatnet_beats: list[Beat],
-    madmom_results: dict[int, list[Beat]],
-    onset_times: np.ndarray,
-    onset_strengths: np.ndarray,
-    beat_interval: float | None,
-    beat_times: np.ndarray,
-    sr: int,
-    audio: np.ndarray | None,
-    beat_this_beats: list[Beat] | None,
-    skip_bar_tracking: bool,
-    cache=None,
-    audio_hash: str | None = None,
-    tmp_path: str | None = None,
-) -> dict[str, dict[tuple[int, int], float]]:
-    """Collect scores from all active signals."""
-    from beatmeter.analysis.cache import str_to_meter_key
-
-    signal_results: dict[str, dict[tuple[int, int], float]] = {}
-
-    def _try_cache(sig_name: str) -> dict[tuple[int, int], float] | None:
-        if cache and audio_hash:
-            raw = cache.load_signal(audio_hash, sig_name)
-            if raw is not None:
-                return {str_to_meter_key(k): v for k, v in raw.items()}
-        return None
-
-    def _save_cache(sig_name: str, scores: dict[tuple[int, int], float]) -> None:
-        if cache and audio_hash and scores:
-            cache.save_signal(audio_hash, sig_name, scores)
-
-    # Signal 1a: BeatNet downbeat spacing
-    s1 = _try_cache("beatnet_spacing")
-    if s1 is None:
-        s1 = signal_downbeat_spacing(beatnet_beats)
-        _save_cache("beatnet_spacing", s1)
-    if s1:
-        signal_results["beatnet"] = s1
-
-    # Signal 1b: Beat This! downbeat spacing
-    if beat_this_beats:
-        s1b = _try_cache("beat_this_spacing")
-        if s1b is None:
-            s1b = signal_downbeat_spacing(beat_this_beats)
-            _save_cache("beat_this_spacing", s1b)
-        if s1b:
-            signal_results["beat_this"] = s1b
-
-    # Signal 3: onset autocorrelation
-    if len(onset_times) > 0:
-        s3 = _try_cache("onset_autocorr")
-        if s3 is None:
-            s3 = signal_onset_autocorrelation(onset_times, onset_strengths, beat_interval, sr)
-            _save_cache("onset_autocorr", s3)
-        if s3:
-            signal_results["autocorr"] = s3
-
-    # Signal 7: Bar tracking (DBNBarTrackingProcessor)
-    if not skip_bar_tracking and len(beat_times) >= 6:
-        s7 = _try_cache("bar_tracking")
-        if s7 is None and audio is not None:
-            if beat_this_beats and len(beat_this_beats) >= 6:
-                bar_beat_times = np.array([b.time for b in beat_this_beats])
-            else:
-                bar_beat_times = beat_times
-            s7 = signal_bar_tracking(audio, sr, bar_beat_times, tmp_path=tmp_path)
-            _save_cache("bar_tracking", s7)
-        if s7:
-            signal_results["bar_tracking"] = s7
-
-    # Signal 6: HCDF meter
-    if cache and audio_hash:
-        hcdf = _try_cache("hcdf_meter")
-        if hcdf:
-            signal_results["hcdf"] = hcdf
-
-    return signal_results
 
 
 # ---------------------------------------------------------------------------
@@ -521,57 +349,20 @@ def _format_hypotheses(
 # ---------------------------------------------------------------------------
 
 def generate_hypotheses(
-    beatnet_beats: list[Beat],
-    madmom_results: dict[int, list[Beat]],
-    onset_times: np.ndarray,
-    onset_strengths: np.ndarray,
-    all_beats: list[Beat],
+    audio: np.ndarray | None = None,
     sr: int = 22050,
     max_hypotheses: int = 5,
-    tempo_bpm: float | None = None,
-    beatnet_alignment: float = 1.0,
-    madmom_alignment: float = 1.0,
-    audio: np.ndarray | None = None,
-    librosa_beats: list[Beat] | None = None,
-    beat_this_beats: list[Beat] | None = None,
-    beat_this_alignment: float = 0.0,
-    onset_event_times: np.ndarray | None = None,
-    skip_bar_tracking: bool = False,
     cache=None,
     audio_hash: str | None = None,
-    tmp_path: str | None = None,
     audio_file_path: str | None = None,
 ) -> tuple[list[MeterHypothesis], float]:
     """Generate meter hypotheses. MeterNet → 4/4 fallback."""
-    # Beat interval from tempo
-    beat_interval = None
-    if tempo_bpm and tempo_bpm > 0:
-        beat_interval = 60.0 / tempo_bpm
-    elif len(all_beats) >= 3:
-        times = np.array([b.time for b in all_beats])
-        ibis = np.diff(times)
-        if len(ibis) > 0:
-            beat_interval = float(np.median(ibis))
-
-    beat_times = np.array([b.time for b in all_beats]) if all_beats else np.array([])
-
-    # Collect signal scores (needed by MeterNet for 60-dim signal features)
-    signal_results = _collect_signal_scores(
-        beatnet_beats, madmom_results,
-        onset_times, onset_strengths, beat_interval, beat_times,
-        sr, audio, beat_this_beats, skip_bar_tracking,
-        cache=cache, audio_hash=audio_hash, tmp_path=tmp_path,
-    )
-
-    # Score combination: MeterNet → 4/4 fallback
     meter_net_scores = _meter_net_predict(
-        audio, sr, signal_results,
-        beatnet_beats, beat_this_beats, madmom_results,
-        onset_event_times, tempo_bpm,
+        audio, sr,
         cache=cache, audio_hash=audio_hash,
     )
 
-    if meter_net_scores is not None:
+    if meter_net_scores:
         all_scores = meter_net_scores
         logger.debug("Using MeterNet for meter scoring")
     else:

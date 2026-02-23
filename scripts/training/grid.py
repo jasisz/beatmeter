@@ -30,15 +30,6 @@ TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train.py"
 
 # -- Grid definition --
 
-# Proper ablation (column removal): 5 key variants
-_ABLATION_COMBOS = [
-    "none",                          # baseline (all features, 3166d)
-    "mert",                          # no MERT (1630d)
-    "ssm,beat,signal,tempo",         # audio+MERT only (2985d)
-    "audio",                         # no audio (1717d)
-    "ssm,beat,signal,tempo,mert",    # audio only (1449d)
-]
-
 GRID = {
     "lr": [3e-4],
     "hidden": [512],
@@ -46,9 +37,8 @@ GRID = {
     "n_blocks": [2],
     "mert_layer": [3],
     "kfold": [5],
-    "ablate": _ABLATION_COMBOS,
 }
-# Grid: proper ablation (column removal) — 5 key variants, 5-fold CV
+# Grid: audio+MERT only (2985d), 5-fold CV
 
 FIXED_ARGS = [
     "--meter2800", "data/meter2800",
@@ -80,9 +70,6 @@ def combo_filename(params: dict) -> str:
     kf = params.get("kfold", 0)
     if kf > 0:
         parts.append(f"kf_{kf}")
-    ablate = params.get("ablate", "none")
-    if ablate and ablate != "none":
-        parts.append(f"abl_{ablate.replace(',', '_')}")
     if params.get("seed") is not None:
         parts.append(f"s_{params['seed']}")
     return "_".join(parts)
@@ -105,9 +92,6 @@ def build_cmd(params: dict) -> list[str]:
     kf = params.get("kfold", 0)
     if kf > 0:
         cmd += ["--kfold", str(kf)]
-    ablate = params.get("ablate", "none")
-    if ablate and ablate != "none":
-        cmd += ["--ablate", ablate]
     if params.get("seed") is not None:
         cmd += ["--seed", str(params["seed"])]
     return cmd
@@ -130,9 +114,6 @@ def combo_label(params: dict) -> str:
     kf = params.get("kfold", 0)
     if kf > 0:
         parts.append(f"kfold={kf}")
-    ablate = params.get("ablate", "none")
-    if ablate and ablate != "none":
-        parts.append(f"ablate={ablate}")
     if params.get("seed") is not None:
         parts.append(f"seed={params['seed']}")
     return ", ".join(parts)
