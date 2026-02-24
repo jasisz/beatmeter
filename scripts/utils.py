@@ -359,3 +359,57 @@ def load_wikimeter_entries(
             entries.append((audio_path, primary_meter, multi))
 
     return entries
+
+
+# ---------------------------------------------------------------------------
+# BALLROOM loader (for cross-dataset eval)
+# ---------------------------------------------------------------------------
+
+_BALLROOM_GENRE_METER = {
+    "Waltz": 3,
+    "VienneseWaltz": 3,
+    "ChaChaCha": 4,
+    "Jive": 4,
+    "Quickstep": 4,
+    "Rumba": 4,
+    "Samba": 4,
+    "Tango": 4,
+}
+
+
+def load_ballroom_entries(
+    data_dir: Path,
+    split: str,
+    valid_meters: set[int] | None = None,
+) -> list[tuple[Path, int]]:
+    """Load Ballroom dataset entries.
+
+    split: 'all' (no predefined splits — use entire dataset).
+           'test' is aliased to 'all' for compatibility with eval.py.
+
+    Genre → meter mapping:
+      3/4: Waltz, VienneseWaltz
+      4/4: ChaChaCha, Jive, Quickstep, Rumba, Samba, Tango
+    """
+    tab_path = data_dir / "data_ballroom.tab"
+    audio_dir = data_dir / "audio"
+
+    if not tab_path.exists():
+        print(f"  ERROR: {tab_path} not found.")
+        print(f"  Run: uv run python scripts/setup/download_ballroom.py")
+        return []
+
+    entries: list[tuple[Path, int]] = []
+    with open(tab_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            fname = row["filename"].strip()
+            meter = int(row["meter"])
+            audio_path = audio_dir / fname
+            if not audio_path.exists():
+                continue
+            if valid_meters is not None and meter not in valid_meters:
+                continue
+            entries.append((audio_path, meter))
+
+    return entries

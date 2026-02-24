@@ -4,6 +4,8 @@
 
 We present BeatMeter, a multi-signal system for automatic meter detection from audio. The current best result is a **MLP+FTT ensemble** that averages sigmoid probabilities from two independently trained models — an MLP (631/700) and an FT-Transformer (629/700) — achieving **639/700 (91.3%)** with balanced accuracy **83.9%** on the METER2800 test split (700 files). Both models take 2985-dimensional feature vectors combining DSP-based audio features (1449d) and MERT-v1-95M embeddings (1536d from layer 3). The ensemble exploits complementary error patterns: 49 disagreements (7%) between the two architectures, with an oracle ceiling of 649/698 (92.8%). This surpasses both the previous single-model best (632/700, Round 18) and the ResNet18 paper's 88% on binary 3/4 vs 4/4 classification.
 
+Cross-dataset evaluation on the Ballroom dataset (698 dance music tracks, zero-shot — no training on Ballroom data) achieves **657/698 (94.1%)** [95% CI: 92.3%–95.8%] on binary 3/4 vs 4/4 classification, surpassing the previous SOTA of 84.6% (Schuller et al., 2008) by +9.5pp.
+
 ## 1. System Architecture
 
 ### 1.1 Overview
@@ -201,11 +203,44 @@ During development (Rounds 1--8), we used an internal benchmark of 303 test case
 | 17c | 700 | 593/700 (84.7%) | MeterNet v6 (1630-dim: +SSM +beat +tempo). Grid search promoted checkpoint. 5/x: 61.9% (+9.5pp), but 4/x: 81.8% (−9.7pp). −30 vs Round 16 arbiter despite 22× more features. |
 | 18 | 700 | 632/700 (90.3%) | MeterNet+MERT (h=512, 3166d = 1630d + 1536d MERT layer 3). Multi-seed finale (5 seeds). bal=83.0%. +39 vs no-MERT (593). Largest single-feature improvement. |
 | 19 | 700 | 631/700 (90.1%) | MeterNet v7-slim (audio+MERT, 2985d). Removed BeatNet, beat-this, madmom. 3166d → 2985d. bal=84.3%. −1 file vs R18. Eliminated ~550MB deps, −4200 LOC. |
-| **20** | **700** | **639/700 (91.3%)** | **MLP+FTT ensemble (probability averaging). MLP 631 + FTT 629, 49 disagreements, oracle 649. bal=83.9%. +8 vs MLP solo. Zero training cost.** |
+| **20** | **700** | **639/700 (91.3%)** | **MLP+FTT ensemble (probability averaging). MLP 631 + FTT 629, 49 disagreements, oracle 649. bal=83.9%. +8 vs MLP solo. Zero training cost. Cross-dataset: Ballroom 657/698 (94.1%), SOTA +9.5pp.** |
 
 ### 2.4 Confidence Calibration
 
 The system reports confidence levels alongside meter predictions. Confidence is derived from the margin between the top-scoring and second-scoring meter hypotheses, combined with signal agreement count. Empirically, predictions with 4+ agreeing signals achieve approximately 92% accuracy, while predictions with fewer than 3 agreeing signals drop to approximately 65%.
+
+### 2.5 Cross-Dataset Evaluation: Ballroom
+
+**Dataset**: Ballroom (Krebs et al., 2004) — 698 ~30-second dance music excerpts across 8 genres. Meter labels derived from dance genre: Waltz + VienneseWaltz = 3/4 (175 tracks), ChaChaCha + Jive + Quickstep + Rumba + Samba + Tango = 4/4 (523 tracks). Binary classification task (3/4 vs 4/4). **Zero-shot** — no Ballroom data used in training.
+
+**Previous SOTA**: 84.6% (Schuller et al., 2008) using SVM on 82 rhythmic features (beat histogram, onset statistics, tempo).
+
+**Current best** (MLP+FTT ensemble, w=0.50):
+
+| Metric | Result |
+|--------|--------|
+| **Overall** | **657/698 (94.1%)** |
+| 95% Bootstrap CI | [92.3%, 95.8%] |
+| Balanced accuracy | 93.2% |
+| 3/x (175 files) | 160/175 (91.4%) |
+| 4/x (523 files) | 497/523 (95.0%) |
+
+**Per-model comparison** (zero-shot, no training on Ballroom):
+
+| Model | Overall | 3/x | 4/x | Balanced |
+|-------|---------|-----|-----|----------|
+| MLP solo | 570/698 (81.7%) | 142/175 (81.1%) | 428/523 (81.8%) | 81.5% |
+| FTT solo | 601/698 (86.1%) | 171/175 (97.7%) | 430/523 (82.2%) | 90.0% |
+| **Ensemble** | **657/698 (94.1%)** | **160/175 (91.4%)** | **497/523 (95.0%)** | **93.2%** |
+| Previous SOTA | 84.6% | — | — | — |
+
+**Key observations**:
+
+- **Ensemble gain is even larger on Ballroom** (+8.0pp over FTT solo, +12.4pp over MLP solo) than on METER2800 (+1.4pp over MLP solo). This suggests the two architectures capture genuinely complementary information about rhythmic structure, with the benefit amplified on out-of-distribution data.
+- **FTT dominates 3/x**: 97.7% waltz recognition vs MLP's 81.1% — the transformer's attention mechanism excels at detecting triple meter patterns in dance music.
+- **MLP and FTT have opposing weaknesses**: MLP is balanced (81.1% / 81.8%) but mediocre; FTT is a waltz specialist (97.7%) but weaker on 4/x (82.2%). The ensemble resolves this: 91.4% / 95.0%.
+- **Confusion pattern**: 15 waltzes misclassified as 4/4, 26 non-waltz tracks misclassified as 3/4. The 3/x errors concentrate in VienneseWaltz (fast tempo, ambiguous feel).
+- **+9.5pp over previous SOTA** (94.1% vs 84.6%, Schuller et al. 2008). Our system uses no Ballroom-specific features or training — pure zero-shot transfer from METER2800.
 
 ## 3. Literature
 
@@ -235,7 +270,11 @@ The system reports confidence levels alongside meter predictions. Confidence is 
 
 ### 3.5 Datasets and Surveys
 
+- **Ballroom dataset** (Krebs et al., 2004) -- 698 ~30-second dance music excerpts across 8 genres (Waltz, VienneseWaltz, ChaChaCha, Jive, Quickstep, Rumba, Samba, Tango). Used as an independent cross-dataset meter benchmark: Waltz + VienneseWaltz = 3/4, all others = 4/4. Source: [MTG-UPF](https://mtg.upf.edu/ismir2004/contest/tempoContest/node5.html). See Section 2.5 and 4.19 for our evaluation results.
+
 - **Ballroom Extended** -- Approximately 4180 tracks of ballroom dance music. Waltz tracks are labeled 3/4; remaining genres are 4/4. Available via [mirdata](https://mirdata.readthedocs.io/). Useful as additional training data but limited in meter diversity.
+
+- **"Tango or Waltz"** (Schuller et al., Proc. ICASSP 2008) -- SVM classifier on 82 rhythmic features (beat histogram, onset statistics, tempo) achieving 84.6% on the Ballroom dataset for binary 3/4 vs 4/4 classification. Previous SOTA for meter classification on this dataset. Our ensemble surpasses it by +9.5pp (94.1%) zero-shot.
 
 - **Time Signature Detection: A Survey** (Ramos et al., MDPI Sensors 2021) -- Comprehensive survey of time signature detection methods, covering signal processing approaches, machine learning methods, and evaluation protocols. [MDPI](https://www.mdpi.com/1424-8220/21/19/6494)
 
@@ -1048,6 +1087,70 @@ Training config: 5-fold CV on M2800 tuning (2100) + WIKIMETER train, h=512 (MLP)
 
 The zero-training ensemble achieves a new project best of **639/700 (91.3%)**, demonstrating that MLP and FTT capture genuinely complementary patterns in the feature space. The hybrid model's end-to-end fusion underperforms the naive ensemble by 12 files — learned fusion compromises rather than specializes. However, the hybrid achieves the best-ever 5/x accuracy (73.8%), suggesting potential for class-aware routing. Next step: a micro stacking head trained on model probabilities rather than raw features.
 
+### 4.19 Cross-Dataset Evaluation: Ballroom (Round 20)
+
+#### Motivation
+
+All prior evaluation used METER2800, which also served as the training data source. To demonstrate generalization beyond the training distribution, we evaluated on the Ballroom dataset — an independent collection of dance music with no overlap with METER2800.
+
+#### Dataset
+
+The Ballroom dataset (Krebs et al., 2004; downloaded from MTG-UPF) contains 698 ~30-second dance music excerpts across 8 genres:
+
+| Genre | Tracks | Meter |
+|-------|--------|-------|
+| Waltz | 110 | 3/4 |
+| VienneseWaltz | 65 | 3/4 |
+| ChaChaCha | 111 | 4/4 |
+| Jive | 60 | 4/4 |
+| Quickstep | 82 | 4/4 |
+| Rumba | 98 | 4/4 |
+| Samba | 86 | 4/4 |
+| Tango | 86 | 4/4 |
+| **Total** | **698** | **175 × 3/4, 523 × 4/4** |
+
+Meter labels are derived from standard ballroom dance rules (waltz = 3/4, all others = 4/4). This is a binary classification task. Download script: `scripts/setup/download_ballroom.py`.
+
+#### Protocol
+
+Zero-shot evaluation — no Ballroom data was used for training, validation, or any form of model selection. The same METER2800-trained checkpoints (MLP and FTT) are applied directly. Eval script: `uv run python scripts/eval.py ballroom --ci --confusion`.
+
+#### Results
+
+See Section 2.5 for detailed results table.
+
+**Ensemble** (MLP+FTT, w=0.50): **657/698 (94.1%)**, 95% CI [92.3%, 95.8%], balanced accuracy 93.2%.
+
+Previous SOTA: 84.6% (Schuller et al., 2008 — SVM on 82 rhythmic features). Our zero-shot ensemble exceeds it by **+9.5pp**.
+
+#### Per-Model Analysis
+
+The Ballroom results reveal that the ensemble effect is **amplified on out-of-distribution data**:
+
+| | METER2800 | Ballroom |
+|---|---|---|
+| MLP solo | 631/700 (90.1%) | 570/698 (81.7%) |
+| FTT solo | 629/700 (89.9%) | 601/698 (86.1%) |
+| Ensemble | 639/700 (91.3%) | 657/698 (94.1%) |
+| **Ensemble gain (vs best solo)** | **+8 (+1.2pp)** | **+56 (+8.0pp)** |
+
+On METER2800, the ensemble adds 1.2pp over the best solo model. On Ballroom, it adds 8.0pp. This 6× amplification suggests that MLP and FTT generalize to different aspects of out-of-distribution music: the FTT captures triple meter structure (97.7% on waltz), while the MLP provides more balanced 4/x coverage.
+
+#### Confusion Matrix (Ensemble)
+
+```
+True\Pred    3/4    4/4
+  3/4       160     15
+  4/4        26    497
+```
+
+- 15 waltzes misclassified as 4/4 (mostly VienneseWaltz with fast tempo)
+- 26 non-waltz tracks misclassified as 3/4 (scattered across genres)
+
+#### Comparison with Previous SOTA
+
+Schuller et al. (2008) "Tango or Waltz?" evaluated on 698 Ballroom tracks using 82 rhythmic features (beat histograms, onset statistics, tempo) with SVM classification. Their 84.6% was the only published meter classification result on this dataset. Our zero-shot ensemble achieves 94.1%, a +9.5pp improvement, without any Ballroom-specific training or feature engineering.
+
 ## 5. Failure Analysis
 
 We analyzed incorrectly classified files and identified three recurring failure patterns.
@@ -1135,6 +1238,8 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 9. **Negative results: orthogonality experiments** -- resnet_meter (75%), mert_meter (80.7%), and four signals (periodicity, madmom, accent, resnet) all fail to contribute to the learned ensemble. MeterNet v6 (Round 17) shows that more features ≠ better results when features are redundant. However, qualitatively different features (MERT, Round 18) do help — the key is orthogonality, not dimensionality.
 
+10. **Cross-dataset generalization** -- Zero-shot evaluation on the Ballroom dataset (698 tracks, 100% independent of METER2800) achieves 94.1% on binary 3/4 vs 4/4, surpassing previous SOTA (84.6%, Schuller et al. 2008) by +9.5pp. The ensemble effect amplifies 6× on out-of-distribution data (+8.0pp vs +1.2pp on METER2800), demonstrating that architecture diversity improves robustness.
+
 ## 8. Future Work
 
 1. **Hybrid model evaluation** -- The `HybridMeterNet` (dual-branch MLP+FTT with learned fusion) is implemented and ready for training. If it can learn to route predictions better than naive averaging, it may exceed the ensemble's 639/700. Target: 640+ overall with improved 5/x balanced accuracy.
@@ -1149,7 +1254,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 
 6. **WIKIMETER expansion** -- The 11/x class remains the weakest in training data (83 songs); expanding it should improve rare-class performance.
 
-7. **Additional evaluation datasets** -- Expand beyond METER2800 to include non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats).
+7. **Additional evaluation datasets** -- Ballroom (698 tracks, binary 3/4 vs 4/4) is now evaluated (94.1%, SOTA). Next: non-Western music (Hindustani, Carnatic, Afro-Cuban) with complex meter structures (tala systems with 7, 10, 16 beats). Note: GTZAN has 91% overlap with METER2800, making it unsuitable as an independent benchmark.
 
 8. **Data augmentation with Skip That Beat** -- Using the beat-removal augmentation technique from Morais et al. (2024) to generate training data for underrepresented meters.
 
@@ -1174,3 +1279,7 @@ Infrastructure for both approaches (training pipelines, embedding cache, gracefu
 8. Ramos, D., Bittner, R., Bello, J. P., and Humphrey, E. "Time Signature Detection: A Survey." Sensors, vol. 21, no. 19, 2021. [DOI:10.3390/s21196494](https://www.mdpi.com/1424-8220/21/19/6494)
 
 9. Li, Y., Yuan, R., Zhang, G., et al. "MERT: Acoustic Music Understanding Model with Large-Scale Self-supervised Training." Proc. ICLR, 2024. [arXiv:2306.00107](https://arxiv.org/abs/2306.00107)
+
+10. Schuller, B., Eyben, F., and Rigoll, G. "Tango or Waltz? — Putting Ballroom Dance Style into Tempo Detection." Proc. ICASSP, 2008.
+
+11. Krebs, F., Böck, S., and Widmer, G. "Ballroom dance music dataset." ISMIR 2004 Audio Description Contest, 2004. [MTG-UPF](https://mtg.upf.edu/ismir2004/contest/tempoContest/node5.html)

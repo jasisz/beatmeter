@@ -34,7 +34,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.utils import load_meter2800_entries, load_wikimeter_entries, resolve_audio_path
+from scripts.utils import load_ballroom_entries, load_meter2800_entries, load_wikimeter_entries, resolve_audio_path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -58,6 +58,13 @@ DATASETS = {
         "splits": ["train", "val", "test", "tuning"],
         "classes": [3, 4, 5, 7],
         "default_split": "test",
+    },
+    "ballroom": {
+        "data_dir": Path("data/ballroom"),
+        "loader": load_ballroom_entries,
+        "splits": ["all", "test"],
+        "classes": [3, 4],
+        "default_split": "all",
     },
 }
 
@@ -275,6 +282,55 @@ def _pct(c: int, t: int) -> str:
     if t == 0:
         return "  -  "
     return f"{c / t * 100:.1f}%"
+
+
+def bootstrap_ci(file_results: list[dict], n_boot: int = 10000, alpha: float = 0.05) -> tuple[float, float]:
+    """Compute bootstrap confidence interval for accuracy.
+
+    Returns (lower, upper) as percentages.
+    """
+    rng = random.Random(42)
+    n = len(file_results)
+    if n == 0:
+        return 0.0, 0.0
+    ok_flags = [1 if r["ok"] else 0 for r in file_results]
+    accs = []
+    for _ in range(n_boot):
+        sample = rng.choices(ok_flags, k=n)
+        accs.append(sum(sample) / n * 100)
+    accs.sort()
+    lo = accs[int(n_boot * alpha / 2)]
+    hi = accs[int(n_boot * (1 - alpha / 2))]
+    return lo, hi
+
+
+def print_confusion_matrix(file_results: list[dict], classes: list[int]) -> None:
+    """Print confusion matrix from file results."""
+    # Build matrix
+    matrix: dict[int, Counter] = {c: Counter() for c in classes}
+    for r in file_results:
+        exp = r["expected"]
+        pred = r["predicted"]
+        if exp in matrix and pred is not None:
+            matrix[exp][pred] += 1
+
+    # Print header
+    header = "       " + "".join(f"{c}/x".center(7) for c in classes)
+    print(f"\n  Confusion matrix (rows=true, cols=predicted):", flush=True)
+    print(f"  {header}", flush=True)
+    print(f"  {'─' * len(header)}", flush=True)
+    for true_c in classes:
+        row = f"  {true_c}/x  "
+        for pred_c in classes:
+            count = matrix[true_c][pred_c]
+            if count == 0:
+                row += "   ·   "
+            elif true_c == pred_c:
+                row += f"  [{count:>3d}] "
+            else:
+                row += f"  {count:>3d}   "
+        print(row, flush=True)
+    print(f"  {'─' * len(header)}", flush=True)
 
 
 def print_summary(
@@ -742,6 +798,10 @@ def main():
                         help="Skip interactive confirmation for --promote")
     parser.add_argument("--dump-preds", type=str, default=None, metavar="PATH",
                         help="Dump per-file predictions to JSON (for ensemble analysis)")
+    parser.add_argument("--ci", action="store_true",
+                        help="Print 95%% bootstrap confidence interval")
+    parser.add_argument("--confusion", action="store_true",
+                        help="Print confusion matrix")
     args = parser.parse_args()
 
     # --- Promote mode ---
@@ -799,6 +859,13 @@ def main():
                 f"\n  vs last saved: {prev_correct}/{prev_total}"
                 f" ({_pct(prev_correct, prev_total)}, bal={prev_bal}%)"
             )
+
+        if args.ci:
+            lo, hi = bootstrap_ci(file_results)
+            print(f"\n  95% bootstrap CI: [{lo:.1f}%, {hi:.1f}%]", flush=True)
+
+        if args.confusion:
+            print_confusion_matrix(file_results, classes)
 
         if args.dump_preds:
             dump_path = Path(args.dump_preds)
