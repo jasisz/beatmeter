@@ -31,35 +31,69 @@ TRAIN_SCRIPT = PROJECT_ROOT / "scripts" / "training" / "train.py"
 # -- Grid definition --
 
 GRID = {
-    "lr": [3e-4],
+    "model": ["hybrid"],
+    "features": ["both"],
+    "token_split": ["semantic_v4"],
     "hidden": [512],
-    "dropout_scale": [1.5],
+    "n_heads": [4],
     "n_blocks": [2],
-    "mert_layer": [3],
+    "n_tokens": [10],
+    "dropout_scale": [1.5],
     "kfold": [5],
 }
-# Grid: audio+MERT only (2985d), 5-fold CV
+# Hybrid: MLP branch h=512, FTT branch d_model=128 (hard-coded in HybridMeterNet)
+# Single combo for initial test
 
 FIXED_ARGS = [
     "--meter2800", "data/meter2800",
     "--epochs", "200",
     "--workers", "4",
+    "--device", "mps",
 ]
 
 
+def _normalize_combo(params: dict) -> dict:
+    """Normalize combo for deduplication.
+
+    MLP ignores FTT-specific params (token_split, n_tokens, n_heads).
+    Semantic token_split ignores n_tokens (structure is fixed).
+    """
+    out = dict(params)
+    if out.get("model") in ("mlp", "hybrid"):
+        # MLP ignores FTT-specific params; hybrid has hard-coded FTT config
+        out["token_split"] = ""
+        out["n_tokens"] = 0
+        out["n_heads"] = 0
+    elif out.get("token_split", "").startswith("semantic"):
+        out["n_tokens"] = 0
+    return out
+
+
 def combo_key(params: dict) -> str:
-    return ",".join(f"{k}={v}" for k, v in sorted(params.items()))
+    norm = _normalize_combo(params)
+    return ",".join(f"{k}={v}" for k, v in sorted(norm.items()))
 
 
 def combo_filename(params: dict) -> str:
-    safe_lr = str(params["lr"]).replace(".", "p").replace("-", "m")
-    safe_drop = str(params["dropout_scale"]).replace(".", "p").replace("-", "m")
-    parts = [
-        f"lr_{safe_lr}",
-        f"h_{params['hidden']}",
-        f"d_{safe_drop}",
-        f"b_{params.get('n_blocks', 1)}",
-    ]
+    norm = _normalize_combo(params)
+    parts = []
+    mdl = norm.get("model", "mlp")
+    parts.append(f"m_{mdl}")
+    feat = norm.get("features", "both")
+    parts.append(f"feat_{feat}")
+    if "lr" in norm:
+        safe_lr = str(norm["lr"]).replace(".", "p").replace("-", "m")
+        parts.append(f"lr_{safe_lr}")
+    parts.append(f"h_{norm['hidden']}")
+    safe_drop = str(norm["dropout_scale"]).replace(".", "p").replace("-", "m")
+    parts.append(f"d_{safe_drop}")
+    parts.append(f"b_{norm.get('n_blocks', 1)}")
+    if norm.get("token_split"):
+        parts.append(f"ts_{norm['token_split']}")
+    if norm.get("n_tokens"):
+        parts.append(f"nt_{norm['n_tokens']}")
+    if norm.get("n_heads"):
+        parts.append(f"nh_{norm['n_heads']}")
     if params.get("no_mert"):
         parts.append("no_mert")
     if params.get("mert_layer") is not None:
@@ -76,12 +110,28 @@ def combo_filename(params: dict) -> str:
 
 
 def build_cmd(params: dict) -> list[str]:
-    cmd = ["uv", "run", "python", str(TRAIN_SCRIPT)] + FIXED_ARGS
-    cmd += ["--lr", str(params["lr"])]
+    cmd = ["uv", "run", "--group", "training", "python", str(TRAIN_SCRIPT)] + FIXED_ARGS
+    mdl = params.get("model", "mlp")
+    cmd += ["--model", mdl]
+    if "lr" in params:
+        cmd += ["--lr", str(params["lr"])]
     cmd += ["--hidden", str(params["hidden"])]
     cmd += ["--dropout-scale", str(params["dropout_scale"])]
     cmd += ["--n-blocks", str(params.get("n_blocks", 1))]
     cmd += ["--batch-size", "64"]
+    # FTT-specific params
+    if params.get("n_tokens") is not None:
+        cmd += ["--n-tokens", str(params["n_tokens"])]
+    if params.get("n_heads") is not None:
+        cmd += ["--n-heads", str(params["n_heads"])]
+    if params.get("token_split") is not None:
+        cmd += ["--token-split", str(params["token_split"])]
+    # Feature mode
+    feat = params.get("features", "both")
+    if feat == "audio":
+        cmd += ["--no-mert"]
+    elif feat == "mert":
+        cmd += ["--mert-only"]
     if params.get("no_mert"):
         cmd += ["--no-mert"]
     if params.get("mert_layer") is not None:
@@ -98,12 +148,23 @@ def build_cmd(params: dict) -> list[str]:
 
 
 def combo_label(params: dict) -> str:
-    parts = [
-        f"lr={params['lr']}",
-        f"h={params['hidden']}",
-        f"d={params['dropout_scale']}",
-        f"b={params.get('n_blocks', 1)}",
-    ]
+    norm = _normalize_combo(params)
+    mdl = norm.get("model", "mlp")
+    parts = []
+    parts.append(f"model={mdl}")
+    feat = norm.get("features", "both")
+    parts.append(f"feat={feat}")
+    if "lr" in params:
+        parts.append(f"lr={params['lr']}")
+    parts.append(f"h={params['hidden']}")
+    parts.append(f"d={params['dropout_scale']}")
+    parts.append(f"b={params.get('n_blocks', 1)}")
+    if norm.get("token_split"):
+        parts.append(f"ts={norm['token_split']}")
+    if norm.get("n_tokens"):
+        parts.append(f"nt={norm['n_tokens']}")
+    if norm.get("n_heads"):
+        parts.append(f"nh={norm['n_heads']}")
     if params.get("no_mert"):
         parts.append("no_mert=1")
     if params.get("mert_layer") is not None:

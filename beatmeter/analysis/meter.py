@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 _meter_net_model = None
 _meter_net_meta = None  # feat_mean, feat_std, class_meters, etc.
 
+# Ensemble: optional second model (FTT) for probability averaging
+_ensemble_model = None
+_ensemble_meta = None
+
 
 def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
     """Build MeterNet model (must match MeterNet in scripts/training/train.py)."""
@@ -63,6 +67,193 @@ def _build_meter_net(input_dim, n_classes, hidden, dropout_scale, n_blocks):
     return MeterNetModel()
 
 
+def _build_ftt(input_dim, n_classes, d_model, n_layers, state_dict):
+    """Build FTTransformer model, inferring structure from state_dict."""
+    import torch
+    import torch.nn as nn
+
+    # Detect n_tokens and token sizes from state_dict
+    n_tokens = sum(1 for k in state_dict if k.startswith("tokenizers.") and k.endswith(".weight"))
+    token_sizes = [state_dict[f"tokenizers.{i}.weight"].shape[1] for i in range(n_tokens)]
+    n_heads = 4  # default; works for all our checkpoints
+
+    class FTTransformerInference(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.group_sizes = list(token_sizes)
+            self.n_tokens = len(self.group_sizes)
+            self.tokenizers = nn.ModuleList([
+                nn.Linear(gs, d_model) for gs in self.group_sizes
+            ])
+            self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=n_heads,
+                dim_feedforward=d_model * 4, dropout=0.0,
+                activation="gelu", batch_first=True,
+            )
+            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+            self.head = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, n_classes),
+            )
+
+        def forward(self, x):
+            B = x.size(0)
+            tokens = []
+            offset = 0
+            for i, gs in enumerate(self.group_sizes):
+                chunk = x[:, offset:offset + gs]
+                tokens.append(self.tokenizers[i](chunk))
+                offset += gs
+            tokens = torch.stack(tokens, dim=1)
+            cls = self.cls_token.expand(B, -1, -1)
+            tokens = torch.cat([cls, tokens], dim=1)
+            tokens = self.encoder(tokens)
+            return self.head(tokens[:, 0, :])
+
+    return FTTransformerInference()
+
+
+
+def _build_hybrid(input_dim, n_classes, mlp_hidden, mlp_dropout_scale, mlp_blocks,
+                   ftt_d_model, ftt_n_layers, state_dict):
+    """Build HybridMeterNet for inference, inferring FTT structure from state_dict."""
+    import torch
+    import torch.nn as nn
+
+    ds = mlp_dropout_scale
+
+    # Detect FTT token sizes from state_dict
+    n_tokens = sum(1 for k in state_dict if k.startswith("ftt_tokenizers.") and k.endswith(".weight"))
+    token_sizes = [state_dict[f"ftt_tokenizers.{i}.weight"].shape[1] for i in range(n_tokens)]
+    n_heads = 4  # default
+
+    class ResidualBlock(nn.Module):
+        def __init__(self, dim, dropout=0.25):
+            super().__init__()
+            self.block = nn.Sequential(
+                nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.ReLU(), nn.Dropout(dropout),
+            )
+        def forward(self, x):
+            return x + self.block(x)
+
+    class HybridMeterNetInference(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ftt_group_sizes = list(token_sizes)
+
+            # MLP branch
+            self.mlp_proj = nn.Sequential(
+                nn.Linear(input_dim, mlp_hidden),
+                nn.BatchNorm1d(mlp_hidden), nn.ReLU(),
+                nn.Dropout(min(0.3 * ds, 0.5)),
+            )
+            self.mlp_residual = nn.Sequential(
+                *[ResidualBlock(mlp_hidden, dropout=min(0.25 * ds, 0.5))
+                  for _ in range(mlp_blocks)]
+            )
+
+            # FTT branch
+            self.ftt_tokenizers = nn.ModuleList([
+                nn.Linear(gs, ftt_d_model) for gs in self.ftt_group_sizes
+            ])
+            self.ftt_cls_token = nn.Parameter(torch.randn(1, 1, ftt_d_model) * 0.02)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=ftt_d_model, nhead=n_heads,
+                dim_feedforward=ftt_d_model * 4, dropout=0.0,
+                activation="gelu", batch_first=True,
+            )
+            self.ftt_encoder = nn.TransformerEncoder(encoder_layer, num_layers=ftt_n_layers)
+
+            # Fusion head
+            fusion_dim = mlp_hidden + ftt_d_model
+            self.fusion = nn.Sequential(
+                nn.LayerNorm(fusion_dim),
+                nn.Linear(fusion_dim, fusion_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(fusion_dim // 2, n_classes),
+            )
+
+        def forward(self, x):
+            B = x.size(0)
+            mlp_repr = self.mlp_residual(self.mlp_proj(x))
+            tokens = []
+            offset = 0
+            for i, gs in enumerate(self.ftt_group_sizes):
+                chunk = x[:, offset:offset + gs]
+                tokens.append(self.ftt_tokenizers[i](chunk))
+                offset += gs
+            tokens = torch.stack(tokens, dim=1)
+            cls = self.ftt_cls_token.expand(B, -1, -1)
+            tokens = torch.cat([cls, tokens], dim=1)
+            tokens = self.ftt_encoder(tokens)
+            ftt_repr = tokens[:, 0, :]
+            combined = torch.cat([mlp_repr, ftt_repr], dim=1)
+            return self.fusion(combined)
+
+    return HybridMeterNetInference()
+
+
+def _load_ensemble_model():
+    """Load secondary FTT model for ensemble (from data/meter_net_ftt.pt)."""
+    global _ensemble_model, _ensemble_meta
+    if _ensemble_model is not None:
+        return _ensemble_model, _ensemble_meta
+
+    import os
+    import pathlib
+
+    if os.environ.get("METER_NET_ENSEMBLE") != "1":
+        return None, None
+
+    ckpt_path = pathlib.Path("data/meter_net_ftt.pt")
+    if not ckpt_path.exists():
+        logger.warning("Ensemble enabled but data/meter_net_ftt.pt not found")
+        return None, None
+
+    try:
+        import torch
+
+        ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
+        input_dim = ckpt["input_dim"]
+        n_classes = ckpt["n_classes"]
+        hidden_dim = ckpt.get("hidden_dim", 128)
+        n_blocks = ckpt.get("n_blocks", 2)
+        model_type = ckpt.get("model_type", "ftt")
+        state = ckpt["model_state"]
+
+        if model_type == "ftt":
+            model = _build_ftt(input_dim, n_classes, hidden_dim, n_blocks, state)
+        elif model_type == "hybrid":
+            model = _build_hybrid(input_dim, n_classes, hidden_dim,
+                                  ckpt.get("dropout_scale", 1.5), ckpt.get("mlp_blocks", 2),
+                                  ckpt.get("ftt_d_model", 128), ckpt.get("ftt_n_layers", 2),
+                                  state)
+        else:
+            model = _build_meter_net(input_dim, n_classes, hidden_dim,
+                                     ckpt.get("dropout_scale", 1.0), n_blocks)
+        model.load_state_dict(state)
+        model.eval()
+
+        _ensemble_model = model
+        _ensemble_meta = {
+            "feat_mean": ckpt["feat_mean"],
+            "feat_std": ckpt["feat_std"],
+            "class_meters": ckpt["class_meters"],
+            "meter_to_idx": ckpt["meter_to_idx"],
+            "feature_version": ckpt.get("feature_version", "mn_v3"),
+            "n_mert_features": ckpt.get("n_mert_features", 0),
+            "mert_layer": ckpt.get("mert_layer", 3),
+        }
+        logger.info("Ensemble FTT loaded: dim=%d, hidden=%d, classes=%d",
+                     input_dim, hidden_dim, n_classes)
+        return _ensemble_model, _ensemble_meta
+
+    except Exception as e:
+        logger.warning("Failed to load ensemble model: %s", e)
+        return None, None
+
 
 def _load_meter_net():
     """Load MeterNet checkpoint once. Returns (model, meta) or (None, None)."""
@@ -90,19 +281,32 @@ def _load_meter_net():
         hidden_dim = ckpt.get("hidden_dim", 640)
         ds = ckpt.get("dropout_scale", 1.0)
         n_blocks = ckpt.get("n_blocks", 1)
+        model_type = ckpt.get("model_type", "mlp")
 
-        model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks)
-
-        # Backward compat: old checkpoints (pre-n_blocks) have "residual.block.*"
-        # instead of "residual.0.block.*".
         state = ckpt["model_state"]
-        fixed_state = {}
-        for k, v in state.items():
-            if k.startswith("residual.block."):
-                fixed_state["residual.0." + k[len("residual."):]] = v
-            else:
-                fixed_state[k] = v
-        model.load_state_dict(fixed_state)
+
+        if model_type == "hybrid":
+            ftt_d_model = ckpt.get("ftt_d_model", 128)
+            ftt_n_layers = ckpt.get("ftt_n_layers", 2)
+            mlp_blocks = ckpt.get("mlp_blocks", n_blocks)
+            model = _build_hybrid(input_dim, n_classes, hidden_dim, ds, mlp_blocks,
+                                   ftt_d_model, ftt_n_layers, state)
+            model.load_state_dict(state)
+        elif model_type == "ftt":
+            model = _build_ftt(input_dim, n_classes, hidden_dim, n_blocks, state)
+            model.load_state_dict(state)
+        else:
+            model = _build_meter_net(input_dim, n_classes, hidden_dim, ds, n_blocks)
+            # Backward compat: old checkpoints (pre-n_blocks) have "residual.block.*"
+            # instead of "residual.0.block.*".
+            fixed_state = {}
+            for k, v in state.items():
+                if k.startswith("residual.block."):
+                    fixed_state["residual.0." + k[len("residual."):]] = v
+                else:
+                    fixed_state[k] = v
+            model.load_state_dict(fixed_state)
+
         model.eval()
 
         _meter_net_model = model
@@ -115,9 +319,10 @@ def _load_meter_net():
             "n_mert_features": ckpt.get("n_mert_features", 0),
             "mert_layer": ckpt.get("mert_layer", 3),
         }
+        type_label = {"ftt": "FTT", "hybrid": "Hybrid", "mlp": "MeterNet"}.get(model_type, "MeterNet")
         logger.info(
-            "MeterNet loaded: dim=%d, hidden=%d, blocks=%d, classes=%d",
-            input_dim, hidden_dim, n_blocks, n_classes,
+            "%s loaded: dim=%d, hidden=%d, blocks=%d, classes=%d",
+            type_label, input_dim, hidden_dim, n_blocks, n_classes,
         )
         return _meter_net_model, _meter_net_meta
 
@@ -209,23 +414,39 @@ def _meter_net_predict(
             logger.warning("MeterNet feature dim mismatch: %d != %d", full_feat.shape[0], expected_dim)
             return None
 
-        # Standardize
+        # Standardize (keep raw copy for ensemble)
+        full_feat = full_feat.astype(np.float32)
+        full_feat_raw = full_feat.copy()
         feat_mean = meta["feat_mean"]
         feat_std = meta["feat_std"]
-        full_feat = full_feat.astype(np.float32)
         full_feat = (full_feat - feat_mean) / np.where(feat_std < 1e-8, 1.0, feat_std)
 
-        # 4. Forward pass
+        # 4. Forward pass (with optional ensemble)
         x = torch.tensor(full_feat, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             logits = model(x)
             probs = torch.sigmoid(logits).squeeze(0).numpy()
 
+        # Ensemble: average with second model if available
+        ens_model, ens_meta = _load_ensemble_model()
+        if ens_model is not None:
+            ens_mean = ens_meta["feat_mean"]
+            ens_std = ens_meta["feat_std"]
+            ens_feat = full_feat_raw.astype(np.float32)
+            ens_feat = (ens_feat - ens_mean) / np.where(ens_std < 1e-8, 1.0, ens_std)
+            x_ens = torch.tensor(ens_feat, dtype=torch.float32).unsqueeze(0)
+            with torch.no_grad():
+                logits_ens = ens_model(x_ens)
+                probs_ens = torch.sigmoid(logits_ens).squeeze(0).numpy()
+            probs = (probs + probs_ens) / 2.0
+            logger.debug("Ensemble: averaged probs from 2 models")
+
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("MeterNet: %.1f ms (audio=%s, mert=%s)",
+        logger.debug("MeterNet: %.1f ms (audio=%s, mert=%s%s)",
                      elapsed_ms,
                      "cached" if audio_feat_cached else "live",
-                     "cached" if mert_cached else "live")
+                     "cached" if mert_cached else "live",
+                     ", ensemble" if ens_model is not None else "")
 
         # Convert class probabilities to meter scores
         class_meters = meta["class_meters"]

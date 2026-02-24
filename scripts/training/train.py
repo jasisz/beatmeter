@@ -164,18 +164,29 @@ def _build_mert_lookup(*dirs: Path) -> dict[str, Path]:
     return lookup
 
 
+def _detect_mert_dim(lookup: dict[str, Path], layer: int) -> int:
+    """Auto-detect MERT embedding dimension from first .npy file."""
+    for npy_path in lookup.values():
+        try:
+            emb = np.load(npy_path)
+            return int(emb[layer].shape[0])
+        except Exception:
+            continue
+    return N_MERT_FEATURES  # fallback
+
+
 def _load_mert_embedding(audio_path: Path) -> np.ndarray:
     """Load MERT embedding for an audio file. Returns zeros if not found."""
     if _MERT_LOOKUP is None:
-        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+        return np.zeros(_N_MERT_ACTIVE, dtype=np.float32)
     npy_path = _MERT_LOOKUP.get(audio_path.stem)
     if npy_path is None:
-        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+        return np.zeros(_N_MERT_ACTIVE, dtype=np.float32)
     try:
-        emb = np.load(npy_path)  # shape (12, 1536)
+        emb = np.load(npy_path)
         return emb[_MERT_LAYER_ACTIVE].astype(np.float32)
     except Exception:
-        return np.zeros(N_MERT_FEATURES, dtype=np.float32)
+        return np.zeros(_N_MERT_ACTIVE, dtype=np.float32)
 
 
 def _extract_audio_from_path(audio_path_str: str) -> np.ndarray | None:
@@ -198,7 +209,9 @@ def _onset_cache_key(audio_path: Path) -> str:
 
 def _full_cache_key(audio_path: Path) -> str:
     """Cache key for full MeterNet feature vector."""
-    if _N_MERT_ACTIVE == 0:
+    if _AUDIO_FEATURES_ACTIVE == 0:
+        suffix = f"mert_only_{_N_MERT_ACTIVE}_L{_MERT_LAYER_ACTIVE}"
+    elif _N_MERT_ACTIVE == 0:
         suffix = "meter_net_v8_slim"
     else:
         suffix = f"meter_net_v8_slim_mert{_N_MERT_ACTIVE}_L{_MERT_LAYER_ACTIVE}"
@@ -213,7 +226,11 @@ def _build_full_features(
     feat_db=None,
 ) -> np.ndarray | None:
     """Combine audio + MERT features."""
-    parts = [audio_feat]
+    parts = []
+
+    # Audio features (skip if mert-only mode)
+    if _AUDIO_FEATURES_ACTIVE > 0:
+        parts.append(audio_feat)
 
     # Optional MERT embedding
     if _N_MERT_ACTIVE > 0:
@@ -447,6 +464,236 @@ class MeterNet(nn.Module):
 
 
 
+# Semantic audio feature groups (v6): 8 groups totaling 1449d
+# [autocorr_t1(256), autocorr_t2(256), autocorr_t3(256), autocorr_t4(256),
+#  tg+mfcc+contrast+onset(108), beat_pos_hist(224), autocorr_ratios(84), tg_salience(9)]
+AUDIO_SEMANTIC_SIZES = [256, 256, 256, 256, 108, 224, 84, 9]
+
+# v2: split each autocorr tempo block by onset channel (4 channels × 64 lags per tempo)
+# Each 256d = 4 channels × 64 lags → 4 × 64d tokens per tempo → 16 autocorr tokens
+AUDIO_SEMANTIC_SIZES_V2 = [64] * 16 + [108, 224, 84, 9]
+
+# v3: same fine autocorr + MERT as 2 big semantic tokens (mean 768d + max 768d)
+AUDIO_SEMANTIC_SIZES_V3 = [64] * 16 + [108, 224, 84, 9]
+
+# v4: original tempo autocorr (4×256d) + MERT mean/max (2×768d) — isolates MERT splitting effect
+AUDIO_SEMANTIC_SIZES_V4 = AUDIO_SEMANTIC_SIZES  # same as v1: [256, 256, 256, 256, 108, 224, 84, 9]
+
+MERT_SEMANTIC_CHUNK = 256    # 6 tokens: 6 × 256d
+MERT_SEMANTIC_CHUNK_V3 = 768  # 2 tokens: mean(768) + max(768)
+
+# Mapping of token_split name → (audio_sizes, mert_chunk)
+SEMANTIC_CONFIGS = {
+    "semantic": (AUDIO_SEMANTIC_SIZES, MERT_SEMANTIC_CHUNK),        # 14 tokens
+    "semantic_v2": (AUDIO_SEMANTIC_SIZES_V2, MERT_SEMANTIC_CHUNK),  # 26 tokens
+    "semantic_v3": (AUDIO_SEMANTIC_SIZES_V3, MERT_SEMANTIC_CHUNK_V3),  # 22 tokens
+    "semantic_v4": (AUDIO_SEMANTIC_SIZES_V4, MERT_SEMANTIC_CHUNK_V3),  # 10 tokens
+}
+
+
+def _build_semantic_token_sizes(n_audio: int, n_mert: int, variant: str = "semantic") -> list[int]:
+    """Build semantic token sizes based on active feature blocks."""
+    audio_sizes, mert_chunk = SEMANTIC_CONFIGS[variant]
+    sizes = []
+    if n_audio > 0:
+        assert n_audio == sum(audio_sizes), (
+            f"Audio dim {n_audio} != expected {sum(audio_sizes)} for {variant}"
+        )
+        sizes.extend(audio_sizes)
+    if n_mert > 0:
+        n_mert_tokens = max(1, n_mert // mert_chunk)
+        base = n_mert // n_mert_tokens
+        rem = n_mert % n_mert_tokens
+        sizes.extend([base + (1 if i < rem else 0) for i in range(n_mert_tokens)])
+    return sizes
+
+
+class FTTransformer(nn.Module):
+    """Feature Tokenizer + Transformer for tabular data.
+
+    Splits input features into token groups, projects each to d_model,
+    prepends a learned CLS token, applies TransformerEncoder, and classifies
+    from the CLS output.
+
+    token_sizes: explicit per-token dims (semantic mode). Overrides n_tokens.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        n_classes: int,
+        d_model: int = 64,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        n_tokens: int = 12,
+        dropout: float = 0.1,
+        token_sizes: list[int] | None = None,
+    ):
+        super().__init__()
+        self.d_model = d_model
+
+        if token_sizes is not None:
+            assert sum(token_sizes) == input_dim, (
+                f"token_sizes sum {sum(token_sizes)} != input_dim {input_dim}"
+            )
+            self.group_sizes = list(token_sizes)
+        else:
+            # Uniform split
+            base_size = input_dim // n_tokens
+            remainder = input_dim % n_tokens
+            self.group_sizes = [base_size + (1 if i < remainder else 0) for i in range(n_tokens)]
+        self.n_tokens = len(self.group_sizes)
+
+        # Per-group linear projections
+        self.tokenizers = nn.ModuleList([
+            nn.Linear(gs, d_model) for gs in self.group_sizes
+        ])
+
+        # Learned CLS token
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+        self.head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, n_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = x.size(0)
+        tokens = []
+        offset = 0
+        for i, gs in enumerate(self.group_sizes):
+            chunk = x[:, offset:offset + gs]
+            tokens.append(self.tokenizers[i](chunk))
+            offset += gs
+
+        # (B, n_tokens, d_model)
+        tokens = torch.stack(tokens, dim=1)
+
+        # Prepend CLS
+        cls = self.cls_token.expand(B, -1, -1)
+        tokens = torch.cat([cls, tokens], dim=1)  # (B, n_tokens+1, d_model)
+
+        tokens = self.encoder(tokens)
+
+        # CLS output
+        cls_out = tokens[:, 0, :]
+        return self.head(cls_out)
+
+
+class HybridMeterNet(nn.Module):
+    """Dual-branch model: MLP + FTT with learned fusion head.
+
+    MLP branch provides dense representation, FTT branch provides
+    attention-based representation. Fusion head learns to combine both.
+    """
+
+    # Hard-coded FTT defaults (best from grid search)
+    FTT_D_MODEL = 128
+    FTT_N_HEADS = 4
+    FTT_N_LAYERS = 2
+    FTT_DROPOUT = 0.15
+
+    def __init__(
+        self,
+        input_dim: int,
+        n_classes: int,
+        mlp_hidden: int = 512,
+        mlp_blocks: int = 2,
+        mlp_dropout_scale: float = 1.5,
+        ftt_d_model: int = 128,
+        ftt_n_heads: int = 4,
+        ftt_n_layers: int = 2,
+        ftt_token_sizes: list[int] | None = None,
+        ftt_n_tokens: int = 10,
+        ftt_dropout: float = 0.15,
+    ):
+        super().__init__()
+        ds = mlp_dropout_scale
+
+        # -- MLP branch (no head) --
+        self.mlp_proj = nn.Sequential(
+            nn.Linear(input_dim, mlp_hidden),
+            nn.BatchNorm1d(mlp_hidden),
+            nn.ReLU(),
+            nn.Dropout(min(0.3 * ds, 0.5)),
+        )
+        self.mlp_residual = nn.Sequential(
+            *[ResidualBlock(mlp_hidden, dropout=min(0.25 * ds, 0.5))
+              for _ in range(mlp_blocks)]
+        )
+
+        # -- FTT branch (no head) --
+        if ftt_token_sizes is not None:
+            assert sum(ftt_token_sizes) == input_dim, (
+                f"ftt_token_sizes sum {sum(ftt_token_sizes)} != input_dim {input_dim}"
+            )
+            self.ftt_group_sizes = list(ftt_token_sizes)
+        else:
+            base_size = input_dim // ftt_n_tokens
+            remainder = input_dim % ftt_n_tokens
+            self.ftt_group_sizes = [
+                base_size + (1 if i < remainder else 0) for i in range(ftt_n_tokens)
+            ]
+
+        self.ftt_tokenizers = nn.ModuleList([
+            nn.Linear(gs, ftt_d_model) for gs in self.ftt_group_sizes
+        ])
+        self.ftt_cls_token = nn.Parameter(torch.randn(1, 1, ftt_d_model) * 0.02)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=ftt_d_model,
+            nhead=ftt_n_heads,
+            dim_feedforward=ftt_d_model * 4,
+            dropout=ftt_dropout,
+            activation="gelu",
+            batch_first=True,
+        )
+        self.ftt_encoder = nn.TransformerEncoder(encoder_layer, num_layers=ftt_n_layers)
+
+        # -- Fusion head --
+        fusion_dim = mlp_hidden + ftt_d_model
+        self.fusion = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, fusion_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(fusion_dim // 2, n_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = x.size(0)
+
+        # MLP branch
+        mlp_repr = self.mlp_residual(self.mlp_proj(x))  # (B, mlp_hidden)
+
+        # FTT branch
+        tokens = []
+        offset = 0
+        for i, gs in enumerate(self.ftt_group_sizes):
+            chunk = x[:, offset:offset + gs]
+            tokens.append(self.ftt_tokenizers[i](chunk))
+            offset += gs
+        tokens = torch.stack(tokens, dim=1)  # (B, n_tokens, ftt_d_model)
+        cls = self.ftt_cls_token.expand(B, -1, -1)
+        tokens = torch.cat([cls, tokens], dim=1)
+        tokens = self.ftt_encoder(tokens)
+        ftt_repr = tokens[:, 0, :]  # CLS output (B, ftt_d_model)
+
+        # Fusion
+        combined = torch.cat([mlp_repr, ftt_repr], dim=1)
+        return self.fusion(combined)
+
+
 # ---------------------------------------------------------------------------
 # Training augmentation (feature-level)
 # ---------------------------------------------------------------------------
@@ -578,8 +825,12 @@ def train_model(
     verbose: bool = False,
     log_every: int = 10,
     aug_mode: str = "cutmix",
+    model_type: str = "mlp",
+    n_tokens: int = 12,
+    n_heads: int = 4,
+    token_sizes: list[int] | None = None,
 ) -> tuple[nn.Module, dict]:
-    """Train MeterNet with BCE/Focal loss and balanced accuracy validation."""
+    """Train MeterNet or FTTransformer with BCE/Focal loss and balanced accuracy validation."""
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -624,10 +875,30 @@ def train_model(
     )
     val_dl = DataLoader(val_ds, batch_size=256)
 
-    model = MeterNet(
-        input_dim, n_classes, hidden=hidden, dropout_scale=dropout_scale,
-        n_blocks=n_blocks,
-    ).to(device)
+    if model_type == "hybrid":
+        model = HybridMeterNet(
+            input_dim, n_classes,
+            mlp_hidden=hidden, mlp_blocks=n_blocks,
+            mlp_dropout_scale=dropout_scale,
+            ftt_d_model=HybridMeterNet.FTT_D_MODEL,
+            ftt_n_heads=HybridMeterNet.FTT_N_HEADS,
+            ftt_n_layers=HybridMeterNet.FTT_N_LAYERS,
+            ftt_token_sizes=token_sizes,
+            ftt_n_tokens=n_tokens,
+            ftt_dropout=HybridMeterNet.FTT_DROPOUT,
+        ).to(device)
+    elif model_type == "ftt":
+        model = FTTransformer(
+            input_dim, n_classes, d_model=hidden, n_heads=n_heads,
+            n_layers=n_blocks, n_tokens=n_tokens,
+            dropout=min(0.1 * dropout_scale, 0.5),
+            token_sizes=token_sizes,
+        ).to(device)
+    else:
+        model = MeterNet(
+            input_dim, n_classes, hidden=hidden, dropout_scale=dropout_scale,
+            n_blocks=n_blocks,
+        ).to(device)
     if use_focal:
         def criterion(logits, targets):
             return _focal_bce_loss(logits, targets, pos_weight)
@@ -856,8 +1127,22 @@ def main():
                         help="Sample mixing augmentation (default: cutmix)")
     parser.add_argument("--no-mert", action="store_true",
                         help="Disable MERT embeddings (train without them)")
+    parser.add_argument("--mert-only", action="store_true",
+                        help="Use MERT embeddings only (no audio features)")
     parser.add_argument("--mert-layer", type=int, default=MERT_LAYER,
                         help=f"MERT layer to use (default {MERT_LAYER})")
+    parser.add_argument("--mert-dir", type=Path, default=Path("data/mert_embeddings"),
+                        help="MERT embeddings directory (default or LoRA-adapted)")
+    parser.add_argument("--model", type=str, default="mlp",
+                        choices=["mlp", "ftt", "hybrid"],
+                        help="Model architecture: mlp (MeterNet), ftt (FT-Transformer), hybrid (MLP+FTT)")
+    parser.add_argument("--n-tokens", type=int, default=12,
+                        help="FTT: number of tokens in uniform split (default 12)")
+    parser.add_argument("--n-heads", type=int, default=4,
+                        help="FTT: number of attention heads (default 4)")
+    parser.add_argument("--token-split", type=str, default="uniform",
+                        choices=["uniform", "semantic", "semantic_v2", "semantic_v3", "semantic_v4"],
+                        help="FTT: tokenization strategy (default: uniform)")
 
     parser.add_argument("--kfold", type=int, default=0,
                         help="K-fold CV (0=off, 5=recommended)")
@@ -879,16 +1164,22 @@ def main():
 
     # MERT configuration
     global _MERT_LOOKUP, _MERT_LAYER_ACTIVE, _N_MERT_ACTIVE, _TOTAL_FEATURES_ACTIVE
+    global _AUDIO_FEATURES_ACTIVE
     if not args.no_mert:
         _MERT_LAYER_ACTIVE = args.mert_layer
         _MERT_LOOKUP = _build_mert_lookup(
-            Path("data/mert_embeddings/meter2800"),
-            Path("data/mert_embeddings/wikimeter"),
+            args.mert_dir / "meter2800",
+            args.mert_dir / "wikimeter",
         )
         if _MERT_LOOKUP:
-            _N_MERT_ACTIVE = N_MERT_FEATURES
-            _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES + N_MERT_FEATURES
-            print(f"MERT: {len(_MERT_LOOKUP)} embeddings, layer={_MERT_LAYER_ACTIVE}, dims={N_MERT_FEATURES}")
+            _N_MERT_ACTIVE = _detect_mert_dim(_MERT_LOOKUP, _MERT_LAYER_ACTIVE)
+            if args.mert_only:
+                _AUDIO_FEATURES_ACTIVE = 0
+                _TOTAL_FEATURES_ACTIVE = _N_MERT_ACTIVE
+                print(f"MERT-only: {len(_MERT_LOOKUP)} embeddings, layer={_MERT_LAYER_ACTIVE}, dims={_N_MERT_ACTIVE}")
+            else:
+                _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES + _N_MERT_ACTIVE
+                print(f"MERT: {len(_MERT_LOOKUP)} embeddings, layer={_MERT_LAYER_ACTIVE}, dims={_N_MERT_ACTIVE}")
         else:
             _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES
             print("MERT: no embeddings found, training without MERT")
@@ -896,7 +1187,8 @@ def main():
         _TOTAL_FEATURES_ACTIVE = N_AUDIO_FEATURES
         print("MERT: disabled (--no-mert)")
 
-    print(f"MeterNet v7-slim | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
+    model_label = {"mlp": "MeterNet (MLP)", "ftt": "FT-Transformer", "hybrid": "Hybrid (MLP+FTT)"}[args.model]
+    print(f"{model_label} | classes={CLASS_METERS_6} | features={_TOTAL_FEATURES_ACTIVE}")
     mert_str = f", mert={_N_MERT_ACTIVE}" if _N_MERT_ACTIVE > 0 else ""
     print(f"  blocks: audio={_AUDIO_FEATURES_ACTIVE}{mert_str}")
     print(f"  data: {args.data_dir}"
@@ -1008,7 +1300,23 @@ def main():
     else:
         print(f"  Shapes: train {X_train.shape}, val {X_val.shape}, test {X_test.shape}")
 
-    # Common training kwargs
+    model_type = args.model
+
+    # FTT semantic tokenization (also used by hybrid for its FTT branch)
+    ftt_token_sizes = None
+    if model_type == "hybrid":
+        # Hybrid always uses semantic_v4 for FTT branch
+        ftt_token_sizes = _build_semantic_token_sizes(
+            _AUDIO_FEATURES_ACTIVE, _N_MERT_ACTIVE, variant="semantic_v4",
+        )
+        print(f"  Hybrid FTT branch: semantic_v4, {len(ftt_token_sizes)} tokens, sizes={ftt_token_sizes}")
+    elif model_type == "ftt" and args.token_split in SEMANTIC_CONFIGS:
+        ftt_token_sizes = _build_semantic_token_sizes(
+            _AUDIO_FEATURES_ACTIVE, _N_MERT_ACTIVE, variant=args.token_split,
+        )
+        print(f"  FTT {args.token_split} tokens: {len(ftt_token_sizes)} tokens, sizes={ftt_token_sizes}")
+
+    # Common training kwargs (for MLP / FTT — torch-based models)
     train_kwargs = dict(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -1022,6 +1330,10 @@ def main():
         verbose=args.verbose,
         log_every=args.log_every,
         aug_mode=args.aug_mode,
+        model_type=model_type,
+        n_tokens=args.n_tokens,
+        n_heads=args.n_heads,
+        token_sizes=ftt_token_sizes,
     )
 
     # -----------------------------------------------------------------------
@@ -1078,15 +1390,15 @@ def main():
             fold_val_accs.append(val_acc)
             fold_epochs.append(info_k["best_epoch"])
 
+            true_primary = y_test.argmax(axis=1)
             model_k.eval()
             with torch.no_grad():
                 X_t = torch.tensor(X_test_k, dtype=torch.float32).to(args.device)
                 probs = torch.sigmoid(model_k(X_t))
                 preds = probs.argmax(1).cpu().numpy()
-                true_primary = y_test.argmax(axis=1)
-                test_correct_k = int((preds == true_primary).sum())
-                test_total_k = len(true_primary)
-                test_acc_k = test_correct_k / max(test_total_k, 1)
+            test_correct_k = int((preds == true_primary).sum())
+            test_total_k = len(true_primary)
+            test_acc_k = test_correct_k / max(test_total_k, 1)
             fold_test_accs.append(test_acc_k)
             fold_test_correct.append(test_correct_k)
             print(f"  FOLD_DONE fold={k+1}/{n_folds} val={val_acc:.4f} "
@@ -1128,7 +1440,6 @@ def main():
             **retrain_kwargs,
         )
         print(f"  Retrain done (epoch {retrain_info['best_epoch']}/{mean_epoch})")
-
         results = evaluate(model, X_test_s, y_test, args.device, verbose=args.verbose)
 
         info = {
@@ -1153,7 +1464,7 @@ def main():
         print("  Features standardized (z-score, fit on train)")
 
         print(
-            f"\nTraining MeterNet (input={X_train.shape[1]}, hidden={args.hidden}, "
+            f"\nTraining {model_label} (input={X_train.shape[1]}, hidden={args.hidden}, "
             f"blocks={args.n_blocks}, dropout_scale={args.dropout_scale}, "
             f"classes={len(CLASS_METERS_6)})..."
         )
@@ -1163,7 +1474,6 @@ def main():
             **train_kwargs,
         )
         print(f"\nBest val balanced acc: {info['best_val_acc']:.1%} at epoch {info['best_epoch']}")
-
         results = evaluate(model, X_test, y_test, args.device, verbose=args.verbose)
         n_train_effective = len(X_train)
         n_val_effective = len(X_val)
@@ -1185,7 +1495,7 @@ def main():
     from beatmeter.experiment import enrich_checkpoint, log_experiment, make_experiment_record
 
     ckpt = {
-        "model_state": model.state_dict(),
+        "model_type": model_type,
         "class_meters": CLASS_METERS_6,
         "meter_to_idx": {m: i for i, m in enumerate(CLASS_METERS_6)},
         "input_dim": _TOTAL_FEATURES_ACTIVE,
@@ -1201,6 +1511,12 @@ def main():
         "dropout_scale": args.dropout_scale,
         "n_blocks": args.n_blocks,
     }
+    ckpt["model_state"] = model.state_dict()
+    # Hybrid metadata
+    if model_type == "hybrid":
+        ckpt["mlp_blocks"] = args.n_blocks
+        ckpt["ftt_d_model"] = HybridMeterNet.FTT_D_MODEL
+        ckpt["ftt_n_layers"] = HybridMeterNet.FTT_N_LAYERS
     # MERT metadata
     if _N_MERT_ACTIVE > 0:
         ckpt["mert_layer"] = _MERT_LAYER_ACTIVE
@@ -1231,8 +1547,9 @@ def main():
         _prune_staging(keep=5)
 
     log_experiment(make_experiment_record(
-        type="train", model="meter_net",
-        params={"hidden": args.hidden, "n_blocks": args.n_blocks, "lr": args.lr,
+        type="train", model=model_type,
+        params={"model": model_type,
+                "hidden": args.hidden, "n_blocks": args.n_blocks, "lr": args.lr,
                 "dropout_scale": args.dropout_scale,
                 "epochs": args.epochs, "batch_size": args.batch_size, "seed": args.seed,
                 "focal": args.focal, "no_mert": args.no_mert,
