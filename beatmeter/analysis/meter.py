@@ -439,7 +439,7 @@ def _meter_net_predict(
                 logits_ens = ens_model(x_ens)
                 probs_ens = torch.sigmoid(logits_ens).squeeze(0).numpy()
             import os
-            w = float(os.environ.get("METER_NET_ENSEMBLE_W", "0.35"))
+            w = float(os.environ.get("METER_NET_ENSEMBLE_W", "0.5"))
             probs = w * probs + (1 - w) * probs_ens
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
