@@ -740,6 +740,8 @@ def main():
                              "meter_net.pt if approved")
     parser.add_argument("--force", action="store_true",
                         help="Skip interactive confirmation for --promote")
+    parser.add_argument("--dump-preds", type=str, default=None, metavar="PATH",
+                        help="Dump per-file predictions to JSON (for ensemble analysis)")
     args = parser.parse_args()
 
     # --- Promote mode ---
@@ -797,6 +799,13 @@ def main():
                 f"\n  vs last saved: {prev_correct}/{prev_total}"
                 f" ({_pct(prev_correct, prev_total)}, bal={prev_bal}%)"
             )
+
+        if args.dump_preds:
+            dump_path = Path(args.dump_preds)
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(dump_path, "w") as f:
+                json.dump(file_results, f, indent=2)
+            print(f"\n  Predictions dumped to {dump_path} ({len(file_results)} files)")
 
         if regressions:
             sys.exit(1)
