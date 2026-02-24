@@ -438,8 +438,9 @@ def _meter_net_predict(
             with torch.no_grad():
                 logits_ens = ens_model(x_ens)
                 probs_ens = torch.sigmoid(logits_ens).squeeze(0).numpy()
-            probs = (probs + probs_ens) / 2.0
-            logger.debug("Ensemble: averaged probs from 2 models")
+            import os
+            w = float(os.environ.get("METER_NET_ENSEMBLE_W", "0.35"))
+            probs = w * probs + (1 - w) * probs_ens
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         logger.debug("MeterNet: %.1f ms (audio=%s, mert=%s%s)",

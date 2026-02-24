@@ -1024,11 +1024,29 @@ A single `HybridMeterNet` with both branches trained end-to-end:
 
 Same training setup as standalone models: BCE loss, CutMix augmentation, cosine annealing, 5-fold CV on METER2800.
 
-Training pending — results will be added after completion.
+#### Hybrid Results
+
+| Metric | MLP solo | FTT solo | Ensemble | Hybrid | Delta (hybrid vs ensemble) |
+|--------|----------|----------|----------|--------|---------------------------|
+| **METER2800** | 631/700 (90.1%) | 629/700 (89.9%) | **639/700 (91.3%)** | 627/700 (89.6%) | **−12 (−1.7pp)** |
+| Balanced accuracy | 84.3% | 82.8% | 83.9% | 84.1% | +0.2pp |
+| 3/x | 287/302 (95.0%) | 277/302 (91.7%) | 285/302 (94.4%) | 281/302 (93.0%) | −4 |
+| 4/x | 274/307 (89.3%) | 282/307 (91.9%) | 286/307 (93.2%) | 276/307 (89.9%) | −10 |
+| 5/x | 29/42 (69.0%) | 29/42 (69.0%) | 27/42 (64.3%) | **31/42 (73.8%)** | **+4** |
+| 7/x | 41/49 (83.7%) | 41/49 (83.7%) | 41/49 (83.7%) | 39/49 (79.6%) | −2 |
+| **WIKIMETER** | — | — | — | 194/298 (65.1%) | — |
+
+Training config: 5-fold CV on M2800 tuning (2100) + WIKIMETER train, h=512 (MLP), d_model=128 (FTT), semantic_v4, mean epoch=45. Val balanced: 83.6% ± 1.8%.
+
+#### Hybrid Analysis
+
+- **5/x: 73.8% — best ever** (+4.8pp vs solo, +9.5pp vs ensemble). The fusion head learns to route 5/x predictions effectively, exploiting complementary patterns from both branches.
+- **Overall regression** (627 vs 639): The end-to-end fusion compromises — it averages both branches' strengths instead of specializing. The 4/x regression (−10 vs ensemble) is the main driver.
+- **Balanced accuracy comparable** (84.1% vs 84.3% MLP): The hybrid's 5/x gain compensates for 7/x loss in the balanced metric.
 
 #### Conclusion
 
-The zero-training ensemble achieves a new project best of **639/700 (91.3%)**, demonstrating that MLP and FTT capture genuinely complementary patterns in the feature space. The hybrid model (pending) aims to learn optimal fusion weights end-to-end, potentially exceeding the ensemble ceiling by enabling feature-level interaction between branches.
+The zero-training ensemble achieves a new project best of **639/700 (91.3%)**, demonstrating that MLP and FTT capture genuinely complementary patterns in the feature space. The hybrid model's end-to-end fusion underperforms the naive ensemble by 12 files — learned fusion compromises rather than specializes. However, the hybrid achieves the best-ever 5/x accuracy (73.8%), suggesting potential for class-aware routing. Next step: a micro stacking head trained on model probabilities rather than raw features.
 
 ## 5. Failure Analysis
 
